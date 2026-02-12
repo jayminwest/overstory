@@ -17,6 +17,7 @@ const AGENT_DEF_FILES = [
 	"reviewer.md",
 	"lead.md",
 	"merger.md",
+	"supervisor.md",
 	"coordinator.md",
 ];
 

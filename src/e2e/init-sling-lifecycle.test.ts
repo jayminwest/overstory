@@ -26,6 +26,7 @@ const EXPECTED_AGENT_DEFS = [
 	"merger.md",
 	"reviewer.md",
 	"scout.md",
+	"supervisor.md",
 ];
 
 describe("E2E: init→sling lifecycle on external project", () => {
@@ -75,7 +76,7 @@ describe("E2E: init→sling lifecycle on external project", () => {
 		const gitignoreFile = Bun.file(join(overstoryDir, ".gitignore"));
 		expect(await gitignoreFile.exists()).toBe(true);
 
-		// agent-defs/ contains all 5 agent definition files
+		// agent-defs/ contains all 6 agent definition files
 		const agentDefsDir = join(overstoryDir, "agent-defs");
 		const agentDefFiles = (await readdir(agentDefsDir)).filter((f) => f.endsWith(".md")).sort();
 		expect(agentDefFiles).toEqual(EXPECTED_AGENT_DEFS);
