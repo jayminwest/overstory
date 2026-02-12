@@ -17,6 +17,7 @@ import { nudgeCommand } from "./commands/nudge.ts";
 import { primeCommand } from "./commands/prime.ts";
 import { slingCommand } from "./commands/sling.ts";
 import { statusCommand } from "./commands/status.ts";
+import { supervisorCommand } from "./commands/supervisor.ts";
 import { watchCommand } from "./commands/watch.ts";
 import { worktreeCommand } from "./commands/worktree.ts";
 import { OverstoryError, WorktreeError } from "./errors.ts";
@@ -33,6 +34,7 @@ Commands:
   prime                   Load context for orchestrator/agent
   status                  Show all active agents and project state
   coordinator <sub>       Persistent coordinator agent (start/stop/status)
+  supervisor <sub>        Per-project supervisor agent (start/stop/status)
   mail <sub>              Mail system (send/check/list/read/reply)
   merge                   Merge agent branches into canonical
   nudge <agent> [msg]     Send a text nudge to an agent
@@ -54,6 +56,7 @@ const COMMANDS = [
 	"prime",
 	"status",
 	"coordinator",
+	"supervisor",
 	"mail",
 	"merge",
 	"nudge",
@@ -127,6 +130,9 @@ async function main(): Promise<void> {
 			break;
 		case "coordinator":
 			await coordinatorCommand(commandArgs);
+			break;
+		case "supervisor":
+			await supervisorCommand(commandArgs);
 			break;
 		case "mail":
 			await mailCommand(commandArgs);

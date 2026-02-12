@@ -66,6 +66,7 @@ export const SUPPORTED_CAPABILITIES = [
 	"lead",
 	"merger",
 	"coordinator",
+	"supervisor",
 ] as const;
 
 /** Union type derived from the capabilities constant. */
