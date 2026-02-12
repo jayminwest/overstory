@@ -329,7 +329,7 @@ function validateConfig(config: OverstoryConfig): void {
  * @param startDir - The initial directory (usually process.cwd())
  * @returns The resolved project root containing `.overstory/`
  */
-async function resolveProjectRoot(startDir: string): Promise<string> {
+export async function resolveProjectRoot(startDir: string): Promise<string> {
 	const { existsSync } = require("node:fs") as typeof import("node:fs");
 
 	// If .overstory/config.yaml exists here, we're in the right place

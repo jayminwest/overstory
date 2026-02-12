@@ -135,10 +135,15 @@ export function createMailClient(store: MailStore): MailClient {
 
 			const threadId = original.threadId ?? original.id;
 
+			// Determine the correct recipient: reply goes to "the other side"
+			// If the replier is the original sender, reply goes to the original recipient.
+			// If the replier is the original recipient (or anyone else), reply goes to the original sender.
+			const to = from === original.from ? original.to : original.from;
+
 			const reply = store.insert({
 				id: "",
 				from,
-				to: original.from,
+				to,
 				subject: `Re: ${original.subject}`,
 				body,
 				type: original.type,

@@ -17,6 +17,7 @@ function makeConfig(overrides?: Partial<OverlayConfig>): OverlayConfig {
 		parentAgent: "lead-alpha",
 		depth: 1,
 		canSpawn: false,
+		capability: "builder",
 		...overrides,
 	};
 }
@@ -153,13 +154,78 @@ describe("generateOverlay", () => {
 		expect(output).not.toContain("}}");
 	});
 
-	test("output includes quality gates section from template", async () => {
-		const config = makeConfig();
+	test("builder capability includes full quality gates section", async () => {
+		const config = makeConfig({ capability: "builder" });
 		const output = await generateOverlay(config);
 
 		expect(output).toContain("Quality Gates");
 		expect(output).toContain("bun test");
 		expect(output).toContain("biome check");
+		expect(output).toContain("Commit");
+	});
+
+	test("lead capability includes full quality gates section", async () => {
+		const config = makeConfig({ capability: "lead" });
+		const output = await generateOverlay(config);
+
+		expect(output).toContain("Quality Gates");
+		expect(output).toContain("bun test");
+		expect(output).toContain("biome check");
+	});
+
+	test("merger capability includes full quality gates section", async () => {
+		const config = makeConfig({ capability: "merger" });
+		const output = await generateOverlay(config);
+
+		expect(output).toContain("Quality Gates");
+		expect(output).toContain("bun test");
+	});
+
+	test("scout capability gets read-only completion section instead of quality gates", async () => {
+		const config = makeConfig({ capability: "scout", agentName: "my-scout" });
+		const output = await generateOverlay(config);
+
+		expect(output).toContain("Completion");
+		expect(output).toContain("read-only agent");
+		expect(output).toContain("Do NOT commit");
+		expect(output).not.toContain("Quality Gates");
+		expect(output).not.toContain("bun test");
+		expect(output).not.toContain("biome check");
+	});
+
+	test("reviewer capability gets read-only completion section instead of quality gates", async () => {
+		const config = makeConfig({ capability: "reviewer", agentName: "my-reviewer" });
+		const output = await generateOverlay(config);
+
+		expect(output).toContain("Completion");
+		expect(output).toContain("read-only agent");
+		expect(output).toContain("Do NOT commit");
+		expect(output).not.toContain("Quality Gates");
+		expect(output).not.toContain("bun test");
+		expect(output).not.toContain("biome check");
+	});
+
+	test("scout completion section includes bd close and mail send", async () => {
+		const config = makeConfig({
+			capability: "scout",
+			agentName: "recon-1",
+			beadId: "overstory-task1",
+			parentAgent: "lead-alpha",
+		});
+		const output = await generateOverlay(config);
+
+		expect(output).toContain("bd close overstory-task1");
+		expect(output).toContain("overstory mail send --to lead-alpha");
+	});
+
+	test("reviewer completion section uses orchestrator when no parent", async () => {
+		const config = makeConfig({
+			capability: "reviewer",
+			parentAgent: null,
+		});
+		const output = await generateOverlay(config);
+
+		expect(output).toContain("--to orchestrator");
 	});
 
 	test("output includes communication section with agent address", async () => {

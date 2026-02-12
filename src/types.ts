@@ -120,6 +120,7 @@ export interface OverlayConfig {
 	parentAgent: string | null;
 	depth: number;
 	canSpawn: boolean;
+	capability: string;
 }
 
 // === Merge Queue ===

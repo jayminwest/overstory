@@ -148,8 +148,12 @@ function rowToMessage(row: MessageRow): MailMessage {
 export function createMailStore(dbPath: string): MailStore {
 	const db = new Database(dbPath);
 
-	// Configure for concurrent access
+	// Configure for concurrent access from multiple agent processes.
+	// WAL mode allows concurrent readers with one writer.
+	// synchronous=NORMAL balances safety and performance in WAL mode.
+	// busy_timeout retries for up to 5 seconds on lock contention.
 	db.exec("PRAGMA journal_mode = WAL");
+	db.exec("PRAGMA synchronous = NORMAL");
 	db.exec("PRAGMA busy_timeout = 5000");
 
 	// Migrate existing tables to add CHECK constraints (no-op if table is new or already migrated)
@@ -323,6 +327,13 @@ export function createMailStore(dbPath: string): MailStore {
 		},
 
 		close(): void {
+			// Checkpoint WAL to ensure all written data is visible to other processes
+			// that may open the database after this connection closes.
+			try {
+				db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+			} catch {
+				// Best effort — checkpoint failure is non-fatal
+			}
 			db.close();
 		},
 	};

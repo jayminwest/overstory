@@ -554,6 +554,44 @@ describe("createMailClient", () => {
 				expect((err as MailError).message).toContain("bad-msg-id");
 			}
 		});
+
+		test("reply to own sent message goes to original recipient, not back to sender", () => {
+			// Scenario: orchestrator sends to status-builder, then replies to that same message
+			const originalId = client.send({
+				from: "orchestrator",
+				to: "status-builder",
+				subject: "Task assignment",
+				body: "Please implement feature X",
+			});
+
+			// Orchestrator replies to their own sent message
+			const replyId = client.reply(originalId, "Actually, also do Y", "orchestrator");
+
+			const replyMsg = store.getById(replyId);
+			expect(replyMsg).not.toBeNull();
+			expect(replyMsg?.from).toBe("orchestrator");
+			// Reply should go to status-builder (original.to), not orchestrator (original.from)
+			expect(replyMsg?.to).toBe("status-builder");
+		});
+
+		test("reply from a third party goes to original sender", () => {
+			// Scenario: agent-a sends to agent-b, but agent-c replies (edge case)
+			const originalId = client.send({
+				from: "agent-a",
+				to: "agent-b",
+				subject: "Question",
+				body: "Need info",
+			});
+
+			// agent-c is neither sender nor recipient of original
+			const replyId = client.reply(originalId, "I can help", "agent-c");
+
+			const replyMsg = store.getById(replyId);
+			expect(replyMsg).not.toBeNull();
+			expect(replyMsg?.from).toBe("agent-c");
+			// Third-party reply goes to original sender
+			expect(replyMsg?.to).toBe("agent-a");
+		});
 	});
 
 	describe("close", () => {

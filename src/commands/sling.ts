@@ -275,6 +275,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 		parentAgent: parentAgent,
 		depth,
 		canSpawn: agentDef.canSpawn,
+		capability,
 	};
 
 	await writeOverlay(worktreePath, overlayConfig);
@@ -314,6 +315,9 @@ export async function slingCommand(args: string[]): Promise<void> {
 	});
 
 	// 12. Record session
+	// Set initial state to 'working' since agents are spawned in headless mode
+	// (claude -p) where SessionStart/UserPromptSubmit hooks don't fire, so the
+	// hook-based booting->working transition in log.ts would never occur.
 	const session: AgentSession = {
 		id: `session-${Date.now()}-${name}`,
 		agentName: name,
@@ -322,7 +326,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 		branchName,
 		beadId: taskId,
 		tmuxSession: tmuxSessionName,
-		state: "booting",
+		state: "working",
 		pid,
 		parentAgent: parentAgent,
 		depth,

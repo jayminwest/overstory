@@ -56,23 +56,6 @@ overstory mail reply <message-id> --body "Your reply" --agent {{AGENT_NAME}}
 
 {{CAN_SPAWN}}
 
-## Quality Gates
+{{QUALITY_GATES}}
 
-Before reporting completion, you MUST pass all quality gates:
-
-1. **Tests:** `bun test` — all tests must pass
-2. **Lint:** `biome check` — zero errors
-3. **Build:** verify no TypeScript errors
-4. **Commit:** all changes committed to your branch ({{BRANCH_NAME}})
-5. **Close issue:** `bd close {{BEAD_ID}} --reason "summary of changes"`
-
-Do NOT push to the canonical branch. Your work will be merged by the
-orchestrator via `overstory merge`.
-
-## Constraints
-
-- Only modify files in your File Scope
-- Commit only to your branch: {{BRANCH_NAME}}
-- Never push to the canonical branch
-- Report completion via `bd close` AND `overstory mail send --type result`
-- If you encounter a blocking issue, send mail with `--priority urgent --type error`
+{{CONSTRAINTS}}

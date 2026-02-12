@@ -34,6 +34,71 @@ function formatMulchDomains(domains: readonly string[]): string {
 	return `\`\`\`bash\nmulch prime ${domains.join(" ")}\n\`\`\``;
 }
 
+/** Capabilities that are read-only and should not get quality gates for commits/tests/lint. */
+const READ_ONLY_CAPABILITIES = new Set(["scout", "reviewer"]);
+
+/**
+ * Format the quality gates section. Read-only agents (scout, reviewer) get
+ * a lightweight section that only tells them to close the issue and report.
+ * Writable agents get the full quality gates (tests, lint, build, commit).
+ */
+function formatQualityGates(config: OverlayConfig): string {
+	if (READ_ONLY_CAPABILITIES.has(config.capability)) {
+		return [
+			"## Completion",
+			"",
+			"Before reporting completion:",
+			"",
+			`1. **Close issue:** \`bd close ${config.beadId} --reason "summary of findings"\``,
+			`2. **Send results:** \`overstory mail send --to ${config.parentAgent ?? "orchestrator"} --subject "done" --body "Summary" --type result --agent ${config.agentName}\``,
+			"",
+			"You are a read-only agent. Do NOT commit, modify files, or run quality gates.",
+		].join("\n");
+	}
+
+	return [
+		"## Quality Gates",
+		"",
+		"Before reporting completion, you MUST pass all quality gates:",
+		"",
+		"1. **Tests:** `bun test` — all tests must pass",
+		"2. **Lint:** `biome check` — zero errors",
+		"3. **Build:** verify no TypeScript errors",
+		`4. **Commit:** all changes committed to your branch (${config.branchName})`,
+		`5. **Close issue:** \`bd close ${config.beadId} --reason "summary of changes"\``,
+		"",
+		"Do NOT push to the canonical branch. Your work will be merged by the",
+		"orchestrator via `overstory merge`.",
+	].join("\n");
+}
+
+/**
+ * Format the constraints section. Read-only agents get read-only constraints.
+ * Writable agents get file-scope and branch constraints.
+ */
+function formatConstraints(config: OverlayConfig): string {
+	if (READ_ONLY_CAPABILITIES.has(config.capability)) {
+		return [
+			"## Constraints",
+			"",
+			"- You are **read-only**: do NOT modify, create, or delete any files",
+			"- Do NOT commit, push, or make any git state changes",
+			"- Report completion via `bd close` AND `overstory mail send --type result`",
+			"- If you encounter a blocking issue, send mail with `--priority urgent --type error`",
+		].join("\n");
+	}
+
+	return [
+		"## Constraints",
+		"",
+		"- Only modify files in your File Scope",
+		`- Commit only to your branch: ${config.branchName}`,
+		"- Never push to the canonical branch",
+		"- Report completion via `bd close` AND `overstory mail send --type result`",
+		"- If you encounter a blocking issue, send mail with `--priority urgent --type error`",
+	].join("\n");
+}
+
 /**
  * Format the can-spawn section. If the agent can spawn sub-workers,
  * include an example sling command. Otherwise, state the restriction.
@@ -97,6 +162,8 @@ export async function generateOverlay(config: OverlayConfig): Promise<string> {
 		"{{FILE_SCOPE}}": formatFileScope(config.fileScope),
 		"{{MULCH_DOMAINS}}": formatMulchDomains(config.mulchDomains),
 		"{{CAN_SPAWN}}": formatCanSpawn(config),
+		"{{QUALITY_GATES}}": formatQualityGates(config),
+		"{{CONSTRAINTS}}": formatConstraints(config),
 		"{{SPEC_INSTRUCTION}}": specInstruction,
 	};
 

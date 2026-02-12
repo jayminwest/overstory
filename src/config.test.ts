@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
+import { DEFAULT_CONFIG, loadConfig, resolveProjectRoot } from "./config.ts";
 import { ValidationError } from "./errors.ts";
+import { cleanupTempDir, createTempGitRepo, runGitInDir } from "./test-helpers.ts";
 
 describe("loadConfig", () => {
 	let tempDir: string;
@@ -224,6 +225,80 @@ watchdog:
   tier1IntervalMs: 0
 `);
 		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+});
+
+describe("resolveProjectRoot", () => {
+	let repoDir: string;
+
+	afterEach(async () => {
+		if (repoDir) {
+			// Remove worktrees before cleaning up
+			try {
+				await runGitInDir(repoDir, ["worktree", "prune"]);
+			} catch {
+				// Best effort
+			}
+			await cleanupTempDir(repoDir);
+		}
+	});
+
+	test("returns startDir when .overstory/config.yaml exists there", async () => {
+		repoDir = await createTempGitRepo();
+		await mkdir(join(repoDir, ".overstory"), { recursive: true });
+		await Bun.write(
+			join(repoDir, ".overstory", "config.yaml"),
+			"project:\n  canonicalBranch: main\n",
+		);
+
+		const result = await resolveProjectRoot(repoDir);
+		expect(result).toBe(repoDir);
+	});
+
+	test("resolves worktree to main project root", async () => {
+		repoDir = await createTempGitRepo();
+		// Resolve symlinks (macOS /var -> /private/var) to match git's output
+		repoDir = await realpath(repoDir);
+		await mkdir(join(repoDir, ".overstory"), { recursive: true });
+		await Bun.write(
+			join(repoDir, ".overstory", "config.yaml"),
+			"project:\n  canonicalBranch: main\n",
+		);
+
+		// Create a worktree like overstory sling does
+		const worktreeDir = join(repoDir, ".overstory", "worktrees", "test-agent");
+		await mkdir(join(repoDir, ".overstory", "worktrees"), { recursive: true });
+		await runGitInDir(repoDir, [
+			"worktree",
+			"add",
+			"-b",
+			"overstory/test-agent/task-1",
+			worktreeDir,
+		]);
+
+		// resolveProjectRoot from the worktree should return the main repo
+		const result = await resolveProjectRoot(worktreeDir);
+		expect(result).toBe(repoDir);
+	});
+
+	test("loadConfig resolves correct root from worktree", async () => {
+		repoDir = await createTempGitRepo();
+		// Resolve symlinks (macOS /var -> /private/var) to match git's output
+		repoDir = await realpath(repoDir);
+		await mkdir(join(repoDir, ".overstory"), { recursive: true });
+		await Bun.write(
+			join(repoDir, ".overstory", "config.yaml"),
+			"project:\n  canonicalBranch: develop\n",
+		);
+
+		const worktreeDir = join(repoDir, ".overstory", "worktrees", "agent-2");
+		await mkdir(join(repoDir, ".overstory", "worktrees"), { recursive: true });
+		await runGitInDir(repoDir, ["worktree", "add", "-b", "overstory/agent-2/task-2", worktreeDir]);
+
+		// loadConfig from the worktree should resolve to the main project root
+		const config = await loadConfig(worktreeDir);
+		expect(config.project.root).toBe(repoDir);
+		expect(config.project.canonicalBranch).toBe("develop");
 	});
 });
 

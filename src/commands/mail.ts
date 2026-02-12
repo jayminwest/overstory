@@ -7,6 +7,7 @@
  */
 
 import { join } from "node:path";
+import { resolveProjectRoot } from "../config.ts";
 import { MailError, ValidationError } from "../errors.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
@@ -151,7 +152,8 @@ function handleCheck(args: string[], cwd: string): void {
 /** overstory mail list */
 function handleList(args: string[], cwd: string): void {
 	const from = getFlag(args, "--from");
-	const to = getFlag(args, "--to");
+	// --agent is an alias for --to, providing agent-scoped perspective (like mail check)
+	const to = getFlag(args, "--to") ?? getFlag(args, "--agent");
 	const unread = hasFlag(args, "--unread") ? true : undefined;
 	const json = hasFlag(args, "--json");
 
@@ -281,7 +283,8 @@ Subcommands:
   check    Check inbox (unread messages)
              [--agent <name>] [--inject] [--json]
   list     List messages with filters
-             [--from <name>] [--to <name>] [--unread] [--json]
+             [--from <name>] [--to <name>] [--agent <name> (alias for --to)]
+             [--unread] [--json]
   read     Mark a message as read
              <message-id>
   reply    Reply to a message
@@ -302,26 +305,30 @@ export async function mailCommand(args: string[]): Promise<void> {
 
 	const subcommand = args[0];
 	const subArgs = args.slice(1);
-	const cwd = process.cwd();
+
+	// Resolve the actual project root (handles git worktrees).
+	// Mail commands may run from agent worktrees via hooks, so we must
+	// resolve up to the main project root where .overstory/mail.db lives.
+	const root = await resolveProjectRoot(process.cwd());
 
 	switch (subcommand) {
 		case "send":
-			handleSend(subArgs, cwd);
+			handleSend(subArgs, root);
 			break;
 		case "check":
-			handleCheck(subArgs, cwd);
+			handleCheck(subArgs, root);
 			break;
 		case "list":
-			handleList(subArgs, cwd);
+			handleList(subArgs, root);
 			break;
 		case "read":
-			handleRead(subArgs, cwd);
+			handleRead(subArgs, root);
 			break;
 		case "reply":
-			handleReply(subArgs, cwd);
+			handleReply(subArgs, root);
 			break;
 		case "purge":
-			handlePurge(subArgs, cwd);
+			handlePurge(subArgs, root);
 			break;
 		default:
 			throw new MailError(
