@@ -4,7 +4,7 @@ Project-agnostic swarm system for Claude Code agent orchestration. Overstory tur
 
 ## How It Works
 
-Your Claude Code session **is** the orchestrator. There is no separate daemon. CLAUDE.md + hooks + the `overstory` CLI provide everything.
+CLAUDE.md + hooks + the `overstory` CLI turn your Claude Code session into a multi-agent orchestrator. A persistent coordinator agent manages task decomposition and dispatch, while a mechanical watchdog daemon monitors agent health in the background.
 
 ```
 Coordinator (persistent orchestrator at project root)
