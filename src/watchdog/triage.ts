@@ -28,8 +28,10 @@ export async function triageAgent(options: {
 	agentName: string;
 	root: string;
 	lastActivity: string;
+	/** Timeout in ms for the Claude subprocess. Defaults to 30_000 (30s). */
+	timeoutMs?: number;
 }): Promise<"retry" | "terminate" | "extend"> {
-	const { agentName, root, lastActivity } = options;
+	const { agentName, root, lastActivity, timeoutMs } = options;
 	const logsDir = join(root, ".overstory", "logs", agentName);
 
 	let logContent: string;
@@ -43,7 +45,7 @@ export async function triageAgent(options: {
 	const prompt = buildTriagePrompt(agentName, lastActivity, logContent);
 
 	try {
-		const response = await spawnClaude(prompt);
+		const response = await spawnClaude(prompt, timeoutMs);
 		return classifyResponse(response);
 	} catch {
 		// Claude not available — default to extend (safe fallback)
@@ -117,28 +119,42 @@ export function buildTriagePrompt(
 	].join("\n");
 }
 
+/** Default timeout for Claude subprocess: 30 seconds */
+const DEFAULT_TRIAGE_TIMEOUT_MS = 30_000;
+
 /**
  * Spawn Claude in non-interactive mode to analyze the log.
  *
  * @param prompt - The analysis prompt
+ * @param timeoutMs - Timeout in ms for the subprocess (default 30s)
  * @returns Claude's response text
- * @throws Error if claude is not installed or the process fails
+ * @throws Error if claude is not installed, the process fails, or the timeout is reached
  */
-async function spawnClaude(prompt: string): Promise<string> {
+async function spawnClaude(prompt: string, timeoutMs?: number): Promise<string> {
+	const timeout = timeoutMs ?? DEFAULT_TRIAGE_TIMEOUT_MS;
+
 	const proc = Bun.spawn(["claude", "--print", "-p", prompt], {
 		stdout: "pipe",
 		stderr: "pipe",
 	});
 
-	const exitCode = await proc.exited;
-	const stdout = await new Response(proc.stdout).text();
+	const timer = setTimeout(() => {
+		proc.kill();
+	}, timeout);
 
-	if (exitCode !== 0) {
-		const stderr = await new Response(proc.stderr).text();
-		throw new AgentError(`Claude triage failed (exit ${exitCode}): ${stderr.trim()}`);
+	try {
+		const exitCode = await proc.exited;
+		const stdout = await new Response(proc.stdout).text();
+
+		if (exitCode !== 0) {
+			const stderr = await new Response(proc.stderr).text();
+			throw new AgentError(`Claude triage failed (exit ${exitCode}): ${stderr.trim()}`);
+		}
+
+		return stdout.trim();
+	} finally {
+		clearTimeout(timer);
 	}
-
-	return stdout.trim();
 }
 
 /**

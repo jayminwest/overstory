@@ -150,12 +150,14 @@ describe("triageAgent", () => {
 			"Agent started\nProcessing data\nError: something went wrong\n",
 		);
 
-		// triageAgent will try to spawn claude which should fail in test environment
-		// It should catch the error and return 'extend' as fallback
+		// triageAgent will try to spawn claude which should fail or be killed by timeout.
+		// Short timeout ensures the test doesn't hang even if the claude binary
+		// exists on the system (e.g., inside a Claude Code session).
 		const result = await triageAgent({
 			agentName: "test-agent",
 			root: tempRoot,
 			lastActivity: "2026-02-13T10:00:00Z",
+			timeoutMs: 500,
 		});
 		expect(result).toBe("extend");
 	});
