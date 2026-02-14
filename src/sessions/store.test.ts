@@ -9,8 +9,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentSession, AgentState } from "../types.ts";
-import { type SessionStore, createSessionStore } from "./store.ts";
+import type { AgentSession, AgentState, InsertRun, Run, RunStore } from "../types.ts";
+import { type SessionStore, createRunStore, createSessionStore } from "./store.ts";
 
 let tempDir: string;
 let dbPath: string;
@@ -515,5 +515,359 @@ describe("edge cases", () => {
 
 		const result = store.getByName("test-agent");
 		expect(result?.beadId).toBe("");
+	});
+});
+
+// ============================================================
+// RunStore Tests
+// ============================================================
+
+describe("RunStore", () => {
+	let runStore: RunStore;
+
+	beforeEach(async () => {
+		// Reuse the same dbPath so RunStore shares sessions.db with SessionStore
+		runStore = createRunStore(dbPath);
+	});
+
+	afterEach(() => {
+		runStore.close();
+	});
+
+	/** Helper to create an InsertRun with optional overrides. */
+	function makeRun(overrides: Partial<InsertRun> = {}): InsertRun {
+		return {
+			id: "run-2026-02-13T10:00:00.000Z",
+			startedAt: "2026-02-13T10:00:00.000Z",
+			coordinatorSessionId: "coord-session-001",
+			status: "active",
+			...overrides,
+		};
+	}
+
+	// === createRun + getRun ===
+
+	describe("createRun and getRun", () => {
+		test("creates and retrieves a run", () => {
+			runStore.createRun(makeRun());
+
+			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result).not.toBeNull();
+			expect(result?.id).toBe("run-2026-02-13T10:00:00.000Z");
+			expect(result?.startedAt).toBe("2026-02-13T10:00:00.000Z");
+			expect(result?.completedAt).toBeNull();
+			expect(result?.agentCount).toBe(0);
+			expect(result?.coordinatorSessionId).toBe("coord-session-001");
+			expect(result?.status).toBe("active");
+		});
+
+		test("returns null for nonexistent run", () => {
+			const result = runStore.getRun("nonexistent-run");
+			expect(result).toBeNull();
+		});
+
+		test("creates a run with explicit agentCount", () => {
+			runStore.createRun(makeRun({ agentCount: 5 }));
+
+			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result?.agentCount).toBe(5);
+		});
+
+		test("creates a run with null coordinatorSessionId", () => {
+			runStore.createRun(makeRun({ coordinatorSessionId: null }));
+
+			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result?.coordinatorSessionId).toBeNull();
+		});
+
+		test("rejects invalid status via CHECK constraint", () => {
+			const badRun = makeRun({ status: "invalid" as Run["status"] });
+			expect(() => runStore.createRun(badRun)).toThrow();
+		});
+
+		test("rejects duplicate run IDs via PRIMARY KEY constraint", () => {
+			runStore.createRun(makeRun());
+			expect(() => runStore.createRun(makeRun())).toThrow();
+		});
+	});
+
+	// === getActiveRun ===
+
+	describe("getActiveRun", () => {
+		test("returns null when no runs exist", () => {
+			const result = runStore.getActiveRun();
+			expect(result).toBeNull();
+		});
+
+		test("returns the most recently started active run", () => {
+			runStore.createRun(
+				makeRun({
+					id: "run-early",
+					startedAt: "2026-02-13T08:00:00.000Z",
+					status: "active",
+				}),
+			);
+			runStore.createRun(
+				makeRun({
+					id: "run-late",
+					startedAt: "2026-02-13T12:00:00.000Z",
+					status: "active",
+				}),
+			);
+
+			const result = runStore.getActiveRun();
+			expect(result?.id).toBe("run-late");
+		});
+
+		test("ignores completed and failed runs", () => {
+			runStore.createRun(makeRun({ id: "run-completed", status: "active" }));
+			runStore.completeRun("run-completed", "completed");
+
+			runStore.createRun(
+				makeRun({
+					id: "run-failed",
+					startedAt: "2026-02-13T11:00:00.000Z",
+					status: "active",
+				}),
+			);
+			runStore.completeRun("run-failed", "failed");
+
+			const result = runStore.getActiveRun();
+			expect(result).toBeNull();
+		});
+	});
+
+	// === listRuns ===
+
+	describe("listRuns", () => {
+		test("returns empty array when no runs exist", () => {
+			const result = runStore.listRuns();
+			expect(result).toEqual([]);
+		});
+
+		test("returns all runs ordered by started_at descending", () => {
+			runStore.createRun(
+				makeRun({
+					id: "run-1",
+					startedAt: "2026-02-13T08:00:00.000Z",
+				}),
+			);
+			runStore.createRun(
+				makeRun({
+					id: "run-2",
+					startedAt: "2026-02-13T12:00:00.000Z",
+				}),
+			);
+			runStore.createRun(
+				makeRun({
+					id: "run-3",
+					startedAt: "2026-02-13T10:00:00.000Z",
+				}),
+			);
+
+			const result = runStore.listRuns();
+			expect(result).toHaveLength(3);
+			expect(result[0]?.id).toBe("run-2");
+			expect(result[1]?.id).toBe("run-3");
+			expect(result[2]?.id).toBe("run-1");
+		});
+
+		test("filters by status", () => {
+			runStore.createRun(makeRun({ id: "run-active", status: "active" }));
+			runStore.createRun(
+				makeRun({
+					id: "run-to-complete",
+					startedAt: "2026-02-13T11:00:00.000Z",
+					status: "active",
+				}),
+			);
+			runStore.completeRun("run-to-complete", "completed");
+
+			const activeRuns = runStore.listRuns({ status: "active" });
+			expect(activeRuns).toHaveLength(1);
+			expect(activeRuns[0]?.id).toBe("run-active");
+
+			const completedRuns = runStore.listRuns({ status: "completed" });
+			expect(completedRuns).toHaveLength(1);
+			expect(completedRuns[0]?.id).toBe("run-to-complete");
+		});
+
+		test("respects limit option", () => {
+			for (let i = 0; i < 5; i++) {
+				runStore.createRun(
+					makeRun({
+						id: `run-${i}`,
+						startedAt: `2026-02-13T${String(10 + i).padStart(2, "0")}:00:00.000Z`,
+					}),
+				);
+			}
+
+			const result = runStore.listRuns({ limit: 2 });
+			expect(result).toHaveLength(2);
+		});
+
+		test("combines status and limit filters", () => {
+			for (let i = 0; i < 5; i++) {
+				runStore.createRun(
+					makeRun({
+						id: `run-${i}`,
+						startedAt: `2026-02-13T${String(10 + i).padStart(2, "0")}:00:00.000Z`,
+						status: "active",
+					}),
+				);
+			}
+			runStore.completeRun("run-0", "completed");
+			runStore.completeRun("run-1", "completed");
+
+			const result = runStore.listRuns({ status: "active", limit: 2 });
+			expect(result).toHaveLength(2);
+			// All returned runs should be active
+			for (const run of result) {
+				expect(run.status).toBe("active");
+			}
+		});
+	});
+
+	// === incrementAgentCount ===
+
+	describe("incrementAgentCount", () => {
+		test("increments agent count by 1", () => {
+			runStore.createRun(makeRun());
+
+			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
+			let result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result?.agentCount).toBe(1);
+
+			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
+			result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result?.agentCount).toBe(2);
+		});
+
+		test("is a no-op for nonexistent run (does not throw)", () => {
+			// Should not throw
+			runStore.incrementAgentCount("nonexistent-run");
+		});
+
+		test("does not affect other run fields", () => {
+			runStore.createRun(makeRun());
+			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
+
+			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result?.status).toBe("active");
+			expect(result?.completedAt).toBeNull();
+			expect(result?.coordinatorSessionId).toBe("coord-session-001");
+		});
+	});
+
+	// === completeRun ===
+
+	describe("completeRun", () => {
+		test("sets status to completed and records completedAt", () => {
+			runStore.createRun(makeRun());
+
+			const before = new Date().toISOString();
+			runStore.completeRun("run-2026-02-13T10:00:00.000Z", "completed");
+			const after = new Date().toISOString();
+
+			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result?.status).toBe("completed");
+			expect(result?.completedAt).not.toBeNull();
+			const completedAt = result?.completedAt ?? "";
+			expect(completedAt >= before).toBe(true);
+			expect(completedAt <= after).toBe(true);
+		});
+
+		test("sets status to failed", () => {
+			runStore.createRun(makeRun());
+			runStore.completeRun("run-2026-02-13T10:00:00.000Z", "failed");
+
+			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result?.status).toBe("failed");
+			expect(result?.completedAt).not.toBeNull();
+		});
+
+		test("is a no-op for nonexistent run (does not throw)", () => {
+			// Should not throw
+			runStore.completeRun("nonexistent-run", "completed");
+		});
+
+		test("preserves agent count when completing", () => {
+			runStore.createRun(makeRun());
+			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
+			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
+			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
+
+			runStore.completeRun("run-2026-02-13T10:00:00.000Z", "completed");
+
+			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(result?.agentCount).toBe(3);
+			expect(result?.status).toBe("completed");
+		});
+	});
+
+	// === shared database ===
+
+	describe("shared database with SessionStore", () => {
+		test("RunStore and SessionStore can share the same database file", () => {
+			// SessionStore was already opened on dbPath in the outer beforeEach.
+			// RunStore was opened on dbPath in the inner beforeEach.
+			// Both should work without conflicts.
+			runStore.createRun(makeRun());
+			store.upsert(makeSession({ runId: "run-2026-02-13T10:00:00.000Z" }));
+
+			const run = runStore.getRun("run-2026-02-13T10:00:00.000Z");
+			expect(run).not.toBeNull();
+
+			const sessions = store.getByRun("run-2026-02-13T10:00:00.000Z");
+			expect(sessions).toHaveLength(1);
+		});
+	});
+
+	// === close ===
+
+	describe("close", () => {
+		test("close does not throw when called on open store", () => {
+			runStore.createRun(makeRun());
+			expect(() => runStore.close()).not.toThrow();
+		});
+	});
+
+	// === edge cases ===
+
+	describe("edge cases", () => {
+		test("handles many runs efficiently", () => {
+			for (let i = 0; i < 50; i++) {
+				runStore.createRun(
+					makeRun({
+						id: `run-${i}`,
+						startedAt: `2026-02-13T${String(i).padStart(2, "0")}:00:00.000Z`,
+					}),
+				);
+			}
+
+			const all = runStore.listRuns();
+			expect(all).toHaveLength(50);
+		});
+
+		test("all fields roundtrip correctly", () => {
+			const run: InsertRun = {
+				id: "run-roundtrip-test",
+				startedAt: "2026-02-13T15:30:00.000Z",
+				coordinatorSessionId: "coord-session-roundtrip",
+				status: "active",
+				agentCount: 7,
+			};
+
+			runStore.createRun(run);
+			const result = runStore.getRun("run-roundtrip-test");
+
+			expect(result).not.toBeNull();
+			expect(result?.id).toBe("run-roundtrip-test");
+			expect(result?.startedAt).toBe("2026-02-13T15:30:00.000Z");
+			expect(result?.completedAt).toBeNull();
+			expect(result?.agentCount).toBe(7);
+			expect(result?.coordinatorSessionId).toBe("coord-session-roundtrip");
+			expect(result?.status).toBe("active");
+		});
 	});
 });

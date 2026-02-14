@@ -7,7 +7,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import type { AgentSession, AgentState } from "../types.ts";
+import type { AgentSession, AgentState, InsertRun, Run, RunStatus, RunStore } from "../types.ts";
 
 export interface SessionStore {
 	/** Insert or update a session. Uses agent_name as the unique key. */
@@ -54,6 +54,16 @@ interface SessionRow {
 	stalled_since: string | null;
 }
 
+/** Row shape for runs table as stored in SQLite (snake_case columns). */
+interface RunRow {
+	id: string;
+	started_at: string;
+	completed_at: string | null;
+	agent_count: number;
+	coordinator_session_id: string | null;
+	status: string;
+}
+
 const CREATE_TABLE = `
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -79,6 +89,20 @@ const CREATE_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
 CREATE INDEX IF NOT EXISTS idx_sessions_run ON sessions(run_id)`;
 
+const CREATE_RUNS_TABLE = `
+CREATE TABLE IF NOT EXISTS runs (
+  id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  agent_count INTEGER NOT NULL DEFAULT 0,
+  coordinator_session_id TEXT,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK(status IN ('active','completed','failed'))
+)`;
+
+const CREATE_RUNS_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)`;
+
 /** Convert a database row (snake_case) to an AgentSession object (camelCase). */
 function rowToSession(row: SessionRow): AgentSession {
 	return {
@@ -101,6 +125,18 @@ function rowToSession(row: SessionRow): AgentSession {
 	};
 }
 
+/** Convert a database row (snake_case) to a Run object (camelCase). */
+function rowToRun(row: RunRow): Run {
+	return {
+		id: row.id,
+		startedAt: row.started_at,
+		completedAt: row.completed_at,
+		agentCount: row.agent_count,
+		coordinatorSessionId: row.coordinator_session_id,
+		status: row.status as RunStatus,
+	};
+}
+
 /**
  * Create a new SessionStore backed by a SQLite database at the given path.
  *
@@ -118,6 +154,8 @@ export function createSessionStore(dbPath: string): SessionStore {
 	// Create schema
 	db.exec(CREATE_TABLE);
 	db.exec(CREATE_INDEXES);
+	db.exec(CREATE_RUNS_TABLE);
+	db.exec(CREATE_RUNS_INDEXES);
 
 	// Prepare statements for frequent operations
 	const upsertStmt = db.prepare<
@@ -310,6 +348,123 @@ export function createSessionStore(dbPath: string): SessionStore {
 			db.prepare<void, Record<string, string>>(deleteQuery).run(params);
 
 			return count;
+		},
+
+		close(): void {
+			try {
+				db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+			} catch {
+				// Best effort -- checkpoint failure is non-fatal
+			}
+			db.close();
+		},
+	};
+}
+
+/**
+ * Create a new RunStore backed by a SQLite database at the given path.
+ *
+ * Shares the same sessions.db file as SessionStore. Initializes the runs
+ * table alongside sessions. Uses WAL mode for concurrent access.
+ */
+export function createRunStore(dbPath: string): RunStore {
+	const db = new Database(dbPath);
+
+	// Configure for concurrent access from multiple agent processes.
+	db.exec("PRAGMA journal_mode = WAL");
+	db.exec("PRAGMA synchronous = NORMAL");
+	db.exec("PRAGMA busy_timeout = 5000");
+
+	// Create schema (idempotent — safe if SessionStore already created these)
+	db.exec(CREATE_RUNS_TABLE);
+	db.exec(CREATE_RUNS_INDEXES);
+
+	// Prepare statements for frequent operations
+	const insertRunStmt = db.prepare<
+		void,
+		{
+			$id: string;
+			$started_at: string;
+			$completed_at: string | null;
+			$agent_count: number;
+			$coordinator_session_id: string | null;
+			$status: string;
+		}
+	>(`
+		INSERT INTO runs (id, started_at, completed_at, agent_count, coordinator_session_id, status)
+		VALUES ($id, $started_at, $completed_at, $agent_count, $coordinator_session_id, $status)
+	`);
+
+	const getRunStmt = db.prepare<RunRow, { $id: string }>(`
+		SELECT * FROM runs WHERE id = $id
+	`);
+
+	const getActiveRunStmt = db.prepare<RunRow, Record<string, never>>(`
+		SELECT * FROM runs WHERE status = 'active'
+		ORDER BY started_at DESC
+		LIMIT 1
+	`);
+
+	const incrementAgentCountStmt = db.prepare<void, { $id: string }>(`
+		UPDATE runs SET agent_count = agent_count + 1 WHERE id = $id
+	`);
+
+	const completeRunStmt = db.prepare<
+		void,
+		{ $id: string; $status: string; $completed_at: string }
+	>(`
+		UPDATE runs SET status = $status, completed_at = $completed_at WHERE id = $id
+	`);
+
+	return {
+		createRun(run: InsertRun): void {
+			insertRunStmt.run({
+				$id: run.id,
+				$started_at: run.startedAt,
+				$completed_at: null,
+				$agent_count: run.agentCount ?? 0,
+				$coordinator_session_id: run.coordinatorSessionId,
+				$status: run.status,
+			});
+		},
+
+		getRun(id: string): Run | null {
+			const row = getRunStmt.get({ $id: id });
+			return row ? rowToRun(row) : null;
+		},
+
+		getActiveRun(): Run | null {
+			const row = getActiveRunStmt.get({});
+			return row ? rowToRun(row) : null;
+		},
+
+		listRuns(opts?: { limit?: number; status?: RunStatus }): Run[] {
+			const conditions: string[] = [];
+			const params: Record<string, string | number> = {};
+
+			if (opts?.status !== undefined) {
+				conditions.push("status = $status");
+				params.$status = opts.status;
+			}
+
+			const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+			const limitClause = opts?.limit !== undefined ? `LIMIT ${opts.limit}` : "";
+			const query = `SELECT * FROM runs ${whereClause} ORDER BY started_at DESC ${limitClause}`;
+
+			const rows = db.prepare<RunRow, Record<string, string | number>>(query).all(params);
+			return rows.map(rowToRun);
+		},
+
+		incrementAgentCount(runId: string): void {
+			incrementAgentCountStmt.run({ $id: runId });
+		},
+
+		completeRun(runId: string, status: "completed" | "failed"): void {
+			completeRunStmt.run({
+				$id: runId,
+				$status: status,
+				$completed_at: new Date().toISOString(),
+			});
 		},
 
 		close(): void {

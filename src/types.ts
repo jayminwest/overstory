@@ -419,6 +419,44 @@ export interface EventStore {
 	close(): void;
 }
 
+// === Run (Coordinator Session Grouping) ===
+
+/** Status of a run (coordinator session grouping agents). */
+export type RunStatus = "active" | "completed" | "failed";
+
+/** A run groups all agents spawned from one coordinator session. */
+export interface Run {
+	id: string; // Format: run-{ISO timestamp}
+	startedAt: string;
+	completedAt: string | null;
+	agentCount: number;
+	coordinatorSessionId: string | null;
+	status: RunStatus;
+}
+
+/** Input for creating a new run. */
+export type InsertRun = Omit<Run, "completedAt" | "agentCount"> & {
+	agentCount?: number;
+};
+
+/** Interface for run management operations. */
+export interface RunStore {
+	/** Create a new run. */
+	createRun(run: InsertRun): void;
+	/** Get a run by ID, or null if not found. */
+	getRun(id: string): Run | null;
+	/** Get the most recently started active run. */
+	getActiveRun(): Run | null;
+	/** List runs, optionally limited. */
+	listRuns(opts?: { limit?: number; status?: RunStatus }): Run[];
+	/** Increment agent count for a run. */
+	incrementAgentCount(runId: string): void;
+	/** Complete a run (set status and completedAt). */
+	completeRun(runId: string, status: "completed" | "failed"): void;
+	/** Close the store (if standalone — in practice may share DB with SessionStore). */
+	close(): void;
+}
+
 // === Session Lifecycle (Checkpoint / Handoff / Continuity) ===
 
 /**
