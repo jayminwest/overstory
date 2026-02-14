@@ -26,8 +26,13 @@ import { createSession, isSessionAlive, killSession, sendKeys } from "../worktre
 /** Default monitor agent name. */
 const MONITOR_NAME = "monitor";
 
-/** Tmux session name for the monitor. */
-const TMUX_SESSION = `overstory-${MONITOR_NAME}`;
+/**
+ * Build the tmux session name for the monitor.
+ * Includes the project name to prevent cross-project collisions (overstory-pcef).
+ */
+function monitorTmuxSession(projectName: string): string {
+	return `overstory-${projectName}-${MONITOR_NAME}`;
+}
 
 /**
  * Build the monitor startup beacon — the first message sent to the monitor
@@ -69,6 +74,7 @@ async function startMonitor(args: string[]): Promise<void> {
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
 	const projectRoot = config.project.root;
+	const tmuxSession = monitorTmuxSession(config.project.name);
 
 	// Check for existing monitor
 	const overstoryDir = join(projectRoot, ".overstory");
@@ -123,7 +129,7 @@ async function startMonitor(args: string[]): Promise<void> {
 			const escaped = agentDef.replace(/'/g, "'\\''");
 			claudeCmd += ` --append-system-prompt '${escaped}'`;
 		}
-		const pid = await createSession(TMUX_SESSION, projectRoot, claudeCmd, {
+		const pid = await createSession(tmuxSession, projectRoot, claudeCmd, {
 			OVERSTORY_AGENT_NAME: MONITOR_NAME,
 		});
 
@@ -136,7 +142,7 @@ async function startMonitor(args: string[]): Promise<void> {
 			worktreePath: projectRoot, // Monitor uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			beadId: "", // No specific bead assignment
-			tmuxSession: TMUX_SESSION,
+			tmuxSession,
 			state: "booting",
 			pid,
 			parentAgent: null, // Top of hierarchy (alongside coordinator)
@@ -153,16 +159,16 @@ async function startMonitor(args: string[]): Promise<void> {
 		// Send beacon after TUI initialization delay
 		await Bun.sleep(3_000);
 		const beacon = buildMonitorBeacon();
-		await sendKeys(TMUX_SESSION, beacon);
+		await sendKeys(tmuxSession, beacon);
 
 		// Follow-up Enter to ensure submission (same pattern as sling.ts)
 		await Bun.sleep(500);
-		await sendKeys(TMUX_SESSION, "");
+		await sendKeys(tmuxSession, "");
 
 		const output = {
 			agentName: MONITOR_NAME,
 			capability: "monitor",
-			tmuxSession: TMUX_SESSION,
+			tmuxSession,
 			projectRoot,
 			pid,
 		};
@@ -171,13 +177,13 @@ async function startMonitor(args: string[]): Promise<void> {
 			process.stdout.write(`${JSON.stringify(output)}\n`);
 		} else {
 			process.stdout.write("Monitor started\n");
-			process.stdout.write(`  Tmux:    ${TMUX_SESSION}\n`);
+			process.stdout.write(`  Tmux:    ${tmuxSession}\n`);
 			process.stdout.write(`  Root:    ${projectRoot}\n`);
 			process.stdout.write(`  PID:     ${pid}\n`);
 		}
 
 		if (shouldAttach) {
-			Bun.spawnSync(["tmux", "attach-session", "-t", TMUX_SESSION], {
+			Bun.spawnSync(["tmux", "attach-session", "-t", tmuxSession], {
 				stdio: ["inherit", "inherit", "inherit"],
 			});
 		}

@@ -142,7 +142,7 @@ function makeCoordinatorSession(overrides: Partial<AgentSession> = {}): AgentSes
 		worktreePath: tempDir,
 		branchName: "main",
 		beadId: "",
-		tmuxSession: "overstory-coordinator",
+		tmuxSession: "overstory-test-project-coordinator",
 		state: "working",
 		pid: 99999,
 		parentAgent: null,
@@ -254,7 +254,7 @@ describe("startCoordinator", () => {
 		expect(session).toBeDefined();
 		expect(session?.agentName).toBe("coordinator");
 		expect(session?.capability).toBe("coordinator");
-		expect(session?.tmuxSession).toBe("overstory-coordinator");
+		expect(session?.tmuxSession).toBe("overstory-test-project-coordinator");
 		expect(session?.state).toBe("booting");
 		expect(session?.pid).toBe(99999);
 		expect(session?.parentAgent).toBeNull();
@@ -266,7 +266,7 @@ describe("startCoordinator", () => {
 
 		// Verify tmux createSession was called
 		expect(calls.createSession).toHaveLength(1);
-		expect(calls.createSession[0]?.name).toBe("overstory-coordinator");
+		expect(calls.createSession[0]?.name).toBe("overstory-test-project-coordinator");
 		expect(calls.createSession[0]?.cwd).toBe(tempDir);
 
 		// Verify sendKeys was called (beacon + follow-up Enter)
@@ -395,7 +395,7 @@ describe("startCoordinator", () => {
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.agentName).toBe("coordinator");
 		expect(parsed.capability).toBe("coordinator");
-		expect(parsed.tmuxSession).toBe("overstory-coordinator");
+		expect(parsed.tmuxSession).toBe("overstory-test-project-coordinator");
 		expect(parsed.pid).toBe(99999);
 		expect(parsed.projectRoot).toBe(tempDir);
 	});
@@ -406,7 +406,7 @@ describe("startCoordinator", () => {
 		saveSessionsToDb([existing]);
 
 		// Mock tmux as alive for the existing session
-		const { deps } = makeDeps({ "overstory-coordinator": true });
+		const { deps } = makeDeps({ "overstory-test-project-coordinator": true });
 
 		await expect(coordinatorCommand(["start"], deps)).rejects.toThrow(AgentError);
 
@@ -428,7 +428,7 @@ describe("startCoordinator", () => {
 		saveSessionsToDb([deadSession]);
 
 		// Mock tmux as NOT alive for the existing session
-		const { deps } = makeDeps({ "overstory-coordinator": false });
+		const { deps } = makeDeps({ "overstory-test-project-coordinator": false });
 
 		const originalSleep = Bun.sleep;
 		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
@@ -459,7 +459,7 @@ describe("stopCoordinator", () => {
 		saveSessionsToDb([session]);
 
 		// Tmux is alive so killSession will be called
-		const { deps, calls } = makeDeps({ "overstory-coordinator": true });
+		const { deps, calls } = makeDeps({ "overstory-test-project-coordinator": true });
 
 		await captureStdout(() => coordinatorCommand(["stop"], deps));
 
@@ -470,13 +470,13 @@ describe("stopCoordinator", () => {
 
 		// Verify killSession was called
 		expect(calls.killSession).toHaveLength(1);
-		expect(calls.killSession[0]?.name).toBe("overstory-coordinator");
+		expect(calls.killSession[0]?.name).toBe("overstory-test-project-coordinator");
 	});
 
 	test("--json outputs JSON with stopped flag", async () => {
 		const session = makeCoordinatorSession({ state: "working" });
 		saveSessionsToDb([session]);
-		const { deps } = makeDeps({ "overstory-coordinator": true });
+		const { deps } = makeDeps({ "overstory-test-project-coordinator": true });
 
 		const output = await captureStdout(() => coordinatorCommand(["stop", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
@@ -489,7 +489,7 @@ describe("stopCoordinator", () => {
 		saveSessionsToDb([session]);
 
 		// Tmux is NOT alive — should skip killSession
-		const { deps, calls } = makeDeps({ "overstory-coordinator": false });
+		const { deps, calls } = makeDeps({ "overstory-test-project-coordinator": false });
 
 		await captureStdout(() => coordinatorCommand(["stop"], deps));
 
@@ -542,25 +542,25 @@ describe("statusCoordinator", () => {
 	test("shows running state when coordinator is alive", async () => {
 		const session = makeCoordinatorSession({ state: "working" });
 		saveSessionsToDb([session]);
-		const { deps } = makeDeps({ "overstory-coordinator": true });
+		const { deps } = makeDeps({ "overstory-test-project-coordinator": true });
 
 		const output = await captureStdout(() => coordinatorCommand(["status"], deps));
 		expect(output).toContain("running");
 		expect(output).toContain(session.id);
-		expect(output).toContain("overstory-coordinator");
+		expect(output).toContain("overstory-test-project-coordinator");
 	});
 
 	test("--json shows correct fields when running", async () => {
 		const session = makeCoordinatorSession({ state: "working", pid: 99999 });
 		saveSessionsToDb([session]);
-		const { deps } = makeDeps({ "overstory-coordinator": true });
+		const { deps } = makeDeps({ "overstory-test-project-coordinator": true });
 
 		const output = await captureStdout(() => coordinatorCommand(["status", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.running).toBe(true);
 		expect(parsed.sessionId).toBe(session.id);
 		expect(parsed.state).toBe("working");
-		expect(parsed.tmuxSession).toBe("overstory-coordinator");
+		expect(parsed.tmuxSession).toBe("overstory-test-project-coordinator");
 		expect(parsed.pid).toBe(99999);
 	});
 
@@ -569,7 +569,7 @@ describe("statusCoordinator", () => {
 		saveSessionsToDb([session]);
 
 		// Tmux is NOT alive — triggers zombie reconciliation
-		const { deps } = makeDeps({ "overstory-coordinator": false });
+		const { deps } = makeDeps({ "overstory-test-project-coordinator": false });
 
 		const output = await captureStdout(() => coordinatorCommand(["status", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
@@ -584,7 +584,7 @@ describe("statusCoordinator", () => {
 	test("reconciles zombie for booting state too", async () => {
 		const session = makeCoordinatorSession({ state: "booting" });
 		saveSessionsToDb([session]);
-		const { deps } = makeDeps({ "overstory-coordinator": false });
+		const { deps } = makeDeps({ "overstory-test-project-coordinator": false });
 
 		const output = await captureStdout(() => coordinatorCommand(["status", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;

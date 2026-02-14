@@ -184,7 +184,7 @@ async function startSupervisor(args: string[]): Promise<void> {
 
 		// Spawn tmux session at project root with Claude Code (interactive mode).
 		// Inject the supervisor base definition via --append-system-prompt.
-		const tmuxSession = `overstory-supervisor-${flags.name}`;
+		const tmuxSession = `overstory-${config.project.name}-supervisor-${flags.name}`;
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "supervisor.md");
 		const agentDefFile = Bun.file(agentDefPath);
 		let claudeCmd = "claude --model opus --dangerously-skip-permissions";

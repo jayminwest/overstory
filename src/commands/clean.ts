@@ -119,14 +119,15 @@ interface CleanResult {
  * project's sessions.db (or sessions.json). This prevents cross-project
  * kills during dogfooding, where `bun test` might run inside a live swarm.
  *
- * Falls back to killing all "overstory-*" prefixed tmux sessions only if
- * the SessionStore is unavailable (graceful degradation for broken state).
+ * Falls back to killing all "overstory-{projectName}-" prefixed tmux sessions
+ * only if the SessionStore is unavailable (graceful degradation for broken state).
  */
-async function killAllTmuxSessions(overstoryDir: string): Promise<number> {
+async function killAllTmuxSessions(overstoryDir: string, projectName: string): Promise<number> {
 	let killed = 0;
+	const projectPrefix = `overstory-${projectName}-`;
 	try {
 		const tmuxSessions = await listSessions();
-		const overStorySessions = tmuxSessions.filter((s) => s.name.startsWith("overstory-"));
+		const overStorySessions = tmuxSessions.filter((s) => s.name.startsWith(projectPrefix));
 		if (overStorySessions.length === 0) {
 			return 0;
 		}
@@ -134,7 +135,8 @@ async function killAllTmuxSessions(overstoryDir: string): Promise<number> {
 		// Build a set of tmux session names registered in this project's SessionStore.
 		const registeredNames = loadRegisteredTmuxNames(overstoryDir);
 
-		// If we got registered names, only kill those. Otherwise fall back to all overstory-*.
+		// If we got registered names, only kill those. Otherwise fall back to all
+		// overstory-{projectName}-* sessions.
 		const toKill =
 			registeredNames !== null
 				? overStorySessions.filter((s) => registeredNames.has(s.name))
@@ -380,7 +382,7 @@ export async function cleanCommand(args: string[]): Promise<void> {
 
 	// 1. Kill tmux sessions (must happen before worktree removal)
 	if (doWorktrees || all) {
-		result.tmuxKilled = await killAllTmuxSessions(overstoryDir);
+		result.tmuxKilled = await killAllTmuxSessions(overstoryDir, config.project.name);
 	}
 
 	// 2. Remove worktrees

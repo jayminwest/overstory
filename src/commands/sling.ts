@@ -379,7 +379,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 		}
 
 		// 11. Create tmux session running claude in interactive mode
-		const tmuxSessionName = `overstory-${name}`;
+		const tmuxSessionName = `overstory-${config.project.name}-${name}`;
 		const claudeCmd = `claude --model ${agentDef.model} --dangerously-skip-permissions`;
 		const pid = await createSession(tmuxSessionName, worktreePath, claudeCmd, {
 			OVERSTORY_AGENT_NAME: name,

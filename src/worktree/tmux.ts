@@ -2,7 +2,9 @@
  * Tmux session management for overstory agent workers.
  *
  * All operations use Bun.spawn to call the tmux CLI directly.
- * Session naming convention: `overstory-{agentName}`.
+ * Session naming convention: `overstory-{projectName}-{agentName}`.
+ * The project name prefix prevents cross-project tmux session collisions
+ * and enables project-scoped cleanup (overstory-pcef).
  */
 
 import { dirname, resolve } from "node:path";
@@ -71,7 +73,7 @@ async function runCommand(
 /**
  * Create a new detached tmux session running the given command.
  *
- * @param name - Session name (e.g., "overstory-auth-login")
+ * @param name - Session name (e.g., "overstory-myproject-auth-login")
  * @param cwd - Working directory for the session
  * @param command - Command to execute inside the session
  * @param env - Optional environment variables to export in the session

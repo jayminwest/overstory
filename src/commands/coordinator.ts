@@ -25,8 +25,13 @@ import { createSession, isSessionAlive, killSession, sendKeys } from "../worktre
 /** Default coordinator agent name. */
 const COORDINATOR_NAME = "coordinator";
 
-/** Tmux session name for the coordinator. */
-const TMUX_SESSION = `overstory-${COORDINATOR_NAME}`;
+/**
+ * Build the tmux session name for the coordinator.
+ * Includes the project name to prevent cross-project collisions (overstory-pcef).
+ */
+function coordinatorTmuxSession(projectName: string): string {
+	return `overstory-${projectName}-${COORDINATOR_NAME}`;
+}
 
 /** Dependency injection for testing. Uses real implementations when omitted. */
 export interface CoordinatorDeps {
@@ -88,6 +93,7 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
 	const projectRoot = config.project.root;
+	const tmuxSession = coordinatorTmuxSession(config.project.name);
 
 	// Check for existing coordinator
 	const overstoryDir = join(projectRoot, ".overstory");
@@ -148,7 +154,7 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			const escaped = agentDef.replace(/'/g, "'\\''");
 			claudeCmd += ` --append-system-prompt '${escaped}'`;
 		}
-		const pid = await tmux.createSession(TMUX_SESSION, projectRoot, claudeCmd, {
+		const pid = await tmux.createSession(tmuxSession, projectRoot, claudeCmd, {
 			OVERSTORY_AGENT_NAME: COORDINATOR_NAME,
 		});
 
@@ -163,7 +169,7 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			worktreePath: projectRoot, // Coordinator uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			beadId: "", // No specific bead assignment
-			tmuxSession: TMUX_SESSION,
+			tmuxSession,
 			state: "booting",
 			pid,
 			parentAgent: null, // Top of hierarchy
@@ -180,16 +186,16 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 		// Send beacon after TUI initialization delay
 		await Bun.sleep(3_000);
 		const beacon = buildCoordinatorBeacon();
-		await tmux.sendKeys(TMUX_SESSION, beacon);
+		await tmux.sendKeys(tmuxSession, beacon);
 
 		// Follow-up Enter to ensure submission (same pattern as sling.ts)
 		await Bun.sleep(500);
-		await tmux.sendKeys(TMUX_SESSION, "");
+		await tmux.sendKeys(tmuxSession, "");
 
 		const output = {
 			agentName: COORDINATOR_NAME,
 			capability: "coordinator",
-			tmuxSession: TMUX_SESSION,
+			tmuxSession,
 			projectRoot,
 			pid,
 		};
@@ -198,13 +204,13 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			process.stdout.write(`${JSON.stringify(output)}\n`);
 		} else {
 			process.stdout.write("Coordinator started\n");
-			process.stdout.write(`  Tmux:    ${TMUX_SESSION}\n`);
+			process.stdout.write(`  Tmux:    ${tmuxSession}\n`);
 			process.stdout.write(`  Root:    ${projectRoot}\n`);
 			process.stdout.write(`  PID:     ${pid}\n`);
 		}
 
 		if (shouldAttach) {
-			Bun.spawnSync(["tmux", "attach-session", "-t", TMUX_SESSION], {
+			Bun.spawnSync(["tmux", "attach-session", "-t", tmuxSession], {
 				stdio: ["inherit", "inherit", "inherit"],
 			});
 		}
