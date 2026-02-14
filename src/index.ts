@@ -23,6 +23,7 @@ import { slingCommand } from "./commands/sling.ts";
 import { specCommand } from "./commands/spec.ts";
 import { statusCommand } from "./commands/status.ts";
 import { supervisorCommand } from "./commands/supervisor.ts";
+import { traceCommand } from "./commands/trace.ts";
 import { watchCommand } from "./commands/watch.ts";
 import { worktreeCommand } from "./commands/worktree.ts";
 import { OverstoryError, WorktreeError } from "./errors.ts";
@@ -52,6 +53,7 @@ Commands:
   worktree <sub>          Manage worktrees (list/clean)
   log <event>             Log a hook event
   watch                   Start watchdog daemon
+  trace <target>         Chronological event timeline for agent/bead
   metrics                 Show session metrics
 
 Options:
@@ -79,6 +81,7 @@ const COMMANDS = [
 	"worktree",
 	"log",
 	"watch",
+	"trace",
 	"metrics",
 ];
 
@@ -184,6 +187,9 @@ async function main(): Promise<void> {
 			break;
 		case "watch":
 			await watchCommand(commandArgs);
+			break;
+		case "trace":
+			await traceCommand(commandArgs);
 			break;
 		case "metrics":
 			await metricsCommand(commandArgs);
