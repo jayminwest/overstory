@@ -11,8 +11,8 @@ describe("createMergeQueue", () => {
 
 	beforeEach(async () => {
 		tempDir = await mkdtemp(join(tmpdir(), "overstory-merge-queue-test-"));
-		// The queue file should NOT exist initially — readQueue handles this
-		queuePath = join(tempDir, "merge-queue.json");
+		// The database file should NOT exist initially — createMergeQueue handles this
+		queuePath = join(tempDir, "merge-queue.db");
 	});
 
 	afterEach(async () => {
@@ -330,6 +330,30 @@ describe("createMergeQueue", () => {
 			const all = queue1.list();
 			expect(all[0]?.status).toBe("merged");
 			expect(all[0]?.resolvedTier).toBe("clean-merge");
+		});
+	});
+
+	describe("close", () => {
+		test("closes the database connection", () => {
+			const queue = createMergeQueue(queuePath);
+			queue.enqueue(makeInput({ branchName: "branch-a" }));
+
+			// Should not throw
+			expect(() => queue.close()).not.toThrow();
+		});
+
+		test("database can be reopened after close", () => {
+			const queue1 = createMergeQueue(queuePath);
+			queue1.enqueue(makeInput({ branchName: "branch-a" }));
+			queue1.close();
+
+			// Create a new queue instance after closing the first one
+			const queue2 = createMergeQueue(queuePath);
+			const all = queue2.list();
+
+			expect(all).toHaveLength(1);
+			expect(all[0]?.branchName).toBe("branch-a");
+			queue2.close();
 		});
 	});
 });
