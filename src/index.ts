@@ -7,6 +7,7 @@
  */
 
 import { cleanCommand } from "./commands/clean.ts";
+import { completionsCommand } from "./commands/completions.ts";
 import { coordinatorCommand } from "./commands/coordinator.ts";
 import { costsCommand } from "./commands/costs.ts";
 import { dashboardCommand } from "./commands/dashboard.ts";
@@ -71,6 +72,7 @@ Commands:
 Options:
   --help, -h              Show this help
   --version, -v           Show version
+  --completions <shell>   Generate shell completions (bash, zsh, fish)
 
 Run 'overstory <command> --help' for command-specific help.`;
 
@@ -148,6 +150,11 @@ async function main(): Promise<void> {
 
 	if (command === "--version" || command === "-v") {
 		process.stdout.write(`overstory v${VERSION}\n`);
+		return;
+	}
+
+	if (command === "--completions") {
+		completionsCommand(commandArgs);
 		return;
 	}
 
