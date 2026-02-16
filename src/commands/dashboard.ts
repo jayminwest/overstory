@@ -307,7 +307,11 @@ function renderAgentPanel(
 		const capability = pad(truncate(agent.capability, 12), 12);
 		const state = pad(agent.state, 10);
 		const beadId = pad(truncate(agent.beadId, 16), 16);
-		const duration = formatDuration(now - new Date(agent.startedAt).getTime());
+		const endTime =
+			agent.state === "completed" || agent.state === "zombie"
+				? new Date(agent.lastActivity).getTime()
+				: now;
+		const duration = formatDuration(endTime - new Date(agent.startedAt).getTime());
 		const durationPadded = pad(duration, 9);
 		const tmuxAlive = data.status.tmuxSessions.some((s) => s.name === agent.tmuxSession);
 		const tmuxDot = tmuxAlive ? `${ANSI.green}●${ANSI.reset}` : `${ANSI.red}○${ANSI.reset}`;

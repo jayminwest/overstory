@@ -214,7 +214,11 @@ export function printStatus(data: StatusData): void {
 	w(`🤖 Agents: ${active.length} active\n`);
 	if (active.length > 0) {
 		for (const agent of active) {
-			const duration = formatDuration(now - new Date(agent.startedAt).getTime());
+			const endTime =
+				agent.state === "completed" || agent.state === "zombie"
+					? new Date(agent.lastActivity).getTime()
+					: now;
+			const duration = formatDuration(endTime - new Date(agent.startedAt).getTime());
 			const tmuxAlive = data.tmuxSessions.some((s) => s.name === agent.tmuxSession);
 			const aliveMarker = tmuxAlive ? "●" : "○";
 			w(`   ${aliveMarker} ${agent.agentName} [${agent.capability}] `);
