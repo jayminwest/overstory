@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-02-17
+
+### Added
+
+#### Reviewer Coverage Enforcement
+- Reviewer-coverage doctor check in `overstory doctor` — warns when leads spawn builders without corresponding reviewers, reports partial coverage ratios per lead
+- `merge_ready` reviewer validation in `overstory mail send` — advisory warning when sending `merge_ready` without reviewer sessions for the sender's builders
+
+#### Scout-First Workflow Enforcement
+- Scout-before-builder warning in `overstory sling` — warns when a lead spawns a builder without having spawned any scouts first
+- `parentHasScouts()` helper exported from sling for testability
+
+#### Run Auto-Completion
+- `overstory coordinator stop` now auto-completes the active run (reads `current-run.txt`, marks run completed, cleans up)
+- `overstory log session-end` auto-completes the run when the coordinator exits (handles tmux window close without explicit stop)
+
+#### Gitignore Wildcard+Whitelist Model
+- `.overstory/.gitignore` flipped from explicit blocklist to wildcard `*` + whitelist pattern — ignore everything, whitelist only tracked files (`config.yaml`, `agent-manifest.json`, `hooks.json`, `groups.json`, `agent-defs/`)
+- `overstory prime` auto-heals `.overstory/.gitignore` on each session start — ensures existing projects get the updated gitignore
+- `OVERSTORY_GITIGNORE` constant and `writeOverstoryGitignore()` exported from init.ts for reuse
+
+#### Testing
+- Test suite grew from 1812 to 1848 tests across 73 files (4726 expect() calls)
+
+### Changed
+- Lead agent definition (`agents/lead.md`) — scouts made mandatory (not optional), Phase 3 review made MANDATORY with stronger language, added `SCOUT_SKIP` failure mode, expanded cost awareness section explaining why scouts and reviewers are investments not overhead
+- `overstory init` .gitignore now always overwrites (supports `--force` reinit and auto-healing)
+
+### Fixed
+- Hooks template (`templates/hooks.json.tmpl`) — removed fragile `read -r INPUT; echo "$INPUT" |` stdin relay pattern; `overstory log` now reads stdin directly via `--stdin` flag
+- `readStdinJson()` in log command — reads all stdin chunks for large payloads instead of only the first line
+- Doctor gitignore structure check updated for wildcard+whitelist model
+
 ## [0.5.3] - 2026-02-17
 
 ### Added
@@ -298,7 +331,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Biome configuration for formatting and linting
 - TypeScript strict mode with `noUncheckedIndexedAccess`
 
-[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/jayminwest/overstory/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/jayminwest/overstory/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/jayminwest/overstory/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jayminwest/overstory/compare/v0.5.0...v0.5.1
