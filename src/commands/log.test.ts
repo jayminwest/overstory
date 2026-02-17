@@ -687,6 +687,8 @@ describe("logCommand", () => {
 			beadId: "bead-123",
 			mailDbPath,
 			parentAgent: "parent-lead",
+			projectRoot: tempDir,
+			sessionStartedAt: new Date().toISOString(),
 		});
 
 		expect(result).toEqual(["typescript", "cli"]);
@@ -718,6 +720,8 @@ describe("logCommand", () => {
 			beadId: "bead-456",
 			mailDbPath,
 			parentAgent: "parent-lead",
+			projectRoot: tempDir,
+			sessionStartedAt: new Date().toISOString(),
 		});
 
 		const mailStore = createMailStore(mailDbPath);
@@ -748,6 +752,8 @@ describe("logCommand", () => {
 			beadId: null,
 			mailDbPath,
 			parentAgent: null,
+			projectRoot: tempDir,
+			sessionStartedAt: new Date().toISOString(),
 		});
 
 		// All records failed, so no domains recorded and no mail sent
@@ -774,10 +780,180 @@ describe("logCommand", () => {
 			beadId: null,
 			mailDbPath,
 			parentAgent: null,
+			projectRoot: tempDir,
+			sessionStartedAt: new Date().toISOString(),
 		});
 
 		expect(result).toEqual([]);
 		expect(recordCalls).toHaveLength(0);
+	});
+
+	test("autoRecordExpertise records pattern insights when EventStore has tool data", async () => {
+		const learnResult: MulchLearnResult = {
+			success: true,
+			command: "mulch learn",
+			changedFiles: ["src/mail/store.ts"],
+			suggestedDomains: ["messaging"],
+			unmatchedFiles: [],
+		};
+		const { client, recordCalls } = createFakeMulchClient(learnResult);
+		const mailDbPath = join(tempDir, ".overstory", "insight-analysis-mail.db");
+
+		// Create EventStore with test data
+		const eventsDbPath = join(tempDir, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+
+		const sessionStartedAt = new Date(Date.now() - 60_000).toISOString(); // 1 minute ago
+
+		// Insert tool events: 15 tool calls total (10+ triggers workflow insight)
+		// Read-heavy: 12 Read, 3 Edit → should classify as read-heavy
+		for (let i = 0; i < 12; i++) {
+			eventStore.insert({
+				runId: null,
+				agentName: "insight-agent",
+				sessionId: "sess-insight",
+				eventType: "tool_start",
+				toolName: "Read",
+				toolArgs: JSON.stringify({ file_path: `/src/file${i}.ts` }),
+				toolDurationMs: null,
+				level: "info",
+				data: JSON.stringify({ summary: `read: /src/file${i}.ts` }),
+			});
+		}
+
+		// Add 4 edits to same file → hot file
+		for (let i = 0; i < 4; i++) {
+			eventStore.insert({
+				runId: null,
+				agentName: "insight-agent",
+				sessionId: "sess-insight",
+				eventType: "tool_start",
+				toolName: "Edit",
+				toolArgs: JSON.stringify({ file_path: "src/mail/store.ts" }),
+				toolDurationMs: null,
+				level: "info",
+				data: JSON.stringify({ summary: "edit: src/mail/store.ts" }),
+			});
+		}
+
+		// Add 1 error event → error pattern
+		eventStore.insert({
+			runId: null,
+			agentName: "insight-agent",
+			sessionId: "sess-insight",
+			eventType: "tool_start",
+			toolName: "Bash",
+			toolArgs: JSON.stringify({ command: "bun test" }),
+			toolDurationMs: null,
+			level: "error",
+			data: "Test failed",
+		});
+
+		eventStore.close();
+
+		// Run autoRecordExpertise
+		const result = await autoRecordExpertise({
+			mulchClient: client,
+			agentName: "insight-agent",
+			capability: "builder",
+			beadId: "bead-insight",
+			mailDbPath,
+			parentAgent: "parent-agent",
+			projectRoot: tempDir,
+			sessionStartedAt,
+		});
+
+		// Verify reference + insights were recorded
+		expect(recordCalls.length).toBeGreaterThanOrEqual(2); // At least reference + 1 insight
+
+		// Verify reference entry
+		const referenceCall = recordCalls.find((c) => c.options.type === "reference");
+		expect(referenceCall).toBeDefined();
+		expect(referenceCall?.domain).toBe("messaging");
+
+		// Verify pattern insights
+		const patternCalls = recordCalls.filter((c) => c.options.type === "pattern");
+		expect(patternCalls.length).toBeGreaterThanOrEqual(2);
+
+		// Verify workflow insight
+		const workflowInsight = patternCalls.find((c) => {
+			const desc = c.options.description;
+			return typeof desc === "string" && desc.includes("read-heavy workflow");
+		});
+		expect(workflowInsight).toBeDefined();
+
+		// Verify hot file insight
+		const hotFileInsight = patternCalls.find((c) => {
+			const desc = c.options.description;
+			return (
+				typeof desc === "string" && desc.includes("src/mail/store.ts") && desc.includes("4 edits")
+			);
+		});
+		expect(hotFileInsight).toBeDefined();
+		expect(hotFileInsight?.domain).toBe("messaging"); // Inferred from src/mail/
+
+		// Verify failure insight
+		const failureCall = recordCalls.find((c) => c.options.type === "failure");
+		expect(failureCall).toBeDefined();
+
+		// Verify recorded domains includes unique domains from insights
+		expect(result).toContain("messaging");
+	});
+
+	test("autoRecordExpertise includes insight summary in notification mail", async () => {
+		const learnResult: MulchLearnResult = {
+			success: true,
+			command: "mulch learn",
+			changedFiles: ["src/config.ts"],
+			suggestedDomains: ["typescript"],
+			unmatchedFiles: [],
+		};
+		const { client } = createFakeMulchClient(learnResult);
+		const mailDbPath = join(tempDir, ".overstory", "insight-mail-summary.db");
+
+		// Create EventStore with 10+ tool calls to trigger workflow insight
+		const eventsDbPath = join(tempDir, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+		const sessionStartedAt = new Date(Date.now() - 60_000).toISOString();
+
+		for (let i = 0; i < 10; i++) {
+			eventStore.insert({
+				runId: null,
+				agentName: "mail-insight-agent",
+				sessionId: "sess-mail",
+				eventType: "tool_start",
+				toolName: "Read",
+				toolArgs: JSON.stringify({ file_path: `/src/file${i}.ts` }),
+				toolDurationMs: null,
+				level: "info",
+				data: JSON.stringify({ summary: `read: /src/file${i}.ts` }),
+			});
+		}
+
+		eventStore.close();
+
+		await autoRecordExpertise({
+			mulchClient: client,
+			agentName: "mail-insight-agent",
+			capability: "scout",
+			beadId: "bead-mail",
+			mailDbPath,
+			parentAgent: "parent-agent",
+			projectRoot: tempDir,
+			sessionStartedAt,
+		});
+
+		// Verify mail was sent with insight summary
+		const mailStore = createMailStore(mailDbPath);
+		const mailClient = createMailClient(mailStore);
+		const messages = mailClient.list({ to: "parent-agent" });
+		mailClient.close();
+
+		expect(messages).toHaveLength(1);
+		const mail = messages[0];
+		expect(mail?.body).toContain("Auto-insights:");
+		expect(mail?.body).toContain("10 tool calls");
+		expect(mail?.body).toContain("pattern"); // At least 1 pattern insight
 	});
 });
 

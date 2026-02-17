@@ -16,6 +16,7 @@ import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { filterToolArgs } from "../events/tool-filter.ts";
+import { analyzeSessionInsights } from "../insights/analyzer.ts";
 import { createLogger } from "../logging/logger.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
@@ -223,6 +224,8 @@ export async function autoRecordExpertise(params: {
 	beadId: string | null;
 	mailDbPath: string;
 	parentAgent: string | null;
+	projectRoot: string;
+	sessionStartedAt: string;
 }): Promise<string[]> {
 	const learnResult = await params.mulchClient.learn({ since: "HEAD~1" });
 	if (learnResult.suggestedDomains.length === 0) {
@@ -246,6 +249,63 @@ export async function autoRecordExpertise(params: {
 		}
 	}
 
+	// Analyze session events for deeper insights (tool usage, file edits, errors)
+	let insightSummary = "";
+	try {
+		const eventsDbPath = join(params.projectRoot, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+
+		const events = eventStore.getByAgent(params.agentName, {
+			since: params.sessionStartedAt,
+		});
+		const toolStats = eventStore.getToolStats({
+			agentName: params.agentName,
+			since: params.sessionStartedAt,
+		});
+
+		eventStore.close();
+
+		const analysis = analyzeSessionInsights({
+			events,
+			toolStats,
+			agentName: params.agentName,
+			capability: params.capability,
+			domains: learnResult.suggestedDomains,
+		});
+
+		// Record each insight to mulch
+		for (const insight of analysis.insights) {
+			try {
+				await params.mulchClient.record(insight.domain, {
+					type: insight.type,
+					description: insight.description,
+					tags: insight.tags,
+					evidenceBead: params.beadId ?? undefined,
+				});
+				if (!recordedDomains.includes(insight.domain)) {
+					recordedDomains.push(insight.domain);
+				}
+			} catch {
+				// Non-fatal per insight: skip failed records
+			}
+		}
+
+		// Build insight summary for mail
+		if (analysis.insights.length > 0) {
+			const insightTypes = new Map<string, number>();
+			for (const insight of analysis.insights) {
+				const count = insightTypes.get(insight.type) ?? 0;
+				insightTypes.set(insight.type, count + 1);
+			}
+			const typeCounts = Array.from(insightTypes.entries())
+				.map(([type, count]) => `${count} ${type}`)
+				.join(", ");
+			insightSummary = `\n\nAuto-insights: ${typeCounts} (${analysis.toolProfile.totalToolCalls} tool calls, ${analysis.fileProfile.totalEdits} edits)`;
+		}
+	} catch {
+		// Non-fatal: insight analysis should not break session-end handling
+	}
+
 	if (recordedDomains.length > 0) {
 		const mailStore = createMailStore(params.mailDbPath);
 		const mailClient = createMailClient(mailStore);
@@ -255,7 +315,7 @@ export async function autoRecordExpertise(params: {
 			from: params.agentName,
 			to: recipient,
 			subject: `mulch: auto-recorded insights in ${domainsList}`,
-			body: `Session completed. Auto-recorded expertise in: ${domainsList}.\n\nChanged files: ${filesList}`,
+			body: `Session completed. Auto-recorded expertise in: ${domainsList}.\n\nChanged files: ${filesList}${insightSummary}`,
 			type: "status",
 			priority: "low",
 		});
@@ -568,6 +628,8 @@ export async function logCommand(args: string[]): Promise<void> {
 								beadId,
 								mailDbPath,
 								parentAgent: agentSession.parentAgent,
+								projectRoot: config.project.root,
+								sessionStartedAt: agentSession.startedAt,
 							});
 						} catch {
 							// Non-fatal: mulch learn/record should not break session-end handling

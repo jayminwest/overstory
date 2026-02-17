@@ -616,3 +616,38 @@ export interface AgentLayers {
 		checkpoint: SessionCheckpoint | null;
 	} | null; // null when sandbox exists but no active session
 }
+
+// === Session Insight Analysis ===
+
+/** A single structured insight extracted from a completed session. */
+export interface SessionInsight {
+	/** Mulch record type for this insight. */
+	type: "pattern" | "convention" | "failure";
+	/** Mulch domain this insight belongs to. */
+	domain: string;
+	/** Human-readable description of the insight. */
+	description: string;
+	/** Tags for mulch record categorization. */
+	tags: string[];
+}
+
+/** Aggregated tool usage profile for a session. */
+export interface ToolProfile {
+	topTools: Array<{ name: string; count: number; avgMs: number }>;
+	totalToolCalls: number;
+	errorCount: number;
+}
+
+/** File edit frequency profile for a session. */
+export interface FileProfile {
+	/** Files edited more than once, sorted by edit count descending. */
+	hotFiles: Array<{ path: string; editCount: number }>;
+	totalEdits: number;
+}
+
+/** Complete insight analysis result for a completed session. */
+export interface InsightAnalysis {
+	insights: SessionInsight[];
+	toolProfile: ToolProfile;
+	fileProfile: FileProfile;
+}
