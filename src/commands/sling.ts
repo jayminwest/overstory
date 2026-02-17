@@ -114,6 +114,17 @@ export function buildBeacon(opts: BeaconOptions): string {
 }
 
 /**
+ * Check if a parent agent has spawned any scouts.
+ * Returns true if the parent has at least one scout child in the session history.
+ */
+export function parentHasScouts(
+	sessions: ReadonlyArray<{ parentAgent: string | null; capability: string }>,
+	parentAgent: string,
+): boolean {
+	return sessions.some((s) => s.parentAgent === parentAgent && s.capability === "scout");
+}
+
+/**
  * Validate hierarchy constraints: the coordinator (no parent) may only spawn leads.
  *
  * When parentAgent is null, the caller is the coordinator or a human.
@@ -310,6 +321,18 @@ export async function slingCommand(args: string[]): Promise<void> {
 		const staggerMs = calculateStaggerDelay(config.agents.staggerDelayMs, activeSessions);
 		if (staggerMs > 0) {
 			await Bun.sleep(staggerMs);
+		}
+
+		// 5c. Structural enforcement: warn when a lead spawns a builder without prior scouts.
+		// This is a non-blocking warning — it does not prevent the spawn, but surfaces
+		// the scout-skip pattern so agents and operators can see it happening.
+		if (capability === "builder" && parentAgent && !parentHasScouts(store.getAll(), parentAgent)) {
+			process.stderr.write(
+				`⚠️  Warning: "${parentAgent}" is spawning builder "${name}" without having spawned any scouts.\n`,
+			);
+			process.stderr.write(
+				"   Leads should spawn scouts in Phase 1 before building. See agents/lead.md.\n",
+			);
 		}
 
 		// 6. Validate bead exists and is in a workable state (if beads enabled)
