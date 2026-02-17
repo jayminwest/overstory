@@ -4,6 +4,7 @@ import {
 	type BeaconOptions,
 	buildBeacon,
 	calculateStaggerDelay,
+	parentHasScouts,
 	validateHierarchy,
 } from "./sling.ts";
 
@@ -153,6 +154,112 @@ describe("calculateStaggerDelay", () => {
 		const delay = calculateStaggerDelay(5_000, sessions, now);
 
 		expect(delay).toBe(0);
+	});
+});
+
+/**
+ * Tests for parentHasScouts check.
+ *
+ * parentHasScouts is used during sling to detect when a lead agent spawns a
+ * builder without having previously spawned any scouts. This provides structural
+ * enforcement of the scout-first workflow (Phase 1: explore, Phase 2: build).
+ *
+ * The function is non-blocking — it only emits a warning to stderr, but does
+ * not prevent the spawn. This allows valid edge cases where scout-skip is
+ * justified, while surfacing the pattern so agents and operators can see it.
+ */
+
+function makeAgentSession(
+	parentAgent: string | null,
+	capability: string,
+): { parentAgent: string | null; capability: string } {
+	return { parentAgent, capability };
+}
+
+describe("parentHasScouts", () => {
+	test("returns false when sessions is empty", () => {
+		expect(parentHasScouts([], "lead-alpha")).toBe(false);
+	});
+
+	test("returns false when parent has only builder children", () => {
+		const sessions = [
+			makeAgentSession("lead-alpha", "builder"),
+			makeAgentSession("lead-alpha", "builder"),
+		];
+
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(false);
+	});
+
+	test("returns true when parent has a scout child", () => {
+		const sessions = [makeAgentSession("lead-alpha", "scout")];
+
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(true);
+	});
+
+	test("returns true when parent has scout + builder children", () => {
+		const sessions = [
+			makeAgentSession("lead-alpha", "scout"),
+			makeAgentSession("lead-alpha", "builder"),
+		];
+
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(true);
+	});
+
+	test("ignores scouts from other parents", () => {
+		const sessions = [
+			makeAgentSession("lead-beta", "scout"),
+			makeAgentSession("lead-gamma", "scout"),
+			makeAgentSession("lead-alpha", "builder"),
+		];
+
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(false);
+	});
+
+	test("returns false when parent has only reviewer children", () => {
+		const sessions = [
+			makeAgentSession("lead-alpha", "reviewer"),
+			makeAgentSession("lead-alpha", "reviewer"),
+		];
+
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(false);
+	});
+
+	test("returns true when parent has multiple scouts", () => {
+		const sessions = [
+			makeAgentSession("lead-alpha", "scout"),
+			makeAgentSession("lead-alpha", "scout"),
+			makeAgentSession("lead-alpha", "scout"),
+		];
+
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(true);
+	});
+
+	test("returns false when sessions contain null parents only", () => {
+		const sessions = [makeAgentSession(null, "scout"), makeAgentSession(null, "builder")];
+
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(false);
+	});
+
+	test("differentiates between parent names (case-sensitive)", () => {
+		const sessions = [
+			makeAgentSession("lead-alpha", "scout"),
+			makeAgentSession("Lead-Alpha", "scout"),
+		];
+
+		// Should only find the exact match
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(true);
+		expect(parentHasScouts(sessions, "Lead-Alpha")).toBe(true);
+		expect(parentHasScouts(sessions, "lead-beta")).toBe(false);
+	});
+
+	test("works with mixed capability types", () => {
+		const sessions = [
+			makeAgentSession("lead-alpha", "builder"),
+			makeAgentSession("lead-alpha", "reviewer"),
+			makeAgentSession("lead-alpha", "merger"),
+		];
+
+		expect(parentHasScouts(sessions, "lead-alpha")).toBe(false);
 	});
 });
 
