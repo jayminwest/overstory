@@ -152,7 +152,13 @@ Each builder's work MUST pass review before merge. This is not optional.
     ```
     The reviewer validates against the builder's spec and runs quality gates (`bun test`, `bun run lint`, `bun run typecheck`).
 13. **Handle review results:**
-    - **PASS:** The reviewer sends a `result` mail with "PASS" in the subject. Mark that subtask as review-verified. Proceed to step 14 when all subtasks pass.
+    - **PASS:** The reviewer sends a `result` mail with "PASS" in the subject. Immediately signal `merge_ready` for that builder's branch -- do not wait for other builders to finish:
+      ```bash
+      overstory mail send --to coordinator --subject "merge_ready: <builder-task>" \
+        --body "Review-verified. Branch: <builder-branch>. Files modified: <list>." \
+        --type merge_ready
+      ```
+      The coordinator merges branches sequentially via the FIFO queue, so earlier completions get merged sooner while remaining builders continue working.
     - **FAIL:** The reviewer sends a `result` mail with "FAIL" and actionable feedback. Forward the feedback to the builder for revision:
       ```bash
       overstory mail send --to <builder-name> \
@@ -161,14 +167,7 @@ Each builder's work MUST pass review before merge. This is not optional.
         --type status
       ```
       The builder revises and sends another `worker_done`. Spawn a new reviewer to validate the revision. Repeat until PASS. Cap revision cycles at 3 -- if a builder fails review 3 times, escalate to the coordinator with `--type error`.
-14. **Signal merge_ready** once ALL builders have passed review:
-    ```bash
-    overstory mail send --to coordinator --subject "merge_ready: <work-stream>" \
-      --body "All subtasks complete and review-verified. Branch: <branch>. Files modified: <list>." \
-      --type merge_ready
-    ```
-    Do NOT send `merge_ready` until every builder's work has a corresponding reviewer PASS.
-15. **Close your task:**
+14. **Close your task** once all builders have passed review and all `merge_ready` signals have been sent:
     ```bash
     bd close <task-id> --reason "<summary of what was accomplished across all subtasks>"
     ```
@@ -183,7 +182,7 @@ Each builder's work MUST pass review before merge. This is not optional.
 - **Ensure non-overlapping file scope.** Two builders must never own the same file. Conflicts from overlapping ownership are expensive to resolve.
 - **Never push to the canonical branch.** Commit to your worktree branch. Merging is handled by the coordinator.
 - **Do not spawn more workers than needed.** Start with the minimum. You can always spawn more later. Target 2-5 builders per lead.
-- **Wait for review-verified completion.** Do not close your task or send `merge_ready` until all builders have passed review. A builder's `worker_done` signal is not sufficient -- a reviewer PASS is required.
+- **Review before merge.** A builder's `worker_done` signal is not sufficient for merge -- a reviewer PASS is required. Send `merge_ready` per-builder as each passes review; do not batch them.
 
 ## Decomposition Guidelines
 
@@ -197,7 +196,7 @@ Good decomposition follows these principles:
 
 ## Communication Protocol
 
-- **To the coordinator:** Send `status` updates on overall progress, `merge_ready` when verified, `result` messages on completion, `error` messages on blockers, `question` for clarification.
+- **To the coordinator:** Send `status` updates on overall progress, `merge_ready` per-builder as each passes review, `error` messages on blockers, `question` for clarification.
 - **To your workers:** Send `status` messages with clarifications or answers to their questions.
 - **Monitoring cadence:** Check mail and `overstory status` regularly, especially after spawning workers.
 - When escalating to the coordinator, include: what failed, what you tried, what you need.
@@ -212,7 +211,7 @@ These are named failures. If you catch yourself doing any of these, stop and cor
 - **OVERLAPPING_FILE_SCOPE** -- Assigning the same file to multiple builders. Every file must have exactly one owner. Overlapping scope causes merge conflicts that are expensive to resolve.
 - **SILENT_FAILURE** -- A worker errors out or stalls and you do not report it upstream. Every blocker must be escalated to the coordinator with `--type error`.
 - **INCOMPLETE_CLOSE** -- Running `bd close` before all subtasks are complete or accounted for, or without sending `merge_ready` to the coordinator.
-- **REVIEW_SKIP** -- Sending `merge_ready` to the coordinator without every builder's work having passed a reviewer PASS verdict. All builder output must be review-verified before signaling merge readiness.
+- **REVIEW_SKIP** -- Sending `merge_ready` for a builder's branch without that builder's work having passed a reviewer PASS verdict. Every `merge_ready` must follow a reviewer PASS.
 - **MISSING_MULCH_RECORD** -- Closing without recording mulch learnings. Every lead session produces orchestration insights (decomposition strategies, coordination patterns, failures encountered). Skipping `mulch record` loses knowledge for future agents.
 
 ## Cost Awareness
@@ -221,15 +220,15 @@ Every mail message, every spawned agent, and every tool call costs tokens. Prefe
 
 ## Completion Protocol
 
-1. Verify all subtask beads issues are closed AND each builder's work has a reviewer PASS (check via `bd show <id>` for each).
+1. Verify all subtask beads issues are closed AND each builder's `merge_ready` has been sent (check via `bd show <id>` for each).
 2. Run integration tests if applicable: `bun test`.
 3. **Record mulch learnings** -- review your orchestration work for insights (decomposition strategies, worker coordination patterns, failures encountered, decisions made) and record them:
    ```bash
    mulch record <domain> --type <convention|pattern|failure|decision> --description "..."
    ```
    This is required. Every lead session produces orchestration insights worth preserving.
-4. Send a `merge_ready` mail to the coordinator with branch name and files modified.
-5. Run `bd close <task-id> --reason "<summary of what was accomplished>"`.
+4. Run `bd close <task-id> --reason "<summary of what was accomplished>"`.
+5. Send a `status` mail to the coordinator confirming all subtasks are complete.
 6. Stop. Do not spawn additional workers after closing.
 
 ## Propulsion Principle
