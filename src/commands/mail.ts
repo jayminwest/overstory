@@ -469,6 +469,38 @@ async function handleSend(args: string[], cwd: string): Promise<void> {
 				);
 			}
 		}
+
+		// Reviewer coverage check for merge_ready (advisory warning)
+		if (type === "merge_ready") {
+			try {
+				const overstoryDir = join(cwd, ".overstory");
+				const { store: sessionStore } = openSessionStore(overstoryDir);
+				try {
+					const allSessions = sessionStore.getAll();
+					const myBuilders = allSessions.filter(
+						(s) => s.parentAgent === from && s.capability === "builder",
+					);
+					const myReviewers = allSessions.filter(
+						(s) => s.parentAgent === from && s.capability === "reviewer",
+					);
+					if (myBuilders.length > 0 && myReviewers.length === 0) {
+						process.stderr.write(
+							`\n⚠️  WARNING: merge_ready sent but NO reviewer sessions found for "${from}".\n` +
+								`⚠️  ${myBuilders.length} builder(s) completed without review. This violates the review-before-merge requirement.\n` +
+								`⚠️  Spawn reviewers for each builder before merge. See REVIEW_SKIP in agents/lead.md.\n\n`,
+						);
+					} else if (myReviewers.length > 0 && myReviewers.length < myBuilders.length) {
+						process.stderr.write(
+							`\n⚠️  NOTE: Only ${myReviewers.length} reviewer(s) for ${myBuilders.length} builder(s). Ensure all builder work is review-verified.\n\n`,
+						);
+					}
+				} finally {
+					sessionStore.close();
+				}
+			} catch {
+				// Reviewer check failure is non-fatal — do not block mail send
+			}
+		}
 	} finally {
 		client.close();
 	}

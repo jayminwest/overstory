@@ -19,7 +19,9 @@ describe("mailCommand", () => {
 	let tempDir: string;
 	let origCwd: string;
 	let origWrite: typeof process.stdout.write;
+	let origStderrWrite: typeof process.stderr.write;
 	let output: string;
+	let stderrOutput: string;
 
 	beforeEach(async () => {
 		tempDir = await mkdtemp(join(tmpdir(), "overstory-mail-cmd-test-"));
@@ -53,10 +55,19 @@ describe("mailCommand", () => {
 			output += chunk;
 			return true;
 		}) as typeof process.stdout.write;
+
+		// Capture stderr
+		stderrOutput = "";
+		origStderrWrite = process.stderr.write;
+		process.stderr.write = ((chunk: string) => {
+			stderrOutput += chunk;
+			return true;
+		}) as typeof process.stderr.write;
 	});
 
 	afterEach(async () => {
 		process.stdout.write = origWrite;
+		process.stderr.write = origStderrWrite;
 		process.chdir(origCwd);
 		await rm(tempDir, { recursive: true, force: true });
 	});
@@ -1093,6 +1104,167 @@ describe("mailCommand", () => {
 				reason: string;
 			};
 			expect(nudge1.reason).toBe("error");
+		});
+	});
+
+	describe("merge_ready reviewer validation", () => {
+		// Helper to set up sessions in sessions.db
+		async function seedSessions(
+			sessions: Array<{
+				agentName: string;
+				capability: string;
+				parentAgent: string | null;
+			}>,
+		): Promise<void> {
+			const { createSessionStore } = await import("../sessions/store.ts");
+			const sessionsDbPath = join(tempDir, ".overstory", "sessions.db");
+			const sessionStore = createSessionStore(sessionsDbPath);
+
+			for (const [idx, session] of sessions.entries()) {
+				sessionStore.upsert({
+					id: `session-${idx}`,
+					agentName: session.agentName,
+					capability: session.capability as
+						| "builder"
+						| "reviewer"
+						| "scout"
+						| "coordinator"
+						| "lead"
+						| "merger"
+						| "supervisor"
+						| "monitor",
+					worktreePath: `/worktrees/${session.agentName}`,
+					branchName: session.agentName,
+					beadId: `bead-${idx}`,
+					tmuxSession: `overstory-test-${session.agentName}`,
+					state: "working" as const,
+					pid: 10000 + idx,
+					parentAgent: session.parentAgent,
+					depth: 1,
+					runId: "run-001",
+					startedAt: new Date().toISOString(),
+					lastActivity: new Date().toISOString(),
+					escalationLevel: 0,
+					stalledSince: null,
+				});
+			}
+
+			sessionStore.close();
+		}
+
+		test("merge_ready with no reviewers emits warning", async () => {
+			await seedSessions([
+				{ agentName: "builder-1", capability: "builder", parentAgent: "lead-1" },
+				{ agentName: "builder-2", capability: "builder", parentAgent: "lead-1" },
+			]);
+
+			output = "";
+			stderrOutput = "";
+			await mailCommand([
+				"send",
+				"--to",
+				"coordinator",
+				"--subject",
+				"Ready to merge",
+				"--body",
+				"All builders complete",
+				"--type",
+				"merge_ready",
+				"--from",
+				"lead-1",
+			]);
+
+			// Verify warning on stderr
+			expect(stderrOutput).toContain("WARNING");
+			expect(stderrOutput).toContain("NO reviewer sessions found");
+			expect(stderrOutput).toContain("lead-1");
+			expect(stderrOutput).toContain("2 builder(s)");
+			expect(stderrOutput).toContain("review-before-merge requirement");
+			expect(stderrOutput).toContain("REVIEW_SKIP");
+		});
+
+		test("merge_ready with partial reviewers emits note", async () => {
+			await seedSessions([
+				{ agentName: "builder-1", capability: "builder", parentAgent: "lead-1" },
+				{ agentName: "builder-2", capability: "builder", parentAgent: "lead-1" },
+				{ agentName: "builder-3", capability: "builder", parentAgent: "lead-1" },
+				{ agentName: "reviewer-1", capability: "reviewer", parentAgent: "lead-1" },
+			]);
+
+			output = "";
+			stderrOutput = "";
+			await mailCommand([
+				"send",
+				"--to",
+				"coordinator",
+				"--subject",
+				"Ready to merge",
+				"--body",
+				"Partial review complete",
+				"--type",
+				"merge_ready",
+				"--from",
+				"lead-1",
+			]);
+
+			// Verify note on stderr
+			expect(stderrOutput).toContain("NOTE");
+			expect(stderrOutput).toContain("Only 1 reviewer(s) for 3 builder(s)");
+			expect(stderrOutput).toContain("review-verified");
+		});
+
+		test("merge_ready with full coverage emits no warning", async () => {
+			await seedSessions([
+				{ agentName: "builder-1", capability: "builder", parentAgent: "lead-1" },
+				{ agentName: "builder-2", capability: "builder", parentAgent: "lead-1" },
+				{ agentName: "reviewer-1", capability: "reviewer", parentAgent: "lead-1" },
+				{ agentName: "reviewer-2", capability: "reviewer", parentAgent: "lead-1" },
+			]);
+
+			output = "";
+			stderrOutput = "";
+			await mailCommand([
+				"send",
+				"--to",
+				"coordinator",
+				"--subject",
+				"Ready to merge",
+				"--body",
+				"Full review complete",
+				"--type",
+				"merge_ready",
+				"--from",
+				"lead-1",
+			]);
+
+			// No warning should be emitted
+			expect(stderrOutput).toBe("");
+		});
+
+		test("non-merge_ready types skip reviewer check", async () => {
+			await seedSessions([
+				{ agentName: "builder-1", capability: "builder", parentAgent: "lead-1" },
+				{ agentName: "builder-2", capability: "builder", parentAgent: "lead-1" },
+			]);
+
+			output = "";
+			stderrOutput = "";
+			await mailCommand([
+				"send",
+				"--to",
+				"coordinator",
+				"--subject",
+				"Status update",
+				"--body",
+				"Work in progress",
+				"--type",
+				"status",
+				"--from",
+				"lead-1",
+			]);
+
+			// No warning should be emitted for non-merge_ready types
+			expect(stderrOutput).toBe("");
 		});
 	});
 });
