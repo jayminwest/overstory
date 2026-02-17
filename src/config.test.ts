@@ -259,6 +259,35 @@ watchdog:
 `);
 		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
 	});
+
+	test("accepts empty models section", async () => {
+		await writeConfig(`
+models:
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.models).toBeDefined();
+	});
+
+	test("accepts valid model names in models section", async () => {
+		await writeConfig(`
+models:
+  coordinator: sonnet
+  monitor: haiku
+  builder: opus
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.models.coordinator).toBe("sonnet");
+		expect(config.models.monitor).toBe("haiku");
+		expect(config.models.builder).toBe("opus");
+	});
+
+	test("rejects invalid model name in models section", async () => {
+		await writeConfig(`
+models:
+  coordinator: gpt4
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
 });
 
 describe("resolveProjectRoot", () => {
@@ -375,6 +404,7 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_CONFIG.mulch).toBeDefined();
 		expect(DEFAULT_CONFIG.merge).toBeDefined();
 		expect(DEFAULT_CONFIG.watchdog).toBeDefined();
+		expect(DEFAULT_CONFIG.models).toBeDefined();
 		expect(DEFAULT_CONFIG.logging).toBeDefined();
 	});
 

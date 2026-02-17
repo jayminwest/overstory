@@ -36,6 +36,7 @@ describe("checkMergeQueue", () => {
 				zombieThresholdMs: 600000,
 				nudgeIntervalMs: 60000,
 			},
+			models: {},
 			logging: { verbose: false, redactSecrets: true },
 		};
 	});

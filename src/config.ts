@@ -43,6 +43,7 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		zombieThresholdMs: 600_000, // 10 minutes
 		nudgeIntervalMs: 60_000, // 1 minute between progressive nudge stages
 	},
+	models: {},
 	logging: {
 		verbose: false,
 		redactSecrets: true,
@@ -413,6 +414,17 @@ function validateConfig(config: OverstoryConfig): void {
 			field: "mulch.primeFormat",
 			value: config.mulch.primeFormat,
 		});
+	}
+
+	// models: each value must be a valid model name
+	const validModels = ["sonnet", "opus", "haiku"];
+	for (const [role, model] of Object.entries(config.models)) {
+		if (model !== undefined && !validModels.includes(model)) {
+			throw new ValidationError(`models.${role} must be one of: ${validModels.join(", ")}`, {
+				field: `models.${role}`,
+				value: model,
+			});
+		}
 	}
 }
 

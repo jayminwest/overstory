@@ -217,6 +217,29 @@ beforeEach(async () => {
 		),
 	);
 
+	// Write agent-manifest.json and stub agent-def .md files so manifest loading succeeds
+	const agentDefsDir = join(overstoryDir, "agent-defs");
+	await mkdir(agentDefsDir, { recursive: true });
+	const manifest = {
+		version: "1.0",
+		agents: {
+			coordinator: {
+				file: "coordinator.md",
+				model: "opus",
+				tools: ["Read", "Bash"],
+				capabilities: ["coordinate"],
+				canSpawn: true,
+				constraints: [],
+			},
+		},
+		capabilityIndex: { coordinate: ["coordinator"] },
+	};
+	await Bun.write(
+		join(overstoryDir, "agent-manifest.json"),
+		`${JSON.stringify(manifest, null, "\t")}\n`,
+	);
+	await Bun.write(join(agentDefsDir, "coordinator.md"), "# Coordinator\n");
+
 	// Override cwd so coordinator commands find our temp project
 	process.chdir(tempDir);
 });
@@ -485,7 +508,27 @@ describe("startCoordinator", () => {
 		expect(cmd).toContain("# Coordinator Agent");
 	});
 
-	test("does not add --append-system-prompt when agent-defs/coordinator.md is absent", async () => {
+	test("reads model from manifest instead of hardcoding", async () => {
+		// Override the manifest to use sonnet instead of default opus
+		const manifest = {
+			version: "1.0",
+			agents: {
+				coordinator: {
+					file: "coordinator.md",
+					model: "sonnet",
+					tools: ["Read", "Bash"],
+					capabilities: ["coordinate"],
+					canSpawn: true,
+					constraints: [],
+				},
+			},
+			capabilityIndex: { coordinate: ["coordinator"] },
+		};
+		await Bun.write(
+			join(overstoryDir, "agent-manifest.json"),
+			`${JSON.stringify(manifest, null, "\t")}\n`,
+		);
+
 		const { deps, calls } = makeDeps();
 		const originalSleep = Bun.sleep;
 		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
@@ -498,7 +541,8 @@ describe("startCoordinator", () => {
 
 		expect(calls.createSession).toHaveLength(1);
 		const cmd = calls.createSession[0]?.command ?? "";
-		expect(cmd).not.toContain("--append-system-prompt");
+		expect(cmd).toContain("--model sonnet");
+		expect(cmd).not.toContain("--model opus");
 	});
 
 	test("--json outputs JSON with expected fields", async () => {

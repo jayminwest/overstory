@@ -16,6 +16,7 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
+import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { openSessionStore } from "../sessions/compat.ts";
@@ -316,13 +317,21 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			});
 		}
 
+		// Resolve model from config > manifest > fallback
+		const manifestLoader = createManifestLoader(
+			join(projectRoot, config.agents.manifestPath),
+			join(projectRoot, config.agents.baseDir),
+		);
+		const manifest = await manifestLoader.load();
+		const model = resolveModel(config, manifest, "coordinator", "opus");
+
 		// Spawn tmux session at project root with Claude Code (interactive mode).
 		// Inject the coordinator base definition via --append-system-prompt so the
 		// coordinator knows its role, hierarchy rules, and delegation patterns
 		// (overstory-gaio, overstory-0kwf).
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "coordinator.md");
 		const agentDefFile = Bun.file(agentDefPath);
-		let claudeCmd = "claude --model opus --dangerously-skip-permissions";
+		let claudeCmd = `claude --model ${model} --dangerously-skip-permissions`;
 		if (await agentDefFile.exists()) {
 			const agentDef = await agentDefFile.text();
 			// Single-quote the content for safe shell expansion (only escape single quotes)

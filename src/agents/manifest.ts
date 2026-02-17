@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
-import type { AgentDefinition, AgentManifest } from "../types.ts";
+import type { AgentDefinition, AgentManifest, OverstoryConfig } from "../types.ts";
 
 /**
  * Interface for loading, querying, and validating an agent manifest.
@@ -271,4 +271,24 @@ export function createManifestLoader(manifestPath: string, agentBaseDir: string)
 			return errors;
 		},
 	};
+}
+
+type ModelName = "sonnet" | "opus" | "haiku";
+
+/**
+ * Resolve the model for an agent role.
+ *
+ * Resolution order: config.models override > manifest default > fallback.
+ */
+export function resolveModel(
+	config: OverstoryConfig,
+	manifest: AgentManifest,
+	role: string,
+	fallback: ModelName,
+): ModelName {
+	const configModel = config.models[role];
+	if (configModel) return configModel;
+	const manifestModel = manifest.agents[role]?.model;
+	if (manifestModel) return manifestModel;
+	return fallback;
 }

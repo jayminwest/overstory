@@ -113,6 +113,44 @@
 				"read-only",
 				"no-worktree"
 			]
+		},
+		"supervisor": {
+			"file": "supervisor.md",
+			"model": "opus",
+			"tools": [
+				"Read",
+				"Write",
+				"Edit",
+				"Glob",
+				"Grep",
+				"Bash",
+				"Task"
+			],
+			"capabilities": [
+				"coordinate",
+				"supervise"
+			],
+			"canSpawn": true,
+			"constraints": []
+		},
+		"monitor": {
+			"file": "monitor.md",
+			"model": "sonnet",
+			"tools": [
+				"Read",
+				"Glob",
+				"Grep",
+				"Bash"
+			],
+			"capabilities": [
+				"monitor",
+				"patrol"
+			],
+			"canSpawn": false,
+			"constraints": [
+				"read-only",
+				"no-worktree"
+			]
 		}
 	},
 	"capabilityIndex": {
@@ -141,7 +179,8 @@
 		],
 		"coordinate": [
 			"lead",
-			"coordinator"
+			"coordinator",
+			"supervisor"
 		],
 		"merge": [
 			"merger"
@@ -154,6 +193,15 @@
 		],
 		"escalate": [
 			"coordinator"
+		],
+		"supervise": [
+			"supervisor"
+		],
+		"monitor": [
+			"monitor"
+		],
+		"patrol": [
+			"monitor"
 		]
 	}
 }

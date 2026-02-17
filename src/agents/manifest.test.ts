@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
-import { createManifestLoader } from "./manifest.ts";
+import type { AgentManifest, OverstoryConfig } from "../types.ts";
+import { createManifestLoader, resolveModel } from "./manifest.ts";
 
 const VALID_MANIFEST = {
 	version: "1.0",
@@ -481,5 +482,78 @@ describe("createManifestLoader", () => {
 				expect(manifest.agents.agent?.model).toBe(model);
 			});
 		}
+	});
+});
+
+describe("resolveModel", () => {
+	const baseManifest: AgentManifest = {
+		version: "1.0",
+		agents: {
+			coordinator: {
+				file: "coordinator.md",
+				model: "opus",
+				tools: ["Read", "Bash"],
+				capabilities: ["coordinate"],
+				canSpawn: true,
+				constraints: [],
+			},
+			monitor: {
+				file: "monitor.md",
+				model: "sonnet",
+				tools: ["Read", "Bash"],
+				capabilities: ["monitor"],
+				canSpawn: false,
+				constraints: [],
+			},
+		},
+		capabilityIndex: { coordinate: ["coordinator"], monitor: ["monitor"] },
+	};
+
+	function makeConfig(models: OverstoryConfig["models"] = {}): OverstoryConfig {
+		return {
+			project: { name: "test", root: "/tmp/test", canonicalBranch: "main" },
+			agents: {
+				manifestPath: ".overstory/agent-manifest.json",
+				baseDir: ".overstory/agent-defs",
+				maxConcurrent: 5,
+				staggerDelayMs: 1000,
+				maxDepth: 2,
+			},
+			worktrees: { baseDir: ".overstory/worktrees" },
+			beads: { enabled: false },
+			mulch: { enabled: false, domains: [], primeFormat: "markdown" },
+			merge: { aiResolveEnabled: false, reimagineEnabled: false },
+			watchdog: {
+				tier0Enabled: false,
+				tier0IntervalMs: 30000,
+				tier1Enabled: false,
+				tier2Enabled: false,
+				staleThresholdMs: 300000,
+				zombieThresholdMs: 600000,
+				nudgeIntervalMs: 60000,
+			},
+			models,
+			logging: { verbose: false, redactSecrets: true },
+		};
+	}
+
+	test("returns manifest model when no config override", () => {
+		const config = makeConfig();
+		expect(resolveModel(config, baseManifest, "coordinator", "haiku")).toBe("opus");
+	});
+
+	test("config override takes precedence over manifest", () => {
+		const config = makeConfig({ coordinator: "sonnet" });
+		expect(resolveModel(config, baseManifest, "coordinator", "haiku")).toBe("sonnet");
+	});
+
+	test("falls back to default when role is not in manifest or config", () => {
+		const config = makeConfig();
+		expect(resolveModel(config, baseManifest, "unknown-role", "haiku")).toBe("haiku");
+	});
+
+	test("config override works for roles not in manifest", () => {
+		const config = makeConfig({ supervisor: "opus" });
+		expect(resolveModel(config, baseManifest, "supervisor", "sonnet")).toBe("opus");
 	});
 });

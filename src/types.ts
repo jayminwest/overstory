@@ -37,6 +37,7 @@ export interface OverstoryConfig {
 		zombieThresholdMs: number; // When to kill
 		nudgeIntervalMs: number; // Time between progressive nudge stages (default 60_000)
 	};
+	models: Partial<Record<string, "sonnet" | "opus" | "haiku">>;
 	logging: {
 		verbose: boolean;
 		redactSecrets: boolean;
@@ -69,6 +70,7 @@ export const SUPPORTED_CAPABILITIES = [
 	"merger",
 	"coordinator",
 	"supervisor",
+	"monitor",
 ] as const;
 
 /** Union type derived from the capabilities constant. */

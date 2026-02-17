@@ -17,6 +17,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
+import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { openSessionStore } from "../sessions/compat.ts";
@@ -119,11 +120,19 @@ async function startMonitor(args: string[]): Promise<void> {
 			});
 		}
 
+		// Resolve model from config > manifest > fallback
+		const manifestLoader = createManifestLoader(
+			join(projectRoot, config.agents.manifestPath),
+			join(projectRoot, config.agents.baseDir),
+		);
+		const manifest = await manifestLoader.load();
+		const model = resolveModel(config, manifest, "monitor", "sonnet");
+
 		// Spawn tmux session at project root with Claude Code (interactive mode).
 		// Inject the monitor base definition via --append-system-prompt.
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "monitor.md");
 		const agentDefFile = Bun.file(agentDefPath);
-		let claudeCmd = "claude --model sonnet --dangerously-skip-permissions";
+		let claudeCmd = `claude --model ${model} --dangerously-skip-permissions`;
 		if (await agentDefFile.exists()) {
 			const agentDef = await agentDefFile.text();
 			const escaped = agentDef.replace(/'/g, "'\\''");

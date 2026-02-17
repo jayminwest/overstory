@@ -100,6 +100,7 @@ describe("checkConsistency", () => {
 				zombieThresholdMs: 300000,
 				nudgeIntervalMs: 30000,
 			},
+			models: {},
 			logging: {
 				verbose: false,
 				redactSecrets: true,

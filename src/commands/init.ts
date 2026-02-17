@@ -226,6 +226,22 @@ function buildAgentManifest(): AgentManifest {
 			canSpawn: true,
 			constraints: ["read-only", "no-worktree"],
 		},
+		supervisor: {
+			file: "supervisor.md",
+			model: "opus",
+			tools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Task"],
+			capabilities: ["coordinate", "supervise"],
+			canSpawn: true,
+			constraints: [],
+		},
+		monitor: {
+			file: "monitor.md",
+			model: "sonnet",
+			tools: ["Read", "Glob", "Grep", "Bash"],
+			capabilities: ["monitor", "patrol"],
+			canSpawn: false,
+			constraints: ["read-only", "no-worktree"],
+		},
 	};
 
 	// Build capability index: map each capability to agent names that declare it

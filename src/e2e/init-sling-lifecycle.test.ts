@@ -109,7 +109,7 @@ describe("E2E: init→sling lifecycle on external project", () => {
 		expect(config.project.name).toBeTruthy();
 	});
 
-	test("manifest loads successfully with all 6 agents", async () => {
+	test("manifest loads successfully with all 8 agents", async () => {
 		await initCommand([]);
 
 		const manifestPath = join(tempDir, ".overstory", "agent-manifest.json");
@@ -118,9 +118,18 @@ describe("E2E: init→sling lifecycle on external project", () => {
 
 		const manifest = await loader.load();
 
-		// All 6 agents present
+		// All 8 agents present
 		const agentNames = Object.keys(manifest.agents).sort();
-		expect(agentNames).toEqual(["builder", "coordinator", "lead", "merger", "reviewer", "scout"]);
+		expect(agentNames).toEqual([
+			"builder",
+			"coordinator",
+			"lead",
+			"merger",
+			"monitor",
+			"reviewer",
+			"scout",
+			"supervisor",
+		]);
 
 		// Each agent has a valid file reference
 		for (const [_name, def] of Object.entries(manifest.agents)) {
