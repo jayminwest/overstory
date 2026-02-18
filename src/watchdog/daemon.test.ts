@@ -1384,7 +1384,10 @@ describe("run completion detection", () => {
 
 		// Filter to only run-completion nudges targeting the coordinator
 		const coordinatorNudges = nudgeMock.calls.filter(
-			(c) => c.agentName === "coordinator" && c.message.includes("WATCHDOG") && c.message.includes("worker"),
+			(c) =>
+				c.agentName === "coordinator" &&
+				c.message.includes("WATCHDOG") &&
+				c.message.includes("worker"),
 		);
 		expect(coordinatorNudges).toHaveLength(1);
 		expect(coordinatorNudges[0]?.message).toContain("2");
