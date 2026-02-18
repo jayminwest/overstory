@@ -91,4 +91,18 @@ describe("dashboardCommand", () => {
 
 		// If we reach here without throwing a ValidationError about interval, validation passed
 	});
+
+	test("help text includes --all flag", async () => {
+		await dashboardCommand(["--help"]);
+		const out = output();
+
+		expect(out).toContain("--all");
+	});
+
+	test("help text describes current run scoping", async () => {
+		await dashboardCommand(["--help"]);
+		const out = output();
+
+		expect(out).toContain("current run");
+	});
 });

@@ -1,9 +1,12 @@
 /**
- * CLI command: overstory dashboard [--interval <ms>]
+ * CLI command: overstory dashboard [--interval <ms>] [--all]
  *
  * Rich terminal dashboard using raw ANSI escape codes (zero runtime deps).
  * Polls existing data sources and renders multi-panel layout with agent status,
  * mail activity, merge queue, and metrics.
+ *
+ * By default, all panels are scoped to the current run (current-run.txt).
+ * Use --all to show data across all runs.
  */
 
 import { join } from "node:path";
@@ -109,6 +112,7 @@ function horizontalLine(width: number, left: string, _middle: string, right: str
 }
 
 interface DashboardData {
+	currentRunId?: string | null;
 	status: StatusData;
 	recentMail: MailMessage[];
 	mergeQueue: Array<{ branchName: string; agentName: string; status: string }>;
@@ -120,10 +124,32 @@ interface DashboardData {
 }
 
 /**
- * Load all data sources for the dashboard.
+ * Read the current run ID from current-run.txt, or null if no active run.
  */
-async function loadDashboardData(root: string): Promise<DashboardData> {
-	const status = await gatherStatus(root, "orchestrator", false);
+async function readCurrentRunId(overstoryDir: string): Promise<string | null> {
+	const path = join(overstoryDir, "current-run.txt");
+	const file = Bun.file(path);
+	if (!(await file.exists())) {
+		return null;
+	}
+	const text = await file.text();
+	const trimmed = text.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Load all data sources for the dashboard.
+ * When runId is provided, all panels are scoped to agents in that run.
+ */
+async function loadDashboardData(root: string, runId?: string | null): Promise<DashboardData> {
+	const rawStatus = await gatherStatus(root, "orchestrator", false);
+
+	// If run-scoped, filter agents to only those belonging to the current run
+	const filteredAgents = runId
+		? rawStatus.agents.filter((a) => a.runId === runId)
+		: rawStatus.agents;
+
+	const status: StatusData = { ...rawStatus, agents: filteredAgents };
 
 	// Load recent mail
 	let recentMail: MailMessage[] = [];
@@ -132,7 +158,15 @@ async function loadDashboardData(root: string): Promise<DashboardData> {
 		const mailFile = Bun.file(mailDbPath);
 		if (await mailFile.exists()) {
 			const mailStore = createMailStore(mailDbPath);
-			recentMail = mailStore.getAll().slice(0, 5);
+			if (runId && filteredAgents.length > 0) {
+				const agentNames = new Set(filteredAgents.map((a) => a.agentName));
+				const allMail = mailStore.getAll();
+				recentMail = allMail
+					.filter((m) => agentNames.has(m.from) || agentNames.has(m.to))
+					.slice(0, 5);
+			} else {
+				recentMail = mailStore.getAll().slice(0, 5);
+			}
 			mailStore.close();
 		}
 	} catch {
@@ -144,7 +178,12 @@ async function loadDashboardData(root: string): Promise<DashboardData> {
 	try {
 		const queuePath = join(root, ".overstory", "merge-queue.db");
 		const queue = createMergeQueue(queuePath);
-		mergeQueue = queue.list().map((e) => ({
+		let entries = queue.list();
+		if (runId && filteredAgents.length > 0) {
+			const agentNames = new Set(filteredAgents.map((a) => a.agentName));
+			entries = entries.filter((e) => agentNames.has(e.agentName));
+		}
+		mergeQueue = entries.map((e) => ({
 			branchName: e.branchName,
 			agentName: e.agentName,
 			status: e.status,
@@ -164,11 +203,29 @@ async function loadDashboardData(root: string): Promise<DashboardData> {
 		if (await metricsFile.exists()) {
 			const store = createMetricsStore(metricsDbPath);
 			const sessions = store.getRecentSessions(100);
-			totalSessions = sessions.length;
-			avgDuration = store.getAverageDuration();
 
-			// Count by capability
-			for (const session of sessions) {
+			const filtered =
+				runId && filteredAgents.length > 0
+					? (() => {
+							const agentNames = new Set(filteredAgents.map((a) => a.agentName));
+							return sessions.filter((s) => agentNames.has(s.agentName));
+						})()
+					: sessions;
+
+			totalSessions = filtered.length;
+
+			// When run-scoped, compute avg duration from filtered sessions manually
+			if (runId && filteredAgents.length > 0) {
+				const completedSessions = filtered.filter((s) => s.completedAt !== null);
+				if (completedSessions.length > 0) {
+					avgDuration =
+						completedSessions.reduce((sum, s) => sum + s.durationMs, 0) / completedSessions.length;
+				}
+			} else {
+				avgDuration = store.getAverageDuration();
+			}
+
+			for (const session of filtered) {
 				const cap = session.capability;
 				byCapability[cap] = (byCapability[cap] ?? 0) + 1;
 			}
@@ -180,6 +237,7 @@ async function loadDashboardData(root: string): Promise<DashboardData> {
 	}
 
 	return {
+		currentRunId: runId,
 		status,
 		recentMail,
 		mergeQueue,
@@ -190,10 +248,11 @@ async function loadDashboardData(root: string): Promise<DashboardData> {
 /**
  * Render the header bar (line 1).
  */
-function renderHeader(width: number, interval: number): string {
+function renderHeader(width: number, interval: number, currentRunId?: string | null): string {
 	const left = `${color.bold}overstory dashboard v0.2.0${color.reset}`;
 	const now = new Date().toLocaleTimeString();
-	const right = `${now} | refresh: ${interval}ms`;
+	const scope = currentRunId ? ` [run: ${currentRunId.slice(0, 8)}]` : " [all runs]";
+	const right = `${now}${scope} | refresh: ${interval}ms`;
 	const leftStripped = "overstory dashboard v0.2.0"; // for length calculation
 	const padding = width - leftStripped.length - right.length;
 	const line = left + " ".repeat(Math.max(0, padding)) + right;
@@ -513,7 +572,7 @@ function renderDashboard(data: DashboardData, interval: number): void {
 	let output = CURSOR.clear;
 
 	// Header (rows 1-2)
-	output += renderHeader(width, interval);
+	output += renderHeader(width, interval, data.currentRunId);
 
 	// Agent panel (rows 3 to ~40% of screen)
 	const agentPanelStart = 3;
@@ -539,14 +598,15 @@ function renderDashboard(data: DashboardData, interval: number): void {
 }
 
 /**
- * Entry point for `overstory dashboard [--interval <ms>]`.
+ * Entry point for `overstory dashboard [--interval <ms>] [--all]`.
  */
 const DASHBOARD_HELP = `overstory dashboard — Live TUI dashboard for agent monitoring
 
-Usage: overstory dashboard [--interval <ms>]
+Usage: overstory dashboard [--interval <ms>] [--all]
 
 Options:
   --interval <ms>    Poll interval in milliseconds (default: 2000, min: 500)
+  --all              Show data from all runs (default: current run only)
   --help, -h         Show this help
 
 Dashboard panels:
@@ -554,6 +614,9 @@ Dashboard panels:
   - Mail panel: Recent messages with priority and time
   - Merge queue: Pending/merging/conflict entries
   - Metrics: Session counts, avg duration, by-capability breakdown
+
+By default the dashboard scopes all panels to the current run (current-run.txt).
+Use --all to see data across all runs.
 
 Press Ctrl+C to exit.`;
 
@@ -565,6 +628,7 @@ export async function dashboardCommand(args: string[]): Promise<void> {
 
 	const intervalStr = getFlag(args, "--interval");
 	const interval = intervalStr ? Number.parseInt(intervalStr, 10) : 2000;
+	const showAll = args.includes("--all");
 
 	if (Number.isNaN(interval) || interval < 500) {
 		throw new ValidationError("--interval must be a number >= 500 (milliseconds)", {
@@ -576,6 +640,13 @@ export async function dashboardCommand(args: string[]): Promise<void> {
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
 	const root = config.project.root;
+
+	// Read current run ID unless --all flag is set
+	let runId: string | null | undefined;
+	if (!showAll) {
+		const overstoryDir = join(root, ".overstory");
+		runId = await readCurrentRunId(overstoryDir);
+	}
 
 	// Hide cursor
 	process.stdout.write(CURSOR.hideCursor);
@@ -591,7 +662,7 @@ export async function dashboardCommand(args: string[]): Promise<void> {
 
 	// Poll loop
 	while (running) {
-		const data = await loadDashboardData(root);
+		const data = await loadDashboardData(root, runId);
 		renderDashboard(data, interval);
 		await Bun.sleep(interval);
 	}
