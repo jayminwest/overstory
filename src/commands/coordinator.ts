@@ -19,12 +19,12 @@ import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
-import { isRunningAsRoot } from "./sling.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
 import type { AgentSession } from "../types.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
 import { createSession, isSessionAlive, killSession, sendKeys } from "../worktree/tmux.ts";
+import { isRunningAsRoot } from "./sling.ts";
 
 /** Default coordinator agent name. */
 const COORDINATOR_NAME = "coordinator";
@@ -397,15 +397,24 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			}
 		}
 
-		// Auto-start monitor if --monitor flag is present
+		// Auto-start monitor if --monitor flag is present and tier2 is enabled
 		let monitorPid: number | undefined;
 		if (monitorFlag) {
-			const monitorResult = await monitor.start([]);
-			if (monitorResult) {
-				monitorPid = monitorResult.pid;
-				if (!json) process.stdout.write(`  Monitor:  started (PID ${monitorResult.pid})\n`);
+			if (!config.watchdog.tier2Enabled) {
+				if (!json)
+					process.stderr.write(
+						"  Monitor:  skipped (watchdog.tier2Enabled is false in config)\n",
+					);
 			} else {
-				if (!json) process.stderr.write("  Monitor:  failed to start or already running\n");
+				const monitorResult = await monitor.start([]);
+				if (monitorResult) {
+					monitorPid = monitorResult.pid;
+					if (!json)
+						process.stdout.write(`  Monitor:  started (PID ${monitorResult.pid})\n`);
+				} else {
+					if (!json)
+						process.stderr.write("  Monitor:  failed to start or already running\n");
+				}
 			}
 		}
 

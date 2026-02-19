@@ -19,13 +19,13 @@ import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import type { AgentSession } from "../types.ts";
-import { isRunningAsRoot } from "./sling.ts";
 import {
 	buildCoordinatorBeacon,
 	type CoordinatorDeps,
 	coordinatorCommand,
 	resolveAttach,
 } from "./coordinator.ts";
+import { isRunningAsRoot } from "./sling.ts";
 
 // --- Fake Tmux ---
 
@@ -212,11 +212,17 @@ beforeEach(async () => {
 	await mkdir(overstoryDir, { recursive: true });
 
 	// Write a minimal config.yaml so loadConfig succeeds
+	// tier2Enabled: true so existing --monitor tests pass (new skipped tests override inline)
 	await Bun.write(
 		join(overstoryDir, "config.yaml"),
-		["project:", "  name: test-project", `  root: ${tempDir}`, "  canonicalBranch: main"].join(
-			"\n",
-		),
+		[
+			"project:",
+			"  name: test-project",
+			`  root: ${tempDir}`,
+			"  canonicalBranch: main",
+			"watchdog:",
+			"  tier2Enabled: true",
+		].join("\n"),
 	);
 
 	// Write agent-manifest.json and stub agent-def .md files so manifest loading succeeds
@@ -1284,6 +1290,68 @@ describe("monitor integration", () => {
 			}
 
 			expect(output).toContain("Monitor:  started (PID 77777)");
+		});
+
+		test("does NOT call monitor.start() when tier2Enabled is false", async () => {
+			// Override config with tier2Enabled: false
+			await Bun.write(
+				join(overstoryDir, "config.yaml"),
+				[
+					"project:",
+					"  name: test-project",
+					`  root: ${tempDir}`,
+					"  canonicalBranch: main",
+					"watchdog:",
+					"  tier2Enabled: false",
+				].join("\n"),
+			);
+			const { deps, monitorCalls } = makeDeps({}, undefined, { startSuccess: true });
+			const originalSleep = Bun.sleep;
+			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+			try {
+				await captureStdout(() => coordinatorCommand(["start", "--monitor", "--json"], deps));
+			} finally {
+				Bun.sleep = originalSleep;
+			}
+
+			expect(monitorCalls?.start).toBe(0);
+		});
+
+		test("text output shows skipped message when tier2Enabled is false", async () => {
+			// Override config with tier2Enabled: false
+			await Bun.write(
+				join(overstoryDir, "config.yaml"),
+				[
+					"project:",
+					"  name: test-project",
+					`  root: ${tempDir}`,
+					"  canonicalBranch: main",
+					"watchdog:",
+					"  tier2Enabled: false",
+				].join("\n"),
+			);
+			const { deps } = makeDeps({}, undefined, { startSuccess: true });
+			const originalSleep = Bun.sleep;
+			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+			let stderrOutput = "";
+			const origStderrWrite = process.stderr.write.bind(process.stderr);
+			process.stderr.write = (chunk: string | Uint8Array) => {
+				stderrOutput += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+				return true;
+			};
+
+			try {
+				await captureStdout(() =>
+					coordinatorCommand(["start", "--monitor", "--no-attach"], deps),
+				);
+			} finally {
+				Bun.sleep = originalSleep;
+				process.stderr.write = origStderrWrite;
+			}
+
+			expect(stderrOutput).toContain("skipped");
 		});
 	});
 
