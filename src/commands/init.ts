@@ -438,6 +438,38 @@ export const OVERSTORY_GITIGNORE = `# Wildcard+whitelist: ignore everything, whi
 !hooks.json
 !groups.json
 !agent-defs/
+!README.md
+`;
+
+/**
+ * Content for .overstory/README.md — explains the directory to contributors.
+ */
+export const OVERSTORY_README = `# .overstory/
+
+This directory is managed by [overstory](https://github.com/jayminwest/overstory) — a multi-agent orchestration system for Claude Code.
+
+Overstory turns a single Claude Code session into a multi-agent team by spawning worker agents in git worktrees via tmux, coordinating them through a custom SQLite mail system, and merging their work back with tiered conflict resolution.
+
+## Key Commands
+
+- \`overstory init\`          — Initialize this directory
+- \`overstory status\`        — Show active agents and state
+- \`overstory sling <id>\`    — Spawn a worker agent
+- \`overstory mail check\`    — Check agent messages
+- \`overstory merge\`         — Merge agent work back
+- \`overstory dashboard\`     — Live TUI monitoring
+- \`overstory doctor\`        — Run health checks
+
+## Structure
+
+- \`config.yaml\`             — Project configuration
+- \`agent-manifest.json\`     — Agent registry
+- \`hooks.json\`              — Claude Code hooks config
+- \`agent-defs/\`             — Agent definition files (.md)
+- \`specs/\`                  — Task specifications
+- \`agents/\`                 — Per-agent state and identity
+- \`worktrees/\`              — Git worktrees (gitignored)
+- \`logs/\`                   — Agent logs (gitignored)
 `;
 
 /**
@@ -447,6 +479,15 @@ export const OVERSTORY_GITIGNORE = `# Wildcard+whitelist: ignore everything, whi
 export async function writeOverstoryGitignore(overstoryPath: string): Promise<void> {
 	const gitignorePath = join(overstoryPath, ".gitignore");
 	await Bun.write(gitignorePath, OVERSTORY_GITIGNORE);
+}
+
+/**
+ * Write .overstory/README.md explaining the directory to contributors.
+ * Always overwrites to support --force reinit.
+ */
+export async function writeOverstoryReadme(overstoryPath: string): Promise<void> {
+	const readmePath = join(overstoryPath, "README.md");
+	await Bun.write(readmePath, OVERSTORY_README);
 }
 
 /**
@@ -566,6 +607,10 @@ export async function initCommand(args: string[]): Promise<void> {
 	// 7. Write .overstory/.gitignore for runtime state
 	await writeOverstoryGitignore(overstoryPath);
 	printCreated(`${OVERSTORY_DIR}/.gitignore`);
+
+	// 7b. Write .overstory/README.md
+	await writeOverstoryReadme(overstoryPath);
+	printCreated(`${OVERSTORY_DIR}/README.md`);
 
 	// 8. Migrate existing SQLite databases on --force reinit
 	if (force) {
