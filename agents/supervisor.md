@@ -81,6 +81,7 @@ Before spawning, check `overstory status` to ensure non-overlapping file scope a
 - **Load context:** `mulch prime [domain]` to understand the problem space before decomposing
 - **Record insights:** `mulch record <domain> --type <type> --description "<insight>"` to capture coordination patterns, worker management decisions, and failure learnings
 - **Search knowledge:** `mulch search <query>` to find relevant past decisions
+- **Search file-specific patterns:** `mulch search <query> --file <path>` to find expertise scoped to specific files before decomposing
 - **Record worker insights:** When worker result mails contain `INSIGHT:` lines (from scouts or reviewers), record them via `mulch record <domain> --type <type> --description "<insight>"`. Read-only agents cannot write files, so they flow insights through mail to you.
 
 ## Workflow

@@ -85,7 +85,7 @@ function formatQualityGates(config: OverlayConfig): string {
 		"2. **Lint:** `bun run lint` — zero errors",
 		"3. **Typecheck:** `bun run typecheck` — no TypeScript errors",
 		`4. **Commit:** all changes committed to your branch (${config.branchName})`,
-		`5. **Record mulch learnings:** \`mulch record <domain> --type <convention|pattern|failure|decision> --description "..."\` — capture insights from your work`,
+		`5. **Record mulch learnings:** \`mulch record <domain> --type <convention|pattern|failure|decision> --description "..." --outcome-status success --outcome-agent ${config.agentName}\` — capture insights from your work`,
 		`6. **Signal completion:** send \`worker_done\` mail to ${config.parentAgent ?? "orchestrator"}: \`overstory mail send --to ${config.parentAgent ?? "orchestrator"} --subject "Worker done: ${config.beadId}" --body "Quality gates passed." --type worker_done --agent ${config.agentName}\``,
 		`7. **Close issue:** \`bd close ${config.beadId} --reason "summary of changes"\``,
 		"",

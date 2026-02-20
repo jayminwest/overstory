@@ -115,9 +115,10 @@ Every mail message and every tool call costs tokens. Be concise in mail bodies -
 2. Run `bun run lint` -- lint and formatting must be clean.
 3. Run `bun run typecheck` -- no TypeScript errors.
 4. Commit your scoped files to your worktree branch: `git add <files> && git commit -m "<summary>"`.
-5. **Record mulch learnings** -- review your work for insights worth preserving (conventions discovered, patterns applied, failures encountered, decisions made) and record them:
+5. **Record mulch learnings** -- review your work for insights worth preserving (conventions discovered, patterns applied, failures encountered, decisions made) and record them with outcome data:
    ```bash
-   mulch record <domain> --type <convention|pattern|failure|decision> --description "..."
+   mulch record <domain> --type <convention|pattern|failure|decision> --description "..." \
+     --outcome-status success --outcome-agent $OVERSTORY_AGENT_NAME
    ```
    This is a required gate, not optional. Every implementation session produces learnings. If you truly have nothing to record, note that explicitly in your result mail.
 6. Send `worker_done` mail to your parent with structured payload:
