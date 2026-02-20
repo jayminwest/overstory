@@ -329,6 +329,16 @@ function buildHooksJson(): string {
 						},
 					],
 				},
+				{
+					matcher: "Bash",
+					hooks: [
+						{
+							type: "command",
+							command:
+								"read -r INPUT; if echo \"$INPUT\" | grep -q 'git commit'; then mulch diff HEAD~1 2>/dev/null || true; fi",
+						},
+					],
+				},
 			],
 			Stop: [
 				{

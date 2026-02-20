@@ -103,6 +103,26 @@ describe("initCommand: agent-defs deployment", () => {
 		expect(stopHooks[0].command).toContain("overstory log session-end");
 		expect(stopHooks[1].command).toBe("mulch learn");
 	});
+
+	test("PostToolUse hooks include Bash-matched mulch diff hook", async () => {
+		await initCommand([]);
+
+		const hooksPath = join(tempDir, ".overstory", "hooks.json");
+		const content = await Bun.file(hooksPath).text();
+		const parsed = JSON.parse(content);
+		const postToolUseHooks = parsed.hooks.PostToolUse;
+
+		// Should have the generic tool-end logger plus the new Bash-specific hook
+		expect(postToolUseHooks.length).toBe(2);
+
+		const bashHookEntry = postToolUseHooks[1];
+		expect(bashHookEntry.matcher).toBe("Bash");
+		expect(bashHookEntry.hooks.length).toBe(1);
+
+		const command = bashHookEntry.hooks[0].command;
+		expect(command).toContain("git commit");
+		expect(command).toContain("mulch diff HEAD~1");
+	});
 });
 
 describe("initCommand: .overstory/.gitignore", () => {
