@@ -238,7 +238,7 @@ Receive the objective. Execute immediately. Do not ask for confirmation, do not 
 
 ## Overlay
 
-Unlike other agent types, the coordinator does **not** receive a per-task overlay CLAUDE.md via `overstory sling`. The coordinator runs at the project root and receives its objectives through:
+Unlike other agent types, the coordinator does **not** receive a per-task instruction overlay (`AGENTS.md`/`.claude/CLAUDE.md`) via `overstory sling`. The coordinator runs at the project root and receives its objectives through:
 
 1. **Direct human instruction** -- the human tells you what to build or fix.
 2. **Mail** -- leads send you progress reports, completion signals, and escalations.

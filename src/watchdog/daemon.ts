@@ -20,9 +20,11 @@
  * truth. See health.ts for the full ZFC documentation.
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { nudgeAgent } from "../commands/nudge.ts";
 import { createEventStore } from "../events/store.ts";
+import { createMailStore } from "../mail/store.ts";
 import { createMulchClient } from "../mulch/client.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, EventStore, HealthCheck } from "../types.ts";
@@ -32,6 +34,49 @@ import { triageAgent } from "./triage.ts";
 
 /** Maximum escalation level (terminate). */
 const MAX_ESCALATION_LEVEL = 3;
+
+/**
+ * Query beads for closed issue IDs in one batch.
+ *
+ * Returns a set of bead IDs whose status is "closed".
+ * Fail-open: on any command/parse error, returns an empty set.
+ */
+async function getClosedBeadIds(root: string, beadIds: string[]): Promise<Set<string>> {
+	const unique = Array.from(new Set(beadIds.filter((id) => id.trim().length > 0)));
+	if (unique.length === 0) {
+		return new Set();
+	}
+
+	// Skip lookup when beads is not initialized in this repo.
+	// Use fs existence check (not Bun.file), because .beads is a directory.
+	if (!existsSync(join(root, ".beads"))) {
+		return new Set();
+	}
+
+	try {
+		const proc = Bun.spawn(["bd", "list", "--all", "--id", unique.join(","), "--json"], {
+			cwd: root,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const exitCode = await proc.exited;
+		if (exitCode !== 0) {
+			return new Set();
+		}
+
+		const stdout = await new Response(proc.stdout).text();
+		const parsed = JSON.parse(stdout) as Array<{ id?: string; status?: string }>;
+		const closed = new Set<string>();
+		for (const item of parsed) {
+			if (item.id && item.status === "closed") {
+				closed.add(item.id);
+			}
+		}
+		return closed;
+	} catch {
+		return new Set();
+	}
+}
 
 /**
  * Persistent agent capabilities that are excluded from run-level completion checks.
@@ -282,6 +327,11 @@ export interface DaemonOptions {
 		tier: 0 | 1,
 		triageSuggestion?: string,
 	) => Promise<void>;
+	/**
+	 * Dependency injection for tests: closed-bead lookup.
+	 * Defaults to batched `bd list --all --id ... --json` query.
+	 */
+	_getClosedBeadIds?: (root: string, beadIds: string[]) => Promise<Set<string>>;
 }
 
 /**
@@ -345,9 +395,16 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 	const triage = options._triage ?? triageAgent;
 	const nudge = options._nudge ?? nudgeAgent;
 	const recordFailureFn = options._recordFailure ?? recordFailure;
+	const getClosedBeadIdsFn = options._getClosedBeadIds ?? getClosedBeadIds;
 
 	const overstoryDir = join(root, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
+	let mailStore: ReturnType<typeof createMailStore> | null = null;
+	try {
+		mailStore = createMailStore(join(overstoryDir, "mail.db"));
+	} catch {
+		// Mail store creation failure is non-fatal for watchdog processing
+	}
 
 	// Open EventStore for recording daemon events (fire-and-forget)
 	let eventStore: EventStore | null = null;
@@ -376,10 +433,38 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 		};
 
 		const sessions = store.getAll();
+		const beadIds = sessions.map((s) => s.beadId).filter((id): id is string => Boolean(id));
+		let closedBeadIds = new Set<string>();
+		try {
+			closedBeadIds = await getClosedBeadIdsFn(root, beadIds);
+		} catch {
+			// Fail-open: watchdog health checks proceed without beads status correlation
+		}
 
 		for (const session of sessions) {
 			// Skip completed sessions — they are terminal and don't need monitoring
 			if (session.state === "completed") {
+				continue;
+			}
+
+			// If the linked bead is already closed, mark the session completed so
+			// status/run reporting converges with issue state.
+			if (session.beadId && closedBeadIds.has(session.beadId)) {
+				store.updateState(session.agentName, "completed");
+				store.updateEscalation(session.agentName, 0, null);
+				session.state = "completed";
+				session.escalationLevel = 0;
+				session.stalledSince = null;
+				recordEvent(eventStore, {
+					runId,
+					agentName: session.agentName,
+					eventType: "custom",
+					level: "info",
+					data: {
+						type: "bead_closed_autocomplete",
+						beadId: session.beadId,
+					},
+				});
 				continue;
 			}
 
@@ -429,10 +514,42 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 				// instead of immediately delegating to AI triage.
 
 				// Initialize stalledSince on first escalation detection
+				let firstStallTick = false;
 				if (session.stalledSince === null) {
 					session.stalledSince = new Date().toISOString();
 					session.escalationLevel = 0;
 					store.updateEscalation(session.agentName, 0, session.stalledSince);
+					firstStallTick = true;
+				}
+
+				// If a worker first enters stalled and has unread mail, send an immediate
+				// targeted nudge to check inbox before escalating further.
+				if (firstStallTick && mailStore) {
+					try {
+						const unreadCount = mailStore.getUnread(session.agentName).length;
+						if (unreadCount > 0) {
+							const result = await nudge(
+								root,
+								session.agentName,
+								`[WATCHDOG] You have ${unreadCount} unread mail message${unreadCount === 1 ? "" : "s"}. Run: overstory mail check --agent ${session.agentName}`,
+								true,
+							);
+							recordEvent(eventStore, {
+								runId,
+								agentName: session.agentName,
+								eventType: "custom",
+								level: "warn",
+								data: {
+									type: "mail_pending_nudge",
+									escalationLevel: 0,
+									unreadCount,
+									delivered: result.delivered,
+								},
+							});
+						}
+					} catch {
+						// Mail check or nudge delivery failure is non-fatal for watchdog
+					}
 				}
 
 				// Check if enough time has passed to advance to the next escalation level
@@ -494,6 +611,13 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 		if (eventStore && !useInjectedEventStore) {
 			try {
 				eventStore.close();
+			} catch {
+				// Non-fatal
+			}
+		}
+		if (mailStore) {
+			try {
+				mailStore.close();
 			} catch {
 				// Non-fatal
 			}

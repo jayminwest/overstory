@@ -1,5 +1,5 @@
 # Wildcard+whitelist: ignore everything, whitelist tracked files
-# Auto-healed by overstory prime on each session start
+# Auto-healed by overstory init on each session start
 *
 !.gitignore
 !config.yaml
@@ -7,3 +7,4 @@
 !hooks.json
 !groups.json
 !agent-defs/
+!README.md

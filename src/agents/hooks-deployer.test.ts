@@ -1105,7 +1105,7 @@ describe("structural enforcement integration", () => {
 		}
 	});
 
-	test("coordinator bash guard whitelists git add and git commit", async () => {
+	test("coordinator bash guard does NOT whitelist git add and git commit", async () => {
 		const worktreePath = join(tempDir, "coord-wt");
 
 		await deployHooks(worktreePath, "coordinator-agent", "coordinator");
@@ -1119,10 +1119,12 @@ describe("structural enforcement integration", () => {
 		const bashGuards = preToolUse.filter((h: { matcher: string }) => h.matcher === "Bash");
 		expect(bashGuards.length).toBe(3);
 
-		// The file guard (second Bash guard) should whitelist git add/commit
+		// Coordinator must not get git add/commit safe-prefix exceptions.
 		const fileGuard = bashGuards[1];
-		expect(fileGuard.hooks[0].command).toContain("git add");
-		expect(fileGuard.hooks[0].command).toContain("git commit");
+		const command = fileGuard.hooks[0].command as string;
+		const safePrefixSection = command.split("grep -qE '")[0] ?? "";
+		expect(safePrefixSection).not.toContain("'^\\s*git add'");
+		expect(safePrefixSection).not.toContain("'^\\s*git commit'");
 	});
 
 	test("scout bash guard does NOT whitelist git add/commit", async () => {
