@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
+import { createEventStore } from "../events/store.ts";
 import {
 	buildBashFileGuardScript,
 	buildBashPathBoundaryScript,
@@ -1728,5 +1729,128 @@ describe("bash path boundary integration", () => {
 		);
 		expect(universalGuard).toBeDefined();
 		expect(universalGuard.hooks[0].command).toContain('"decision":"block"');
+	});
+});
+
+describe("hook lifecycle env-state matrix", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-hook-matrix-test-"));
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { recursive: true, force: true });
+	});
+
+	async function runHookCommand(
+		command: string,
+		cwd: string,
+		env: NodeJS.ProcessEnv,
+		stdinPayload: string,
+	): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+		const proc = Bun.spawn(["sh", "-c", command], {
+			cwd,
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		proc.stdin.write(stdinPayload);
+		proc.stdin.end();
+
+		const exitCode = await proc.exited;
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		return { exitCode, stdout, stderr };
+	}
+
+	test("deployed PreToolUse hook matrix honors env gate and captures events from worktree", async () => {
+		const projectRoot = join(tempDir, "project");
+		const worktreePath = join(projectRoot, "worktrees", "matrix-agent");
+		const agentName = "matrix-agent";
+
+		await mkdir(join(projectRoot, ".overstory"), { recursive: true });
+		await Bun.write(
+			join(projectRoot, ".overstory", "config.yaml"),
+			`project:\n  name: matrix\n  root: ${projectRoot}\n  canonicalBranch: main\n`,
+		);
+
+		const binDir = join(projectRoot, "bin");
+		const overstoryShim = join(binDir, "overstory");
+		await mkdir(binDir, { recursive: true });
+		await Bun.write(
+			overstoryShim,
+			`#!/bin/sh\nexec bun run "${join(import.meta.dir, "..", "index.ts").replace(/\\/g, "/")}" "$@"\n`,
+		);
+		await chmod(overstoryShim, 0o755);
+
+		await deployHooks(worktreePath, agentName, "builder");
+		await mkdir(join(worktreePath, ".overstory"), { recursive: true });
+		await Bun.write(
+			join(worktreePath, ".overstory", "config.yaml"),
+			`project:\n  name: matrix\n  root: ${projectRoot}\n  canonicalBranch: main\n`,
+		);
+
+		const settings = JSON.parse(
+			await Bun.file(join(worktreePath, ".claude", "settings.local.json")).text(),
+		) as {
+			hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> };
+		};
+		const basePreToolUse = settings.hooks.PreToolUse.find((entry) => entry.matcher === "");
+		expect(basePreToolUse).toBeDefined();
+		const command = basePreToolUse?.hooks[0]?.command ?? "";
+		expect(command).toContain("overstory log tool-start");
+
+		const rows = [
+			{
+				name: "without_OVERSTORY_AGENT_NAME",
+				withAgentEnv: false,
+				stdinPayload: JSON.stringify({
+					tool_name: "Read",
+					tool_input: { file_path: "/src/no-env.ts" },
+					session_id: "sess-no-env",
+				}),
+				expectedEvents: 0,
+			},
+			{
+				name: "with_OVERSTORY_AGENT_NAME",
+				withAgentEnv: true,
+				stdinPayload: JSON.stringify({
+					tool_name: "Read",
+					tool_input: { file_path: "/src/with-env.ts" },
+					session_id: "sess-with-env",
+				}),
+				expectedEvents: 1,
+			},
+		] as const;
+
+		for (const row of rows) {
+			const env: NodeJS.ProcessEnv = {
+				...process.env,
+				PATH: `${binDir}:${process.env.PATH ?? ""}`,
+			};
+			if (row.withAgentEnv) {
+				env.OVERSTORY_AGENT_NAME = agentName;
+			} else {
+				delete env.OVERSTORY_AGENT_NAME;
+			}
+
+			const result = await runHookCommand(command, projectRoot, env, row.stdinPayload);
+			expect(result.exitCode).toBe(0);
+			expect(result.stderr).toBe("");
+
+			const eventStore = createEventStore(join(projectRoot, ".overstory", "events.db"));
+			const events = eventStore.getByAgent(agentName);
+			eventStore.close();
+			expect(events).toHaveLength(row.expectedEvents);
+
+			if (row.withAgentEnv) {
+				expect(events[0]?.eventType).toBe("tool_start");
+				expect(events[0]?.toolName).toBe("Read");
+				const data = JSON.parse(events[0]?.data ?? "{}") as { summary?: string };
+				expect(data.summary).toBe("read: /src/with-env.ts");
+			}
+		}
 	});
 });

@@ -312,6 +312,7 @@ describe("Subcommands", () => {
 		const subNames = mail?.subcommands?.map((s) => s.name);
 		expect(subNames).toContain("send");
 		expect(subNames).toContain("check");
+		expect(subNames).toContain("wait");
 		expect(subNames).toContain("list");
 		expect(subNames).toContain("read");
 		expect(subNames).toContain("reply");

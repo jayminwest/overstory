@@ -91,8 +91,11 @@ overstory dashboard
 # Nudge a stalled agent
 overstory nudge <agent-name>
 
-# Check mail from agents
+# Check mail from agents (short poll, immediate return)
 overstory mail check --inject
+
+# Wait for incoming mail while coordinating children (long-poll)
+overstory mail wait --agent coordinator --timeout-ms 300000 --poll-ms 1000
 ```
 
 ## Model Selection
@@ -255,11 +258,20 @@ overstory mail check                    Check inbox (unread messages)
   --agent <name>  --inject  --json
   --debounce <ms>                        Skip if checked within window
 
+overstory mail wait                     Long-poll inbox until message/timeout/cancel
+  --agent <name>  --timeout-ms <ms>      Max wait time (default: 300000)
+  --poll-ms <ms>  --max-poll-ms <ms>     Poll backoff window (default: 1000..10000)
+  --backoff <factor>                     Exponential backoff factor (default: 1.5)
+  --cancel-file <path>                   Cancel wait when file exists
+  --json                                 JSON output
+
 overstory mail list                     List messages with filters
   --from <name>  --to <name>  --unread
 
 overstory mail read <id>                Mark message as read
 overstory mail reply <id> --body <text> Reply in same thread
+
+Use `mail check` for hook-driven or manual one-shot inbox checks. Use `mail wait` when a coordinator/lead is actively waiting on child results and should block efficiently instead of looping short polls.
 
 overstory nudge <agent> [message]       Send a text nudge to an agent
   --from <name>                          Sender name (default: orchestrator)

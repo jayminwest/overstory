@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ValidationError } from "../errors.ts";
@@ -1184,6 +1184,16 @@ describe("logCommand --stdin integration", () => {
 		event: string,
 		agentName: string,
 		stdinJson: Record<string, unknown>,
+		opts?: { env?: NodeJS.ProcessEnv; cwd?: string },
+	): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+		return runLogWithRawStdin(event, agentName, JSON.stringify(stdinJson), opts);
+	}
+
+	async function runLogWithRawStdin(
+		event: string,
+		agentName: string,
+		stdinRaw: string,
+		opts?: { env?: NodeJS.ProcessEnv; cwd?: string },
 	): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 		// Inline script that calls logCommand with --stdin and reads from stdin
 		const scriptPath = join(tempDir, "_run-log.ts");
@@ -1199,15 +1209,17 @@ try {
 `;
 		await Bun.write(scriptPath, scriptContent);
 
+		const env: NodeJS.ProcessEnv = { ...process.env, ...opts?.env };
 		const proc = Bun.spawn(["bun", "run", scriptPath, event, "--agent", agentName, "--stdin"], {
-			cwd: tempDir,
+			cwd: opts?.cwd ?? tempDir,
+			env,
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
 		});
 
-		// Write the JSON payload to stdin and close
-		proc.stdin.write(JSON.stringify(stdinJson));
+		// Write stdin payload to stdin and close
+		proc.stdin.write(stdinRaw);
 		proc.stdin.end();
 
 		const exitCode = await proc.exited;
@@ -1216,6 +1228,91 @@ try {
 
 		return { exitCode, stdout, stderr };
 	}
+
+	test("regression matrix: malformed stdin fallback path captures unknown tool event", async () => {
+		const result = await runLogWithRawStdin(
+			"tool-start",
+			"malformed-stdin-agent",
+			'{"tool_name":"Read","tool_input":{"file_path":"/src/broken.ts"}',
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+
+		const eventsDbPath = join(tempDir, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+		const events = eventStore.getByAgent("malformed-stdin-agent");
+		eventStore.close();
+
+		expect(events).toHaveLength(1);
+		const event = events[0] as StoredEvent;
+		expect(event.eventType).toBe("tool_start");
+		expect(event.toolName).toBe("unknown");
+		const data = JSON.parse(event.data ?? "{}") as { summary?: string };
+		expect(data.summary).toBe("unknown");
+	});
+
+	test("regression matrix: tool-end succeeds when HOME is missing for transcript lookup", async () => {
+		const missingHome = join(tempDir, "home-does-not-exist");
+		const result = await runLogWithStdin(
+			"tool-end",
+			"missing-home-agent",
+			{
+				tool_name: "Bash",
+				tool_input: { command: "cat /tmp/file.txt" },
+				session_id: "sess-missing-home",
+			},
+			{ env: { HOME: missingHome } },
+		);
+		expect(result.exitCode).toBe(0);
+
+		const eventsDbPath = join(tempDir, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+		const events = eventStore.getByAgent("missing-home-agent");
+		eventStore.close();
+
+		expect(events).toHaveLength(1);
+		expect(events[0]?.eventType).toBe("tool_end");
+		expect(events[0]?.toolName).toBe("Bash");
+
+		const snapshotMarker = Bun.file(
+			join(tempDir, ".overstory", "logs", "missing-home-agent", ".last-snapshot"),
+		);
+		expect(await snapshotMarker.exists()).toBe(false);
+	});
+
+	test("regression matrix: session-end without transcript_path stores null event data", async () => {
+		const result = await runLogWithStdin("session-end", "no-transcript-agent", {
+			session_id: "sess-no-transcript",
+		});
+		expect(result.exitCode).toBe(0);
+
+		const eventsDbPath = join(tempDir, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+		const events = eventStore.getByAgent("no-transcript-agent");
+		eventStore.close();
+
+		expect(events).toHaveLength(1);
+		expect(events[0]?.eventType).toBe("session_end");
+		expect(events[0]?.data).toBeNull();
+	});
+
+	test("regression matrix: non-writable logs path surfaces controlled failure", async () => {
+		const logsDir = join(tempDir, ".overstory", "logs");
+		await mkdir(logsDir, { recursive: true });
+		await chmod(logsDir, 0o500);
+
+		try {
+			const result = await runLogWithStdin("tool-start", "readonly-logs-agent", {
+				tool_name: "Read",
+				tool_input: { file_path: "/src/readonly.ts" },
+				session_id: "sess-readonly",
+			});
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toMatch(/EACCES|permission|denied/i);
+		} finally {
+			await chmod(logsDir, 0o700);
+		}
+	});
 
 	test("tool-start with --stdin writes to EventStore", async () => {
 		const payload = {

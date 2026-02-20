@@ -747,6 +747,266 @@ describe("mailCommand", () => {
 		});
 	});
 
+	describe("mail wait", () => {
+		test("times out when no messages arrive", async () => {
+			output = "";
+			await mailCommand([
+				"wait",
+				"--agent",
+				"idle-agent",
+				"--timeout-ms",
+				"60",
+				"--poll-ms",
+				"10",
+				"--max-poll-ms",
+				"20",
+				"--json",
+			]);
+
+			const result = JSON.parse(output.trim()) as {
+				status: string;
+				messages: unknown[];
+				polls: number;
+			};
+			expect(result.status).toBe("timeout");
+			expect(result.messages).toHaveLength(0);
+			expect(result.polls).toBeGreaterThan(0);
+		});
+
+		test("wakes when a new message arrives", async () => {
+			output = "";
+			setTimeout(() => {
+				const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+				const client = createMailClient(store);
+				client.send({
+					from: "builder-1",
+					to: "wait-agent",
+					subject: "Worker update",
+					body: "Child completed",
+					type: "worker_done",
+				});
+				client.close();
+			}, 25);
+
+			await mailCommand([
+				"wait",
+				"--agent",
+				"wait-agent",
+				"--timeout-ms",
+				"500",
+				"--poll-ms",
+				"10",
+				"--max-poll-ms",
+				"40",
+				"--json",
+			]);
+
+			const result = JSON.parse(output.trim()) as {
+				status: string;
+				messages: Array<{ subject: string; body: string }>;
+			};
+			expect(result.status).toBe("message");
+			expect(result.messages).toHaveLength(1);
+			expect(result.messages[0]?.subject).toBe("Worker update");
+			expect(result.messages[0]?.body).toBe("Child completed");
+		});
+
+		test("uses OVERSTORY_AGENT_NAME when --agent is omitted", async () => {
+			const prevAgent = process.env.OVERSTORY_AGENT_NAME;
+			process.env.OVERSTORY_AGENT_NAME = "env-wait-agent";
+			try {
+				output = "";
+				setTimeout(() => {
+					const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+					const client = createMailClient(store);
+					client.send({
+						from: "builder-2",
+						to: "env-wait-agent",
+						subject: "Env wake",
+						body: "Resolved from env",
+					});
+					client.close();
+				}, 25);
+
+				await mailCommand([
+					"wait",
+					"--timeout-ms",
+					"500",
+					"--poll-ms",
+					"10",
+					"--max-poll-ms",
+					"40",
+					"--json",
+				]);
+
+				const result = JSON.parse(output.trim()) as {
+					status: string;
+					messages: Array<{ subject: string; to: string }>;
+				};
+				expect(result.status).toBe("message");
+				expect(result.messages[0]?.subject).toBe("Env wake");
+				expect(result.messages[0]?.to).toBe("env-wait-agent");
+			} finally {
+				if (prevAgent === undefined) {
+					delete process.env.OVERSTORY_AGENT_NAME;
+				} else {
+					process.env.OVERSTORY_AGENT_NAME = prevAgent;
+				}
+			}
+		});
+
+		test("cancels when cancel file is created", async () => {
+			const cancelPath = join(tempDir, "mail-wait.cancel");
+			output = "";
+			setTimeout(() => {
+				void Bun.write(cancelPath, "cancel");
+			}, 25);
+
+			await mailCommand([
+				"wait",
+				"--agent",
+				"cancel-agent",
+				"--timeout-ms",
+				"500",
+				"--poll-ms",
+				"10",
+				"--max-poll-ms",
+				"40",
+				"--cancel-file",
+				cancelPath,
+				"--json",
+			]);
+
+			const result = JSON.parse(output.trim()) as {
+				status: string;
+				messages: unknown[];
+				cancelFile: string | null;
+			};
+			expect(result.status).toBe("cancelled");
+			expect(result.messages).toHaveLength(0);
+			expect(result.cancelFile).toBe(cancelPath);
+		});
+
+		test("coordinator wait wakes on pending nudge event", async () => {
+			const nudgeDir = join(tempDir, ".overstory", "pending-nudges");
+			const markerPath = join(nudgeDir, "coordinator.json");
+			output = "";
+
+			setTimeout(() => {
+				void (async () => {
+					await mkdir(nudgeDir, { recursive: true });
+					await Bun.write(
+						markerPath,
+						`${JSON.stringify(
+							{
+								from: "lead-1",
+								reason: "lead_completed",
+								subject: "Lead finished",
+								messageId: "auto-nudge-lead-1",
+								createdAt: new Date().toISOString(),
+							},
+							null,
+							"\t",
+						)}\n`,
+					);
+				})();
+			}, 25);
+
+			await mailCommand([
+				"wait",
+				"--agent",
+				"coordinator",
+				"--timeout-ms",
+				"500",
+				"--poll-ms",
+				"10",
+				"--max-poll-ms",
+				"40",
+				"--json",
+			]);
+
+			const result = JSON.parse(output.trim()) as {
+				status: string;
+				messages: unknown[];
+				nudge: { reason: string; from: string; subject: string } | null;
+			};
+			expect(result.status).toBe("nudged");
+			expect(result.messages).toHaveLength(0);
+			expect(result.nudge?.reason).toBe("lead_completed");
+			expect(result.nudge?.from).toBe("lead-1");
+			expect(result.nudge?.subject).toBe("Lead finished");
+		});
+
+		test("lead wait wakes on pending nudge when session capability is lead", async () => {
+			const { createSessionStore } = await import("../sessions/store.ts");
+			const sessionStore = createSessionStore(join(tempDir, ".overstory", "sessions.db"));
+			sessionStore.upsert({
+				id: "session-lead-1",
+				agentName: "lead-1",
+				capability: "lead",
+				worktreePath: "/worktrees/lead-1",
+				branchName: "lead-1",
+				beadId: "bead-lead-1",
+				tmuxSession: "overstory-test-lead-1",
+				state: "working",
+				pid: 12345,
+				parentAgent: "coordinator",
+				depth: 1,
+				runId: "run-001",
+				startedAt: new Date().toISOString(),
+				lastActivity: new Date().toISOString(),
+				escalationLevel: 0,
+				stalledSince: null,
+			});
+			sessionStore.close();
+
+			const nudgeDir = join(tempDir, ".overstory", "pending-nudges");
+			const markerPath = join(nudgeDir, "lead-1.json");
+			output = "";
+
+			setTimeout(() => {
+				void (async () => {
+					await mkdir(nudgeDir, { recursive: true });
+					await Bun.write(
+						markerPath,
+						`${JSON.stringify(
+							{
+								from: "builder-2",
+								reason: "worker_done",
+								subject: "Worker finished",
+								messageId: "msg-worker-done",
+								createdAt: new Date().toISOString(),
+							},
+							null,
+							"\t",
+						)}\n`,
+					);
+				})();
+			}, 25);
+
+			await mailCommand([
+				"wait",
+				"--agent",
+				"lead-1",
+				"--timeout-ms",
+				"500",
+				"--poll-ms",
+				"10",
+				"--max-poll-ms",
+				"40",
+				"--json",
+			]);
+
+			const result = JSON.parse(output.trim()) as {
+				status: string;
+				nudge: { reason: string; from: string } | null;
+			};
+			expect(result.status).toBe("nudged");
+			expect(result.nudge?.reason).toBe("worker_done");
+			expect(result.nudge?.from).toBe("builder-2");
+		});
+	});
+
 	describe("broadcast", () => {
 		// Helper to create active agent sessions for broadcast testing
 		async function seedActiveSessions(): Promise<void> {

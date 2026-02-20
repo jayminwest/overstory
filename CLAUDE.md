@@ -309,6 +309,10 @@ overstory mail send                     Send a message
 overstory mail check                    Check inbox (unread messages)
   --agent <name>  --inject  --json
 
+overstory mail wait                     Long-poll inbox for child/mailbox waits
+  --agent <name>  --timeout-ms <ms>  --poll-ms <ms>
+  --max-poll-ms <ms>  --backoff <factor>  [--cancel-file <path>]  --json
+
 overstory mail list                     List messages with filters
   --from <name>  --to <name>  --unread  --json
 
@@ -316,6 +320,8 @@ overstory mail read <id>                Mark message as read
 overstory mail reply <id> --body <text> Reply in same thread
 overstory mail purge                    Delete old messages
   --all | --days <n> | --agent <name>
+
+Use `mail check` for one-shot polling (hooks/manual checks). Use `mail wait` when coordinator/lead flows are waiting on child completion and should block efficiently.
 
 overstory nudge <agent> [message]       Send a text nudge to an agent via tmux
   --from <name>                          Sender name (default: orchestrator)

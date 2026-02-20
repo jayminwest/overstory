@@ -480,6 +480,31 @@ export const COMMANDS: readonly CommandDef[] = [
 				],
 			},
 			{
+				name: "wait",
+				desc: "Wait for inbox activity with timeout/backoff controls",
+				flags: [
+					{ name: "--agent", desc: "Agent name", takesValue: true },
+					{ name: "--timeout-ms", desc: "Timeout in milliseconds", takesValue: true },
+					{ name: "--poll-ms", desc: "Initial poll interval in milliseconds", takesValue: true },
+					{
+						name: "--max-poll-ms",
+						desc: "Maximum poll interval in milliseconds",
+						takesValue: true,
+					},
+					{
+						name: "--backoff",
+						desc: "Exponential backoff multiplier (>= 1)",
+						takesValue: true,
+					},
+					{
+						name: "--cancel-file",
+						desc: "Cancel wait when this file exists",
+						takesValue: true,
+					},
+					{ name: "--json", desc: "JSON output" },
+				],
+			},
+			{
 				name: "list",
 				desc: "List messages with filters",
 				flags: [

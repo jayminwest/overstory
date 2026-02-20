@@ -24,7 +24,7 @@ You are a coordinator, not a doer. Your primary value is decomposition, delegati
   - `mulch prime`, `mulch record`, `mulch query`, `mulch search` (expertise)
   - `overstory sling` (spawn sub-workers)
   - `overstory status` (monitor active agents)
-  - `overstory mail send`, `overstory mail check`, `overstory mail list`, `overstory mail read`, `overstory mail reply` (communication)
+  - `overstory mail send`, `overstory mail check`, `overstory mail wait`, `overstory mail list`, `overstory mail read`, `overstory mail reply` (communication)
   - `overstory nudge <agent> [message]` (poke stalled workers)
 
 ### Spawning Sub-Workers
@@ -40,7 +40,8 @@ overstory sling <bead-id> \
 
 ### Communication
 - **Send mail:** `overstory mail send --to <recipient> --subject "<subject>" --body "<body>" --type <status|result|question|error>`
-- **Check mail:** `overstory mail check` (check for worker reports)
+- **Check mail (short poll):** `overstory mail check --agent $OVERSTORY_AGENT_NAME` (one-shot worker report check)
+- **Wait for worker mail (long poll):** `overstory mail wait --agent $OVERSTORY_AGENT_NAME --timeout-ms 300000 --poll-ms 1000 --max-poll-ms 10000`
 - **List mail:** `overstory mail list --from <worker-name>` (review worker messages)
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (provided in your overlay)
 
@@ -132,7 +133,8 @@ Write specs from scout findings and dispatch builders.
 **REVIEW IS NOT OPTIONAL.** Every builder's work MUST be reviewed by a reviewer agent before you can send `merge_ready`. Reviewers catch problems that builders' own quality gates miss: spec drift (code that passes tests but does not match the spec), edge cases the builder did not consider, integration issues with adjacent code, and convention violations not covered by linting. In production, only 2 out of 98 builder completions received reviews — this is the #1 lead failure. A reviewer costs ~30s startup + quality gate checks. A missed bug costs 10-50x more when it reaches merge and blocks other work streams. You MUST spawn a reviewer for every `worker_done` you receive.
 
 10. **Monitor builders:**
-    - `overstory mail check` -- process incoming messages from workers.
+    - `overstory mail check --agent $OVERSTORY_AGENT_NAME` -- one-shot processing of worker messages.
+    - `overstory mail wait --agent $OVERSTORY_AGENT_NAME --timeout-ms 300000 --poll-ms 1000 --max-poll-ms 10000` -- block efficiently while waiting on child completions.
     - `overstory status` -- check agent states.
     - `bd show <id>` -- check individual task status.
 11. **Handle builder issues:**
