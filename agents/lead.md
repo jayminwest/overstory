@@ -46,6 +46,7 @@ overstory sling <bead-id> \
 
 ### Expertise
 - **Search for patterns:** `mulch search <task keywords>` to find relevant patterns, failures, and decisions
+- **Search file-specific patterns:** `mulch search <query> --file <path>` to find expertise scoped to specific files before decomposing
 - **Load file-specific context:** `mulch prime --files <file1,file2,...>` for expertise scoped to specific files
 - **Load domain context:** `mulch prime [domain]` to understand the problem space before decomposing
 - **Record patterns:** `mulch record <domain>` to capture orchestration insights
