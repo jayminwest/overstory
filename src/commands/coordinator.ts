@@ -349,7 +349,7 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			join(projectRoot, config.agents.baseDir),
 		);
 		const manifest = await manifestLoader.load();
-		const model = resolveModel(config, manifest, "coordinator", "opus");
+		const { model } = resolveModel(config, manifest, "coordinator", "opus");
 
 		// Spawn tmux session at project root with Claude Code (interactive mode).
 		// Inject the coordinator base definition via --append-system-prompt so the

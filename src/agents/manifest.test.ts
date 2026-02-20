@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
 import type { AgentManifest, OverstoryConfig } from "../types.ts";
-import { createManifestLoader, resolveModel } from "./manifest.ts";
+import { createManifestLoader, resolveModel, resolveProviderEnv } from "./manifest.ts";
 
 const VALID_MANIFEST = {
 	version: "1.0",
@@ -279,13 +279,13 @@ describe("createManifestLoader", () => {
 			await expect(loader.load()).rejects.toThrow("agents");
 		});
 
-		test("throws AgentError for invalid model value", async () => {
+		test("throws AgentError for empty model string", async () => {
 			const data = {
 				version: "1.0",
 				agents: {
 					bad: {
 						file: "bad.md",
-						model: "gpt-4",
+						model: "",
 						tools: ["Read"],
 						capabilities: ["test"],
 						canSpawn: false,
@@ -431,7 +431,7 @@ describe("createManifestLoader", () => {
 				agents: {
 					bad: {
 						file: "",
-						model: "invalid",
+						model: "",
 						tools: "not-array",
 						capabilities: "not-array",
 						canSpawn: "not-bool",
@@ -509,7 +509,10 @@ describe("resolveModel", () => {
 		capabilityIndex: { coordinate: ["coordinator"], monitor: ["monitor"] },
 	};
 
-	function makeConfig(models: OverstoryConfig["models"] = {}): OverstoryConfig {
+	function makeConfig(
+		models: OverstoryConfig["models"] = {},
+		providers: OverstoryConfig["providers"] = { anthropic: { type: "native" } },
+	): OverstoryConfig {
 		return {
 			project: { name: "test", root: "/tmp/test", canonicalBranch: "main" },
 			agents: {
@@ -523,9 +526,7 @@ describe("resolveModel", () => {
 			beads: { enabled: false },
 			mulch: { enabled: false, domains: [], primeFormat: "markdown" },
 			merge: { aiResolveEnabled: false, reimagineEnabled: false },
-			providers: {
-				anthropic: { type: "native" },
-			},
+			providers,
 			watchdog: {
 				tier0Enabled: false,
 				tier0IntervalMs: 30000,
@@ -542,21 +543,203 @@ describe("resolveModel", () => {
 
 	test("returns manifest model when no config override", () => {
 		const config = makeConfig();
-		expect(resolveModel(config, baseManifest, "coordinator", "haiku")).toBe("opus");
+		expect(resolveModel(config, baseManifest, "coordinator", "haiku")).toEqual({ model: "opus" });
 	});
 
 	test("config override takes precedence over manifest", () => {
 		const config = makeConfig({ coordinator: "sonnet" });
-		expect(resolveModel(config, baseManifest, "coordinator", "haiku")).toBe("sonnet");
+		expect(resolveModel(config, baseManifest, "coordinator", "haiku")).toEqual({
+			model: "sonnet",
+		});
 	});
 
 	test("falls back to default when role is not in manifest or config", () => {
 		const config = makeConfig();
-		expect(resolveModel(config, baseManifest, "unknown-role", "haiku")).toBe("haiku");
+		expect(resolveModel(config, baseManifest, "unknown-role", "haiku")).toEqual({
+			model: "haiku",
+		});
 	});
 
 	test("config override works for roles not in manifest", () => {
 		const config = makeConfig({ supervisor: "opus" });
-		expect(resolveModel(config, baseManifest, "supervisor", "sonnet")).toBe("opus");
+		expect(resolveModel(config, baseManifest, "supervisor", "sonnet")).toEqual({ model: "opus" });
+	});
+
+	test("returns gateway env for provider-prefixed model", () => {
+		const config = makeConfig(
+			{ coordinator: "openrouter/openai/gpt-5.3" },
+			{
+				openrouter: {
+					type: "gateway",
+					baseUrl: "https://openrouter.ai/api/v1",
+					authTokenEnv: "OPENROUTER_API_KEY",
+				},
+			},
+		);
+		const result = resolveModel(config, baseManifest, "coordinator", "opus");
+		expect(result).toEqual({
+			model: "sonnet",
+			env: {
+				ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+				ANTHROPIC_API_KEY: "",
+				ANTHROPIC_DEFAULT_SONNET_MODEL: "openai/gpt-5.3",
+			},
+		});
+	});
+
+	test("includes auth token in env when env var is set", () => {
+		const config = makeConfig(
+			{ coordinator: "openrouter/openai/gpt-5.3" },
+			{
+				openrouter: {
+					type: "gateway",
+					baseUrl: "https://openrouter.ai/api/v1",
+					authTokenEnv: "OPENROUTER_API_KEY",
+				},
+			},
+		);
+		const savedEnv = process.env.OPENROUTER_API_KEY;
+		process.env.OPENROUTER_API_KEY = "test-token-123";
+		try {
+			const result = resolveModel(config, baseManifest, "coordinator", "opus");
+			expect(result).toEqual({
+				model: "sonnet",
+				env: {
+					ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+					ANTHROPIC_API_KEY: "",
+					ANTHROPIC_DEFAULT_SONNET_MODEL: "openai/gpt-5.3",
+					ANTHROPIC_AUTH_TOKEN: "test-token-123",
+				},
+			});
+		} finally {
+			if (savedEnv === undefined) {
+				delete process.env.OPENROUTER_API_KEY;
+			} else {
+				process.env.OPENROUTER_API_KEY = savedEnv;
+			}
+		}
+	});
+
+	test("unknown provider falls through to model as-is", () => {
+		const config = makeConfig({ coordinator: "unknown-provider/some-model" });
+		const result = resolveModel(config, baseManifest, "coordinator", "opus");
+		expect(result).toEqual({ model: "unknown-provider/some-model" });
+	});
+
+	test("native provider returns model string without env", () => {
+		const config = makeConfig(
+			{ coordinator: "native-gw/claude-3-5-sonnet" },
+			{ "native-gw": { type: "native" } },
+		);
+		const result = resolveModel(config, baseManifest, "coordinator", "opus");
+		expect(result).toEqual({ model: "native-gw/claude-3-5-sonnet" });
+	});
+});
+
+describe("resolveProviderEnv", () => {
+	test("returns null for unknown provider", () => {
+		const result = resolveProviderEnv("unknown", "some/model", {});
+		expect(result).toBeNull();
+	});
+
+	test("returns null for native provider type", () => {
+		const result = resolveProviderEnv("anthropic", "some/model", {
+			anthropic: { type: "native" },
+		});
+		expect(result).toBeNull();
+	});
+
+	test("returns null for gateway without baseUrl", () => {
+		const result = resolveProviderEnv("gw", "some/model", {
+			gw: { type: "gateway" },
+		});
+		expect(result).toBeNull();
+	});
+
+	test("returns env dict for gateway with baseUrl", () => {
+		const result = resolveProviderEnv("openrouter", "openai/gpt-5.3", {
+			openrouter: { type: "gateway", baseUrl: "https://openrouter.ai/api/v1" },
+		});
+		expect(result).toEqual({
+			ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+			ANTHROPIC_API_KEY: "",
+			ANTHROPIC_DEFAULT_SONNET_MODEL: "openai/gpt-5.3",
+		});
+	});
+
+	test("includes auth token when env var is present", () => {
+		const result = resolveProviderEnv(
+			"openrouter",
+			"openai/gpt-5.3",
+			{
+				openrouter: {
+					type: "gateway",
+					baseUrl: "https://openrouter.ai/api/v1",
+					authTokenEnv: "MY_TOKEN",
+				},
+			},
+			{ MY_TOKEN: "secret-token" },
+		);
+		expect(result).toEqual({
+			ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+			ANTHROPIC_API_KEY: "",
+			ANTHROPIC_DEFAULT_SONNET_MODEL: "openai/gpt-5.3",
+			ANTHROPIC_AUTH_TOKEN: "secret-token",
+		});
+	});
+
+	test("omits auth token when env var is not set", () => {
+		const result = resolveProviderEnv(
+			"openrouter",
+			"openai/gpt-5.3",
+			{
+				openrouter: {
+					type: "gateway",
+					baseUrl: "https://openrouter.ai/api/v1",
+					authTokenEnv: "MISSING_TOKEN",
+				},
+			},
+			{},
+		);
+		expect(result).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+	});
+});
+
+describe("manifest validation accepts arbitrary model strings", () => {
+	let tempDir: string;
+	let manifestPath: string;
+	let agentBaseDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-model-test-"));
+		manifestPath = join(tempDir, "agent-manifest.json");
+		agentBaseDir = join(tempDir, "agents");
+		await mkdir(agentBaseDir, { recursive: true });
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { recursive: true, force: true });
+	});
+
+	test("accepts provider-prefixed model string", async () => {
+		const data = {
+			version: "1.0",
+			agents: {
+				agent: {
+					file: "agent.md",
+					model: "openrouter/openai/gpt-5.3",
+					tools: ["Read"],
+					capabilities: ["test"],
+					canSpawn: false,
+					constraints: [],
+				},
+			},
+		};
+		await Bun.write(manifestPath, JSON.stringify(data));
+		await Bun.write(join(agentBaseDir, "agent.md"), "# Agent\n");
+		const loader = createManifestLoader(manifestPath, agentBaseDir);
+
+		const manifest = await loader.load();
+		expect(manifest.agents.agent?.model).toBe("openrouter/openai/gpt-5.3");
 	});
 });

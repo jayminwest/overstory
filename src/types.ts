@@ -16,6 +16,12 @@ export interface ProviderConfig {
 	authTokenEnv?: string;
 }
 
+/** Resolved model with optional provider environment variables. */
+export interface ResolvedModel {
+	model: string;
+	env?: Record<string, string>;
+}
+
 // === Project Configuration ===
 
 export interface OverstoryConfig {
@@ -73,7 +79,7 @@ export interface AgentManifest {
 
 export interface AgentDefinition {
 	file: string; // Path to base agent definition (.md)
-	model: ModelAlias;
+	model: ModelRef;
 	tools: string[]; // Allowed tools
 	capabilities: string[]; // What this agent can do
 	canSpawn: boolean; // Can this agent spawn sub-workers?

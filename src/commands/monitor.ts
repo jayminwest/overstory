@@ -143,7 +143,7 @@ async function startMonitor(args: string[]): Promise<void> {
 			join(projectRoot, config.agents.baseDir),
 		);
 		const manifest = await manifestLoader.load();
-		const model = resolveModel(config, manifest, "monitor", "sonnet");
+		const { model } = resolveModel(config, manifest, "monitor", "sonnet");
 
 		// Spawn tmux session at project root with Claude Code (interactive mode).
 		// Inject the monitor base definition via --append-system-prompt.
