@@ -290,7 +290,7 @@ describe("daemon tick", () => {
 
 	// --- Test 4: progressive nudging for stalled agents ---
 
-	test("first tick with stalled agent sets stalledSince and stays at level 0 (warn)", async () => {
+	test("first stalled tick sets stalledSince and stays at level 0 (warn)", async () => {
 		const staleActivity = new Date(Date.now() - 60_000).toISOString();
 		const session = makeSession({
 			agentName: "stalled-agent",
@@ -1295,7 +1295,7 @@ describe("daemon mulch failure recording", () => {
 		expect(failureMock.calls[0]?.session.beadId).toBe("task-789");
 	});
 
-	test("Tier 0: recordFailure called at escalation level 3+ (progressive termination)", async () => {
+	test("Tier 0: recordFailure at escalation level 3+ (progressive termination)", async () => {
 		const staleActivity = new Date(Date.now() - 60_000).toISOString();
 		const stalledSince = new Date(Date.now() - 200_000).toISOString();
 		const session = makeSession({

@@ -1,11 +1,11 @@
 import { dirname, join, resolve } from "node:path";
 import { ConfigError, ValidationError } from "./errors.ts";
-import { SUPPORTED_CAPABILITIES } from "./types.ts";
 import type { OverstoryConfig, ProviderRuntime } from "./types.ts";
+import { SUPPORTED_CAPABILITIES } from "./types.ts";
 
 /**
  * Default configuration with all fields populated.
- * Used as the base; file-loaded values are merged on top.
+ * Used as the base; loaded file values are merged on top.
  */
 export const DEFAULT_CONFIG: OverstoryConfig = {
 	project: {
