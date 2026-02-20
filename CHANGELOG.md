@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-02-20
+
+### Added
+
+#### Provider Model Resolution
+- `ResolvedModel` type and provider gateway support in `resolveModel()` — resolves `ModelRef` strings (e.g., `openrouter/openai/gpt-5.3`) through configured provider gateways with `baseUrl` and `authTokenEnv`
+- Provider and model validation in `validateConfig()` — validates provider types (`native`/`gateway`), required gateway fields (`baseUrl`), and model reference format at config load time
+
+#### Dashboard Performance
+- `limit` option added to `MailStore.getAll()` — dashboard now fetches only the most recent messages instead of the full mailbox
+- Persistent DB connections across dashboard poll ticks — `SessionStore`, `EventStore`, `MailStore`, and `MetricsStore` connections are now opened once and reused, eliminating per-tick open/close overhead
+
+#### Testing
+- Test suite grew from 1916 to 1974 tests across 73 files (4933 expect() calls)
+
+### Fixed
+- Dashboard `.repeat()` crash when negative values were passed — now clamps repeat count to minimum of 0
+- Set-based tmux session lookup in `status.ts` replacing O(n) array scans with O(1) Set membership checks
+- Subprocess cache in `status.ts` preventing redundant `tmux list-sessions` calls during a single status gather
+- Null-runId sessions (coordinator) now included in run-scoped status and dashboard views — previously filtered out when `--all` was not specified
+- Sparse file used in logs doctor test to prevent timeout on large log directory scans
+- Beacon submission reliability — replaced fixed sleep with poll-based TUI readiness check (PR #19, thanks [@dmfaux](https://github.com/dmfaux)!)
+
 ## [0.5.7] - 2026-02-19
 
 ### Added
@@ -410,7 +433,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Biome configuration for formatting and linting
 - TypeScript strict mode with `noUncheckedIndexedAccess`
 
-[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.5.7...HEAD
+[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/jayminwest/overstory/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/jayminwest/overstory/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/jayminwest/overstory/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/jayminwest/overstory/compare/v0.5.4...v0.5.5
