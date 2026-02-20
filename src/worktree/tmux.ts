@@ -376,7 +376,7 @@ export async function killSession(name: string): Promise<void> {
  * Detect the current tmux session name.
  *
  * Returns the session name if running inside tmux, null otherwise.
- * Used by `overstory prime` to register the orchestrator's tmux session
+ * Used by startup hooks (`overstory init --ensure`) to register the orchestrator's tmux session
  * so agents can nudge the orchestrator when they have results.
  */
 export async function getCurrentSessionName(): Promise<string | null> {

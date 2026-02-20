@@ -399,7 +399,7 @@ describe("buildBeacon", () => {
 		const beacon = buildBeacon(opts);
 
 		expect(beacon).toContain("read .claude/CLAUDE.md");
-		expect(beacon).toContain("mulch prime");
+		expect(beacon).toContain("overstory init");
 		expect(beacon).toContain("overstory mail check --agent scout-1");
 		expect(beacon).toContain("begin task overstory-xyz");
 	});
@@ -408,6 +408,13 @@ describe("buildBeacon", () => {
 		const beacon = buildBeacon(makeBeaconOpts({ agentName: "reviewer-beta" }));
 
 		expect(beacon).toContain("overstory mail check --agent reviewer-beta");
+	});
+
+	test("omits init ensure step in codex worker beacon", () => {
+		const beacon = buildBeacon(makeBeaconOpts({ cliBase: "codex" }));
+
+		expect(beacon).not.toContain("overstory init --ensure");
+		expect(beacon).toContain("overstory mail check --agent test-builder");
 	});
 
 	test("reflects capability in header", () => {

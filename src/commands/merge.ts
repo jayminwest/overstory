@@ -12,6 +12,7 @@
  */
 
 import { join } from "node:path";
+import { resolveCliBase } from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { MergeError, ValidationError } from "../errors.ts";
 import { createMergeQueue } from "../merge/queue.ts";
@@ -190,9 +191,11 @@ export async function mergeCommand(args: string[]): Promise<void> {
 	const queuePath = join(config.project.root, ".overstory", "merge-queue.db");
 	const queue = createMergeQueue(queuePath);
 	const mulchClient = createMulchClient(config.project.root);
+	const cliBase = resolveCliBase(config);
+	const allowClaudeAiMergeTiers = cliBase === "claude";
 	const resolver = createMergeResolver({
-		aiResolveEnabled: config.merge.aiResolveEnabled,
-		reimagineEnabled: config.merge.reimagineEnabled,
+		aiResolveEnabled: config.merge.aiResolveEnabled && allowClaudeAiMergeTiers,
+		reimagineEnabled: config.merge.reimagineEnabled && allowClaudeAiMergeTiers,
 		mulchClient,
 	});
 

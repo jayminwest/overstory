@@ -209,8 +209,8 @@ export async function generateOverlay(config: OverlayConfig): Promise<string> {
  * Check whether a directory is the canonical project root by comparing resolved paths.
  *
  * Agent overlays must NEVER be written to the canonical repo root -- they belong
- * in worktrees. Writing an overlay to the project root overwrites the orchestrator's
- * `.claude/CLAUDE.md`, breaking the user's own Claude Code session (overstory-uwg4).
+ * in worktrees. Writing an overlay to the project root can overwrite the
+ * orchestrator's instruction file, breaking the user's primary session.
  *
  * Uses deterministic path comparison instead of checking for `.overstory/config.yaml`
  * because when dogfooding (running overstory on its own repo), that file is tracked
@@ -225,8 +225,8 @@ export function isCanonicalRoot(dir: string, canonicalRoot: string): boolean {
 }
 
 /**
- * Generate the overlay and write it to `{worktreePath}/.claude/CLAUDE.md`.
- * Creates the `.claude/` directory if it does not exist.
+ * Generate the overlay and write it to `{worktreePath}/{instructionsDir}/{instructionsFile}`.
+ * Creates the instruction directory if it does not exist.
  *
  * Includes a safety guard that prevents writing to the canonical project root.
  * Agent overlays belong in worktrees, never at the orchestrator's root.
@@ -243,25 +243,27 @@ export async function writeOverlay(
 	canonicalRoot: string,
 ): Promise<void> {
 	// Guard: never write agent overlays to the canonical project root.
-	// The project root's .claude/CLAUDE.md belongs to the orchestrator/user.
+	// The project root instruction file belongs to the orchestrator/user.
 	// Uses path comparison instead of file-existence heuristic to handle
 	// dogfooding scenarios where .overstory/config.yaml is tracked in git
 	// and appears in every worktree checkout (overstory-p4st).
 	if (isCanonicalRoot(worktreePath, canonicalRoot)) {
 		throw new AgentError(
-			`Refusing to write overlay to canonical project root: ${worktreePath}. Agent overlays must target a worktree, not the orchestrator's root directory. This prevents overwriting the user's .claude/CLAUDE.md.`,
+			`Refusing to write overlay to canonical project root: ${worktreePath}. Agent overlays must target a worktree, not the orchestrator's root directory.`,
 			{ agentName: config.agentName },
 		);
 	}
 
 	const content = await generateOverlay(config);
-	const claudeDir = join(worktreePath, ".claude");
-	const outputPath = join(claudeDir, "CLAUDE.md");
+	const instructionsDir = config.instructionsDir ?? ".claude";
+	const instructionsFile = config.instructionsFile ?? "CLAUDE.md";
+	const outputDir = join(worktreePath, instructionsDir);
+	const outputPath = join(outputDir, instructionsFile);
 
 	try {
-		await mkdir(claudeDir, { recursive: true });
+		await mkdir(outputDir, { recursive: true });
 	} catch (err) {
-		throw new AgentError(`Failed to create .claude/ directory at: ${claudeDir}`, {
+		throw new AgentError(`Failed to create instruction directory at: ${outputDir}`, {
 			agentName: config.agentName,
 			cause: err instanceof Error ? err : undefined,
 		});

@@ -9,11 +9,11 @@
  * 5. Check name uniqueness + concurrency limit
  * 6. Validate bead exists
  * 7. Create worktree
- * 8. Generate + write overlay CLAUDE.md
+ * 8. Generate + write instruction overlay
  * 9. Deploy hooks config
  * 10. Claim beads issue
  * 11. Create agent identity
- * 12. Create tmux session running claude
+ * 12. Create tmux session running configured CLI
  * 13. Record session in SessionStore + increment run agent count
  * 14. Return AgentSession
  */
@@ -22,10 +22,16 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
-import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { createManifestLoader, resolveRoute } from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
 import type { BeadIssue } from "../beads/client.ts";
 import { createBeadsClient } from "../beads/client.ts";
+import {
+	buildInteractiveAgentCommand,
+	getInstructionLayout,
+	requiresNonRoot,
+	resolveCliBase,
+} from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
 import { createMulchClient } from "../mulch/client.ts";
@@ -95,12 +101,14 @@ export interface BeaconOptions {
 	taskId: string;
 	parentAgent: string | null;
 	depth: number;
+	instructionsPath?: string;
+	cliBase?: "claude" | "codex";
 }
 
 /**
  * Build a structured startup beacon for an agent.
  *
- * The beacon is the first user message sent to a Claude Code agent via
+ * The beacon is the first user message sent to an overstory-managed agent via
  * tmux send-keys. It provides identity context and a numbered startup
  * protocol so the agent knows exactly what to do on boot.
  *
@@ -108,18 +116,23 @@ export interface BeaconOptions {
  *   [OVERSTORY] <agent-name> (<capability>) <ISO timestamp> task:<bead-id>
  *   Depth: <n> | Parent: <parent-name|none>
  *   Startup protocol:
- *   1. Read your assignment in .claude/CLAUDE.md
- *   2. Load expertise: mulch prime
+ *   1. Read your assignment in the resolved instruction file
+ *   2. Ensure runtime scaffolding (claude runtime): overstory init --ensure
  *   3. Check mail: overstory mail check --agent <name>
  *   4. Begin working on task <bead-id>
  */
 export function buildBeacon(opts: BeaconOptions): string {
 	const timestamp = new Date().toISOString();
 	const parent = opts.parentAgent ?? "none";
+	const instructionsPath = opts.instructionsPath ?? ".claude/CLAUDE.md";
+	const startup =
+		opts.cliBase === "codex"
+			? `Startup: read ${instructionsPath}, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`
+			: `Startup: read ${instructionsPath}, run overstory init --ensure --agent ${opts.agentName}, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`;
 	const parts = [
 		`[OVERSTORY] ${opts.agentName} (${opts.capability}) ${timestamp} task:${opts.taskId}`,
 		`Depth: ${opts.depth} | Parent: ${parent}`,
-		`Startup: read .claude/CLAUDE.md, run mulch prime, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`,
+		startup,
 	];
 	return parts.join(" — ");
 }
@@ -232,13 +245,6 @@ export async function slingCommand(args: string[]): Promise<void> {
 		});
 	}
 
-	if (isRunningAsRoot()) {
-		throw new AgentError(
-			"Cannot spawn agents as root (UID 0). The claude CLI rejects --dangerously-skip-permissions when run as root, causing the tmux session to die immediately. Run overstory as a non-root user.",
-			{ agentName: name },
-		);
-	}
-
 	// Validate that spec file exists if provided, and resolve to absolute path
 	// so agents in worktrees can access it (worktrees don't have .overstory/)
 	let absoluteSpecPath: string | null = null;
@@ -264,6 +270,15 @@ export async function slingCommand(args: string[]): Promise<void> {
 	// 1. Load config
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const cliBase = resolveCliBase(config);
+	const instructionLayout = getInstructionLayout(cliBase);
+
+	if (requiresNonRoot(cliBase) && isRunningAsRoot()) {
+		throw new AgentError(
+			"Cannot spawn agents as root (UID 0). The claude CLI rejects --dangerously-skip-permissions when run as root, causing the tmux session to die immediately. Run overstory as a non-root user.",
+			{ agentName: name },
+		);
+	}
 
 	// 2. Validate depth limit
 	// Hierarchy: orchestrator(0) -> lead(1) -> specialist(2)
@@ -387,7 +402,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 			beadId: taskId,
 		});
 
-		// 8. Generate + write overlay CLAUDE.md
+		// 8. Generate + write instruction overlay
 		const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
 		const baseDefinition = await Bun.file(agentDefPath).text();
 
@@ -417,6 +432,8 @@ export async function slingCommand(args: string[]): Promise<void> {
 			capability,
 			baseDefinition,
 			mulchExpertise,
+			instructionsDir: instructionLayout.dir,
+			instructionsFile: instructionLayout.file,
 		};
 
 		try {
@@ -436,8 +453,10 @@ export async function slingCommand(args: string[]): Promise<void> {
 			throw err;
 		}
 
-		// 9. Deploy hooks config (capability-specific guards)
-		await deployHooks(worktreePath, name, capability);
+		// 9. Deploy hooks config (capability-specific guards) for Claude runtime.
+		if (cliBase === "claude") {
+			await deployHooks(worktreePath, name, capability);
+		}
 
 		// 10. Claim beads issue
 		if (config.beads.enabled) {
@@ -464,9 +483,14 @@ export async function slingCommand(args: string[]): Promise<void> {
 
 		// 12. Create tmux session running claude in interactive mode
 		const tmuxSessionName = `overstory-${config.project.name}-${name}`;
-		const model = resolveModel(config, manifest, capability, agentDef.model);
-		const claudeCmd = `claude --model ${model} --dangerously-skip-permissions`;
-		const pid = await createSession(tmuxSessionName, worktreePath, claudeCmd, {
+		const route = resolveRoute(config, manifest, capability, agentDef.model);
+		const launchCommand = buildInteractiveAgentCommand({
+			cliBase,
+			model: route.model,
+			extraArgs: route.cliArgs,
+		});
+		const pid = await createSession(tmuxSessionName, worktreePath, launchCommand.command, {
+			...route.env,
 			OVERSTORY_AGENT_NAME: name,
 			OVERSTORY_WORKTREE_PATH: worktreePath,
 		});
@@ -517,6 +541,8 @@ export async function slingCommand(args: string[]): Promise<void> {
 			taskId,
 			parentAgent,
 			depth,
+			instructionsPath: instructionLayout.startupPath,
+			cliBase,
 		});
 		await sendKeys(tmuxSessionName, beacon);
 

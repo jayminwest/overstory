@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "overstory prime --agent orchestrator"
+						"command": "overstory init --ensure --agent orchestrator"
 					}
 				]
 			}
@@ -60,6 +60,10 @@
 					{
 						"type": "command",
 						"command": "overstory log session-end --agent orchestrator"
+					},
+					{
+						"type": "command",
+						"command": "mulch learn"
 					}
 				]
 			}
@@ -70,7 +74,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "overstory prime --agent orchestrator --compact"
+						"command": "overstory init --ensure --agent orchestrator"
 					}
 				]
 			}

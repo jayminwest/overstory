@@ -27,6 +27,23 @@ Thumbs.db
 .overstory/metrics.db-shm
 .overstory/sessions.json
 .overstory/merge-queue.json
+.overstory/sessions.db
+.overstory/sessions.db-wal
+.overstory/sessions.db-shm
+.overstory/events.db
+.overstory/events.db-wal
+.overstory/events.db-shm
+.overstory/merge-queue.db
+.overstory/merge-queue.db-wal
+.overstory/merge-queue.db-shm
+.overstory/current-run.txt
+.overstory/watchdog.pid
+.overstory/run-complete-notified.txt
+.overstory/nudge-state.json
+.overstory/pending-nudges/
+.overstory/orchestrator-tmux.json
+.overstory/session-branch.txt
+.overstory/mail-check-state.json
 
 # Test artifacts
 coverage/

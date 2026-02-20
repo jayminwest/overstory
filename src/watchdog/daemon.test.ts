@@ -19,6 +19,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEventStore } from "../events/store.ts";
+import { createMailStore } from "../mail/store.ts";
 import { createSessionStore } from "../sessions/store.ts";
 import type { AgentSession, HealthCheck, StoredEvent } from "../types.ts";
 import { buildCompletionMessage, runDaemonTick } from "./daemon.ts";
@@ -56,6 +57,27 @@ function readSessionsFromStore(root: string): AgentSession[] {
 	const sessions = store.getAll();
 	store.close();
 	return sessions;
+}
+
+/** Seed a single unread message for an agent in mail.db. */
+function seedUnreadMail(root: string, to: string): void {
+	const dbPath = join(root, ".overstory", "mail.db");
+	const store = createMailStore(dbPath);
+	try {
+		store.insert({
+			id: "",
+			from: "orchestrator",
+			to,
+			subject: "Status check",
+			body: "Please report progress.",
+			type: "status",
+			priority: "normal",
+			threadId: null,
+			payload: null,
+		});
+	} finally {
+		store.close();
+	}
 }
 
 /** Build a test AgentSession with sensible defaults. */
@@ -141,12 +163,12 @@ function nudgeTracker(): {
 		message: string,
 		force: boolean,
 	) => Promise<{ delivered: boolean; reason?: string }>;
-	calls: Array<{ agentName: string; message: string }>;
+	calls: Array<{ agentName: string; message: string; force: boolean }>;
 } {
-	const calls: Array<{ agentName: string; message: string }> = [];
+	const calls: Array<{ agentName: string; message: string; force: boolean }> = [];
 	return {
-		nudge: async (_projectRoot: string, agentName: string, message: string, _force: boolean) => {
-			calls.push({ agentName, message });
+		nudge: async (_projectRoot: string, agentName: string, message: string, force: boolean) => {
+			calls.push({ agentName, message, force });
 			return { delivered: true };
 		},
 		calls,
@@ -290,7 +312,7 @@ describe("daemon tick", () => {
 
 	// --- Test 4: progressive nudging for stalled agents ---
 
-	test("first tick with stalled agent sets stalledSince and stays at level 0 (warn)", async () => {
+	test("first stalled tick sets stalledSince and stays at level 0 (warn)", async () => {
 		const staleActivity = new Date(Date.now() - 60_000).toISOString();
 		const session = makeSession({
 			agentName: "stalled-agent",
@@ -325,6 +347,42 @@ describe("daemon tick", () => {
 		expect(nudgeMock.calls).toHaveLength(0);
 
 		// Session should be stalled with stalledSince set and escalationLevel 0
+		const reloaded = readSessionsFromStore(tempRoot);
+		expect(reloaded[0]?.state).toBe("stalled");
+		expect(reloaded[0]?.escalationLevel).toBe(0);
+		expect(reloaded[0]?.stalledSince).not.toBeNull();
+	});
+
+	test("first stalled tick with unread mail sends a targeted mail-check nudge", async () => {
+		const staleActivity = new Date(Date.now() - 60_000).toISOString();
+		const session = makeSession({
+			agentName: "stalled-agent",
+			tmuxSession: "overstory-stalled-agent",
+			state: "working",
+			lastActivity: staleActivity,
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+		seedUnreadMail(tempRoot, "stalled-agent");
+
+		const tmuxMock = tmuxWithLiveness({ "overstory-stalled-agent": true });
+		const nudgeMock = nudgeTracker();
+
+		await runDaemonTick({
+			root: tempRoot,
+			...THRESHOLDS,
+			nudgeIntervalMs: 60_000,
+			_tmux: tmuxMock,
+			_triage: triageAlways("extend"),
+			_nudge: nudgeMock.nudge,
+		});
+
+		expect(nudgeMock.calls).toHaveLength(1);
+		expect(nudgeMock.calls[0]?.agentName).toBe("stalled-agent");
+		expect(nudgeMock.calls[0]?.message).toContain("unread mail");
+		expect(nudgeMock.calls[0]?.message).toContain("overstory mail check --agent stalled-agent");
+		expect(nudgeMock.calls[0]?.force).toBe(true);
+
 		const reloaded = readSessionsFromStore(tempRoot);
 		expect(reloaded[0]?.state).toBe("stalled");
 		expect(reloaded[0]?.escalationLevel).toBe(0);
@@ -678,6 +736,50 @@ describe("daemon tick", () => {
 		// State unchanged
 		const reloaded = readSessionsFromStore(tempRoot);
 		expect(reloaded[0]?.state).toBe("completed");
+	});
+
+	test("auto-marks session completed when linked bead is closed", async () => {
+		const session = makeSession({
+			agentName: "closed-bead-agent",
+			tmuxSession: "overstory-closed-bead-agent",
+			state: "working",
+			beadId: "overstory-closed-1",
+		});
+		writeSessionsToStore(tempRoot, [session]);
+
+		await runDaemonTick({
+			root: tempRoot,
+			...THRESHOLDS,
+			_tmux: tmuxAllAlive(),
+			_triage: triageAlways("extend"),
+			_getClosedBeadIds: async () => new Set(["overstory-closed-1"]),
+		});
+
+		const reloaded = readSessionsFromStore(tempRoot);
+		expect(reloaded[0]?.state).toBe("completed");
+		expect(reloaded[0]?.escalationLevel).toBe(0);
+		expect(reloaded[0]?.stalledSince).toBeNull();
+	});
+
+	test("does not auto-complete when linked bead is still open", async () => {
+		const session = makeSession({
+			agentName: "open-bead-agent",
+			tmuxSession: "overstory-open-bead-agent",
+			state: "working",
+			beadId: "overstory-open-1",
+		});
+		writeSessionsToStore(tempRoot, [session]);
+
+		await runDaemonTick({
+			root: tempRoot,
+			...THRESHOLDS,
+			_tmux: tmuxAllAlive(),
+			_triage: triageAlways("extend"),
+			_getClosedBeadIds: async () => new Set(),
+		});
+
+		const reloaded = readSessionsFromStore(tempRoot);
+		expect(reloaded[0]?.state).toBe("working");
 	});
 
 	test("multiple sessions with mixed states are all processed", async () => {
@@ -1295,7 +1397,7 @@ describe("daemon mulch failure recording", () => {
 		expect(failureMock.calls[0]?.session.beadId).toBe("task-789");
 	});
 
-	test("Tier 0: recordFailure called at escalation level 3+ (progressive termination)", async () => {
+	test("Tier 0: recordFailure at escalation level 3+ (progressive termination)", async () => {
 		const staleActivity = new Date(Date.now() - 60_000).toISOString();
 		const stalledSince = new Date(Date.now() - 200_000).toISOString();
 		const session = makeSession({

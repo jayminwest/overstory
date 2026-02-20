@@ -26,6 +26,15 @@ export interface MergeResolver {
 	resolve(entry: MergeEntry, canonicalBranch: string, repoRoot: string): Promise<MergeResult>;
 }
 
+/** Result from an AI one-shot resolution run. */
+export interface AiRunnerResult {
+	output: string;
+	exitCode: number;
+}
+
+/** One-shot AI runner abstraction for conflict tiers 3 and 4. */
+export type AiRunner = (prompt: string, repoRoot: string) => Promise<AiRunnerResult>;
+
 /**
  * Run a git command in the given repo root. Returns stdout, stderr, and exit code.
  */
@@ -103,6 +112,26 @@ async function readFile(filePath: string): Promise<string> {
 async function writeFile(filePath: string, content: string): Promise<void> {
 	await Bun.write(filePath, content);
 }
+
+/**
+ * Default AI runner uses Claude CLI one-shot mode.
+ * Kept as a standalone function so alternate CLIs can be wired in later.
+ */
+export const runClaudePrompt: AiRunner = async (prompt, repoRoot) => {
+	const proc = Bun.spawn(["claude", "--print", "-p", prompt], {
+		cwd: repoRoot,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+
+	const [output, , exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+
+	return { output, exitCode };
+};
 
 /**
  * Tier 1: Attempt a clean merge (git merge --no-edit).
@@ -198,6 +227,7 @@ export function looksLikeProse(text: string): boolean {
 async function tryAiResolve(
 	conflictFiles: string[],
 	repoRoot: string,
+	aiRunner: AiRunner,
 	pastResolutions?: string[],
 ): Promise<{ success: boolean; remainingConflicts: string[] }> {
 	const remainingConflicts: string[] = [];
@@ -221,17 +251,7 @@ async function tryAiResolve(
 				content,
 			].join(" ");
 
-			const proc = Bun.spawn(["claude", "--print", "-p", prompt], {
-				cwd: repoRoot,
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-
-			const [resolved, , exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
+			const { output: resolved, exitCode } = await aiRunner(prompt, repoRoot);
 
 			if (exitCode !== 0 || resolved.trim() === "") {
 				remainingConflicts.push(file);
@@ -271,6 +291,7 @@ async function tryReimagine(
 	entry: MergeEntry,
 	canonicalBranch: string,
 	repoRoot: string,
+	aiRunner: AiRunner,
 ): Promise<{ success: boolean }> {
 	// Abort the current merge
 	await runGit(repoRoot, ["merge", "--abort"]);
@@ -304,17 +325,7 @@ async function tryReimagine(
 				branchContent,
 			].join("");
 
-			const proc = Bun.spawn(["claude", "--print", "-p", prompt], {
-				cwd: repoRoot,
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-
-			const [reimagined, , exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
+			const { output: reimagined, exitCode } = await aiRunner(prompt, repoRoot);
 
 			if (exitCode !== 0 || reimagined.trim() === "") {
 				return { success: false };
@@ -512,7 +523,10 @@ export function createMergeResolver(options: {
 	aiResolveEnabled: boolean;
 	reimagineEnabled: boolean;
 	mulchClient?: MulchClient;
+	aiRunner?: AiRunner;
 }): MergeResolver {
+	const aiRunner = options.aiRunner ?? runClaudePrompt;
+
 	return {
 		async resolve(
 			entry: MergeEntry,
@@ -588,7 +602,12 @@ export function createMergeResolver(options: {
 			// Tier 3: AI-resolve
 			if (options.aiResolveEnabled && !history.skipTiers.includes("ai-resolve")) {
 				lastTier = "ai-resolve";
-				const aiResult = await tryAiResolve(conflictFiles, repoRoot, history.pastResolutions);
+				const aiResult = await tryAiResolve(
+					conflictFiles,
+					repoRoot,
+					aiRunner,
+					history.pastResolutions,
+				);
 				if (aiResult.success) {
 					if (options.mulchClient) {
 						recordConflictPattern(options.mulchClient, entry, "ai-resolve", conflictFiles, true);
@@ -607,7 +626,7 @@ export function createMergeResolver(options: {
 			// Tier 4: Re-imagine
 			if (options.reimagineEnabled && !history.skipTiers.includes("reimagine")) {
 				lastTier = "reimagine";
-				const reimagineResult = await tryReimagine(entry, canonicalBranch, repoRoot);
+				const reimagineResult = await tryReimagine(entry, canonicalBranch, repoRoot, aiRunner);
 				if (reimagineResult.success) {
 					if (options.mulchClient) {
 						recordConflictPattern(options.mulchClient, entry, "reimagine", conflictFiles, true);

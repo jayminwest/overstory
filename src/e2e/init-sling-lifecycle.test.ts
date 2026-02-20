@@ -59,6 +59,13 @@ describe("E2E: init→sling lifecycle on external project", () => {
 		// config.yaml exists
 		const configFile = Bun.file(join(overstoryDir, "config.yaml"));
 		expect(await configFile.exists()).toBe(true);
+		const configText = await configFile.text();
+		expect(configText).toContain("modelProfiles:");
+		expect(configText).toContain("roleProfiles:");
+		expect(configText).toContain("adapters:");
+		expect(configText).toContain("adapters:\n      codex:");
+		expect(configText).toContain("adapters:\n      claude:");
+		expect(configText).toContain("--dangerously-bypass-approvals-and-sandbox");
 
 		// agent-manifest.json exists and is valid JSON
 		const manifestFile = Bun.file(join(overstoryDir, "agent-manifest.json"));

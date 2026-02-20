@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readdir } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import { initCommand, OVERSTORY_GITIGNORE, OVERSTORY_README } from "./init.ts";
@@ -278,5 +278,93 @@ describe("initCommand: .overstory/README.md", () => {
 		// Verify tampered content preserved (early return)
 		const afterSecondInit = await Bun.file(readmePath).text();
 		expect(afterSecondInit).toBe("# custom content\n");
+	});
+});
+
+describe("initCommand: config profile routing defaults", () => {
+	let tempDir: string;
+	let originalCwd: string;
+	let originalWrite: typeof process.stdout.write;
+
+	beforeEach(async () => {
+		tempDir = await createTempGitRepo();
+		originalCwd = process.cwd();
+		process.chdir(tempDir);
+
+		originalWrite = process.stdout.write;
+		process.stdout.write = (() => true) as typeof process.stdout.write;
+	});
+
+	afterEach(async () => {
+		process.chdir(originalCwd);
+		process.stdout.write = originalWrite;
+		await cleanupTempDir(tempDir);
+	});
+
+	test("writes provider + profile routing config with legacy models snippet", async () => {
+		await initCommand([]);
+
+		const configPath = join(tempDir, ".overstory", "config.yaml");
+		const content = await Bun.file(configPath).text();
+
+		expect(content).toContain("modelProfiles:");
+		expect(content).toContain("roleProfiles:");
+		expect(content).toContain("runtimes:");
+		expect(content).toContain("adapters:");
+		expect(content).toContain("adapters:\n      codex:");
+		expect(content).toContain("adapters:\n      claude:");
+		expect(content).toContain("--dangerously-bypass-approvals-and-sandbox");
+		expect(content).toContain("# Legacy compatibility fallback (models.* still supported");
+		expect(content).toContain("# models:");
+		expect(content).toContain("#   default: gpt-5");
+	});
+});
+
+describe("initCommand: ensure mode", () => {
+	let tempDir: string;
+	let originalCwd: string;
+	let originalWrite: typeof process.stdout.write;
+
+	beforeEach(async () => {
+		tempDir = await createTempGitRepo();
+		originalCwd = process.cwd();
+		process.chdir(tempDir);
+
+		originalWrite = process.stdout.write;
+		process.stdout.write = (() => true) as typeof process.stdout.write;
+	});
+
+	afterEach(async () => {
+		process.chdir(originalCwd);
+		process.stdout.write = originalWrite;
+		await cleanupTempDir(tempDir);
+	});
+
+	test("resolves canonical root when run from nested cwd", async () => {
+		await initCommand([]);
+
+		const nestedDir = join(tempDir, "nested", "path");
+		await mkdir(nestedDir, { recursive: true });
+		const rootSessionBranch = join(tempDir, ".overstory", "session-branch.txt");
+		await rm(rootSessionBranch, { force: true });
+
+		process.chdir(nestedDir);
+		await initCommand(["--ensure"]);
+
+		expect(await Bun.file(rootSessionBranch).exists()).toBe(true);
+		expect(await Bun.file(join(nestedDir, ".overstory", "config.yaml")).exists()).toBe(false);
+	});
+
+	test("does not update orchestrator runtime markers for non-orchestrator --agent", async () => {
+		await initCommand([]);
+
+		const rootSessionBranch = join(tempDir, ".overstory", "session-branch.txt");
+		await rm(rootSessionBranch, { force: true });
+
+		await initCommand(["--ensure", "--agent", "builder-1"]);
+		expect(await Bun.file(rootSessionBranch).exists()).toBe(false);
+
+		await initCommand(["--ensure", "--agent", "orchestrator"]);
+		expect(await Bun.file(rootSessionBranch).exists()).toBe(true);
 	});
 });

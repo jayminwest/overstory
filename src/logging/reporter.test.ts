@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { LogEvent } from "../types.ts";
+import { colorsEnabled } from "./color.ts";
 import { formatLogLine, printToConsole } from "./reporter.ts";
 
 // Helper to build a LogEvent with sensible defaults
@@ -108,10 +109,15 @@ describe("formatLogLine", () => {
 
 	test("contains ANSI escape codes in output", () => {
 		const result = formatLogLine(makeEvent());
-		// \x1b[ is the ANSI escape sequence prefix
-		expect(result).toContain("\x1b[");
-		// Reset sequence should appear at least once
-		expect(result).toContain("\x1b[0m");
+		if (colorsEnabled) {
+			// \x1b[ is the ANSI escape sequence prefix
+			expect(result).toContain("\x1b[");
+			// Reset sequence should appear at least once
+			expect(result).toContain("\x1b[0m");
+			return;
+		}
+
+		expect(result).not.toContain("\x1b[");
 	});
 
 	test("uses different ANSI color codes for different levels", () => {
@@ -120,11 +126,24 @@ describe("formatLogLine", () => {
 		const warnResult = formatLogLine(makeEvent({ level: "warn" }));
 		const errorResult = formatLogLine(makeEvent({ level: "error" }));
 
-		// Each level uses a distinct color: gray(90), blue(34), yellow(33), red(31)
-		expect(debugResult).toContain("\x1b[90m");
-		expect(infoResult).toContain("\x1b[34m");
-		expect(warnResult).toContain("\x1b[33m");
-		expect(errorResult).toContain("\x1b[31m");
+		if (colorsEnabled) {
+			// Each level uses a distinct color: gray(90), blue(34), yellow(33), red(31)
+			expect(debugResult).toContain("\x1b[90m");
+			expect(infoResult).toContain("\x1b[34m");
+			expect(warnResult).toContain("\x1b[33m");
+			expect(errorResult).toContain("\x1b[31m");
+			return;
+		}
+
+		// Color is disabled, but level labels should still be present.
+		expect(debugResult).toContain("DBG");
+		expect(infoResult).toContain("INF");
+		expect(warnResult).toContain("WRN");
+		expect(errorResult).toContain("ERR");
+		expect(debugResult).not.toContain("\x1b[");
+		expect(infoResult).not.toContain("\x1b[");
+		expect(warnResult).not.toContain("\x1b[");
+		expect(errorResult).not.toContain("\x1b[");
 	});
 
 	test("formats boolean data values via String()", () => {

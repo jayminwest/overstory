@@ -12,8 +12,8 @@ import {
 } from "./completions.ts";
 
 describe("COMMANDS array", () => {
-	it("should have exactly 29 commands", () => {
-		expect(COMMANDS).toHaveLength(29);
+	it("should have exactly 28 commands", () => {
+		expect(COMMANDS).toHaveLength(28);
 	});
 
 	it("should include all expected command names", () => {
@@ -21,7 +21,6 @@ describe("COMMANDS array", () => {
 		expect(names).toContain("agents");
 		expect(names).toContain("init");
 		expect(names).toContain("sling");
-		expect(names).toContain("prime");
 		expect(names).toContain("status");
 		expect(names).toContain("dashboard");
 		expect(names).toContain("inspect");
@@ -313,6 +312,7 @@ describe("Subcommands", () => {
 		const subNames = mail?.subcommands?.map((s) => s.name);
 		expect(subNames).toContain("send");
 		expect(subNames).toContain("check");
+		expect(subNames).toContain("wait");
 		expect(subNames).toContain("list");
 		expect(subNames).toContain("read");
 		expect(subNames).toContain("reply");

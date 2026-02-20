@@ -10,10 +10,32 @@ export type ModelAlias = "sonnet" | "opus" | "haiku";
 export type ModelRef = ModelAlias | (string & {});
 
 /** Configuration for a model provider. */
+export type ProviderRuntime = "codex" | "claude";
+
+/** Optional environment adaptation for a provider under a specific runtime. */
+export interface ProviderAdapter {
+	baseUrlEnv?: string;
+	authTokenTargetEnv?: string;
+	staticEnv?: Record<string, string>;
+	commandArgs?: string[];
+}
+
+/** Configuration for a model provider. */
 export interface ProviderConfig {
 	type: "native" | "gateway";
+	runtimes: ProviderRuntime[];
 	baseUrl?: string;
 	authTokenEnv?: string;
+	adapters?: Partial<Record<ProviderRuntime, ProviderAdapter>>;
+}
+
+/** Primary interactive CLI used for spawned agents. */
+export type CliBase = "claude" | "codex";
+
+/** Provider-qualified model profile alias. */
+export interface ModelProfile {
+	provider: string;
+	model: string;
 }
 
 // === Project Configuration ===
@@ -46,6 +68,10 @@ export interface OverstoryConfig {
 		aiResolveEnabled: boolean;
 		reimagineEnabled: boolean;
 	};
+	/** Optional runtime CLI base selection. Defaults to "claude" when omitted. */
+	cli?: {
+		base: CliBase;
+	};
 	providers: Record<string, ProviderConfig>;
 	watchdog: {
 		tier0Enabled: boolean; // Tier 0: Mechanical daemon (heartbeat, tmux/pid liveness)
@@ -56,7 +82,18 @@ export interface OverstoryConfig {
 		zombieThresholdMs: number; // When to kill
 		nudgeIntervalMs: number; // Time between progressive nudge stages (default 60_000)
 	};
+	/**
+	 * Per-role model overrides (keyed by role name, e.g. coordinator/monitor).
+	 * Optional `default` key applies to all roles when a role-specific override
+	 * is not provided.
+	 *
+	 * Validation:
+	 * - cli.base=claude -> values must be sonnet|opus|haiku
+	 * - cli.base=codex  -> values may be any non-empty model id string
+	 */
 	models: Partial<Record<string, ModelRef>>;
+	roleProfiles?: Partial<Record<Capability | "default", string[]>>;
+	modelProfiles?: Record<string, ModelProfile>;
 	logging: {
 		verbose: boolean;
 		redactSecrets: boolean;
@@ -274,6 +311,10 @@ export interface OverlayConfig {
 	baseDefinition: string;
 	/** Pre-fetched mulch expertise output to embed directly in the overlay. */
 	mulchExpertise?: string;
+	/** Output directory for the instruction overlay (defaults to ".claude"). */
+	instructionsDir?: string;
+	/** Output filename for the instruction overlay (defaults to "CLAUDE.md"). */
+	instructionsFile?: string;
 }
 
 // === Merge Queue ===

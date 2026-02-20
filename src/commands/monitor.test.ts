@@ -34,9 +34,9 @@ describe("buildMonitorBeacon", () => {
 		expect(beacon).toContain(today);
 	});
 
-	test("contains startup instruction: mulch prime", () => {
+	test("contains startup instruction: overstory init", () => {
 		const beacon = buildMonitorBeacon();
-		expect(beacon).toContain("mulch prime");
+		expect(beacon).toContain("overstory init");
 	});
 
 	test("contains startup instruction: overstory status --json", () => {
@@ -143,8 +143,11 @@ describe("monitorCommand", () => {
 	describe("tier2Enabled gate", () => {
 		let tempDir: string;
 		const originalCwd = process.cwd();
+		let originalGetuid: (() => number) | undefined;
 
 		beforeEach(async () => {
+			originalGetuid = process.getuid;
+			process.getuid = () => 1000;
 			process.chdir(originalCwd);
 			tempDir = await createTempGitRepo();
 			const overstoryDir = join(tempDir, ".overstory");
@@ -160,6 +163,7 @@ describe("monitorCommand", () => {
 		});
 
 		afterEach(async () => {
+			process.getuid = originalGetuid;
 			process.chdir(originalCwd);
 			await cleanupTempDir(tempDir);
 		});
@@ -175,6 +179,47 @@ describe("monitorCommand", () => {
 			} catch (err) {
 				if (err instanceof AgentError) {
 					expect(err.message).toContain("disabled");
+				} else {
+					throw err;
+				}
+			}
+		});
+
+		test("monitor start enforces root check when cli base is claude", async () => {
+			process.getuid = () => 0;
+			try {
+				await monitorCommand(["start"]);
+				expect(true).toBe(false);
+			} catch (err) {
+				if (err instanceof AgentError) {
+					expect(err.message).toContain("Cannot spawn agents as root");
+				} else {
+					throw err;
+				}
+			}
+		});
+
+		test("monitor start skips root check when cli base is codex", async () => {
+			process.getuid = () => 0;
+			await Bun.write(
+				join(tempDir, ".overstory", "config.yaml"),
+				[
+					"project:",
+					"  name: test-project",
+					`  root: ${tempDir}`,
+					"  canonicalBranch: main",
+					"cli:",
+					"  base: codex",
+				].join("\n"),
+			);
+
+			try {
+				await monitorCommand(["start"]);
+				expect(true).toBe(false);
+			} catch (err) {
+				if (err instanceof AgentError) {
+					expect(err.message).toContain("disabled");
+					expect(err.message).not.toContain("Cannot spawn agents as root");
 				} else {
 					throw err;
 				}

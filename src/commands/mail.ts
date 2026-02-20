@@ -1,5 +1,5 @@
 /**
- * CLI command: overstory mail send/check/list/read/reply
+ * CLI command: overstory mail send/check/wait/list/read/reply/purge
  *
  * Parses CLI args and delegates to the mail client.
  * Supports --inject for hook context injection, --json for machine output,
@@ -100,6 +100,33 @@ function formatMessage(msg: MailMessage): string {
 function openStore(cwd: string) {
 	const dbPath = join(cwd, ".overstory", "mail.db");
 	return createMailStore(dbPath);
+}
+
+/**
+ * Best-effort session activity heartbeat for an agent.
+ *
+ * In codex mode, hooks may be disabled, so explicit mail operations are one of
+ * the few reliable activity signals. Updating lastActivity here prevents the
+ * watchdog from terminating active agents that are waiting on child mail.
+ */
+function touchAgentSession(cwd: string, agentName: string): void {
+	try {
+		const overstoryDir = join(cwd, ".overstory");
+		const { store } = openSessionStore(overstoryDir);
+		try {
+			const session = store.getByName(agentName);
+			if (!session) return;
+			if (session.state === "zombie" || session.state === "completed") return;
+			store.updateLastActivity(agentName);
+			if (session.state === "booting" || session.state === "stalled") {
+				store.updateState(agentName, "working");
+			}
+		} finally {
+			store.close();
+		}
+	} catch {
+		// Non-fatal: mail handling must continue even if heartbeat update fails.
+	}
 }
 
 // === Pending Nudge Markers ===
@@ -255,6 +282,43 @@ function openClient(cwd: string) {
 	return client;
 }
 
+/**
+ * Resolve the agent identity for inbox operations.
+ *
+ * Priority:
+ * 1. Explicit --agent flag
+ * 2. OVERSTORY_AGENT_NAME environment variable (agent sessions)
+ * 3. "orchestrator" fallback (local/manual usage)
+ */
+function resolveAgentName(args: string[]): string {
+	const explicitAgent = getFlag(args, "--agent");
+	if (explicitAgent?.trim()) {
+		return explicitAgent.trim();
+	}
+	const envAgent = process.env.OVERSTORY_AGENT_NAME?.trim();
+	if (envAgent) {
+		return envAgent;
+	}
+	return "orchestrator";
+}
+
+/**
+ * Resolve the current capability for an agent, if session data is available.
+ */
+function resolveAgentCapability(cwd: string, agentName: string): string | null {
+	try {
+		const overstoryDir = join(cwd, ".overstory");
+		const { store } = openSessionStore(overstoryDir);
+		try {
+			return store.getByName(agentName)?.capability ?? null;
+		} finally {
+			store.close();
+		}
+	} catch {
+		return null;
+	}
+}
+
 /** overstory mail send */
 async function handleSend(args: string[], cwd: string): Promise<void> {
 	const to = getFlag(args, "--to");
@@ -282,6 +346,9 @@ async function handleSend(args: string[], cwd: string): Promise<void> {
 
 	const type = rawType as MailMessage["type"];
 	const priority = rawPriority as MailMessage["priority"];
+
+	// Treat outbound mail as agent activity (best-effort).
+	touchAgentSession(cwd, from);
 
 	// Validate JSON payload if provided
 	let payload: string | undefined;
@@ -508,7 +575,7 @@ async function handleSend(args: string[], cwd: string): Promise<void> {
 
 /** overstory mail check */
 async function handleCheck(args: string[], cwd: string): Promise<void> {
-	const agent = getFlag(args, "--agent") ?? "orchestrator";
+	const agent = resolveAgentName(args);
 	const inject = hasFlag(args, "--inject");
 	const json = hasFlag(args, "--json");
 	const debounceFlag = getFlag(args, "--debounce");
@@ -534,6 +601,9 @@ async function handleCheck(args: string[], cwd: string): Promise<void> {
 			return;
 		}
 	}
+
+	// Treat inbox polling as activity (best-effort).
+	touchAgentSession(cwd, agent);
 
 	const client = openClient(cwd);
 	try {
@@ -571,6 +641,210 @@ async function handleCheck(args: string[], cwd: string): Promise<void> {
 		// Record this check for debounce tracking (only if debounce is enabled)
 		if (debounceMs !== undefined) {
 			await recordMailCheck(cwd, agent);
+		}
+	} finally {
+		client.close();
+	}
+}
+
+interface MailWaitResult {
+	status: "message" | "timeout" | "cancelled" | "nudged";
+	messages: MailMessage[];
+	waitedMs: number;
+	polls: number;
+	cancelFile: string | null;
+	nudge: PendingNudge | null;
+}
+
+interface MailWaitOptions {
+	cwd: string;
+	agent: string;
+	timeoutMs: number;
+	initialPollMs: number;
+	maxPollMs: number;
+	backoff: number;
+	cancelFile: string | null;
+	wakeOnPendingNudge: boolean;
+}
+
+/**
+ * Wait for mailbox activity with timeout/backoff/cancellation controls.
+ *
+ * This powers child-await loops used by coordinator/lead style flows where
+ * we want efficient blocking instead of ad hoc busy checks.
+ */
+async function waitForMail(
+	client: ReturnType<typeof openClient>,
+	options: MailWaitOptions,
+): Promise<MailWaitResult> {
+	const startedAt = Date.now();
+	let pollMs = options.initialPollMs;
+	let polls = 0;
+
+	// Seed heartbeat immediately before entering the wait loop.
+	touchAgentSession(options.cwd, options.agent);
+
+	while (true) {
+		if (options.cancelFile) {
+			const file = Bun.file(options.cancelFile);
+			if (await file.exists()) {
+				return {
+					status: "cancelled",
+					messages: [],
+					waitedMs: Date.now() - startedAt,
+					polls,
+					cancelFile: options.cancelFile,
+					nudge: null,
+				};
+			}
+		}
+
+		const pendingNudge = options.wakeOnPendingNudge
+			? await readAndClearPendingNudge(options.cwd, options.agent)
+			: null;
+		const messages = client.check(options.agent);
+		polls += 1;
+		touchAgentSession(options.cwd, options.agent);
+
+		if (messages.length > 0) {
+			return {
+				status: "message",
+				messages,
+				waitedMs: Date.now() - startedAt,
+				polls,
+				cancelFile: options.cancelFile,
+				nudge: pendingNudge,
+			};
+		}
+
+		if (pendingNudge !== null) {
+			return {
+				status: "nudged",
+				messages: [],
+				waitedMs: Date.now() - startedAt,
+				polls,
+				cancelFile: options.cancelFile,
+				nudge: pendingNudge,
+			};
+		}
+
+		const elapsedMs = Date.now() - startedAt;
+		if (elapsedMs >= options.timeoutMs) {
+			return {
+				status: "timeout",
+				messages: [],
+				waitedMs: elapsedMs,
+				polls,
+				cancelFile: options.cancelFile,
+				nudge: null,
+			};
+		}
+
+		const remainingMs = options.timeoutMs - elapsedMs;
+		const sleepMs = Math.min(pollMs, remainingMs);
+		await Bun.sleep(sleepMs);
+		pollMs = Math.min(
+			options.maxPollMs,
+			Math.max(options.initialPollMs, Math.floor(pollMs * options.backoff)),
+		);
+	}
+}
+
+/**
+ * overstory mail wait
+ *
+ * Long-poll helper for agents awaiting child completion/status mail without
+ * busy loops. Supports timeout, exponential backoff, and cancellation marker.
+ */
+async function handleWait(args: string[], cwd: string): Promise<void> {
+	const agent = resolveAgentName(args);
+	const json = hasFlag(args, "--json");
+	const timeoutFlag = getFlag(args, "--timeout-ms") ?? getFlag(args, "--timeout");
+	const pollFlag = getFlag(args, "--poll-ms") ?? getFlag(args, "--poll");
+	const maxPollFlag = getFlag(args, "--max-poll-ms");
+	const backoffFlag = getFlag(args, "--backoff");
+	const cancelFile = getFlag(args, "--cancel-file") ?? null;
+
+	const timeoutMs = timeoutFlag ? Number.parseInt(timeoutFlag, 10) : 300_000;
+	const initialPollMs = pollFlag ? Number.parseInt(pollFlag, 10) : 1_000;
+	const maxPollMs = maxPollFlag ? Number.parseInt(maxPollFlag, 10) : 10_000;
+	const backoff = backoffFlag ? Number.parseFloat(backoffFlag) : 1.5;
+
+	if (Number.isNaN(timeoutMs) || timeoutMs < 0) {
+		throw new ValidationError("--timeout-ms must be a non-negative integer", {
+			field: "timeout-ms",
+			value: timeoutFlag,
+		});
+	}
+	if (Number.isNaN(initialPollMs) || initialPollMs <= 0) {
+		throw new ValidationError("--poll-ms must be a positive integer", {
+			field: "poll-ms",
+			value: pollFlag,
+		});
+	}
+	if (Number.isNaN(maxPollMs) || maxPollMs <= 0) {
+		throw new ValidationError("--max-poll-ms must be a positive integer", {
+			field: "max-poll-ms",
+			value: maxPollFlag,
+		});
+	}
+	if (maxPollMs < initialPollMs) {
+		throw new ValidationError("--max-poll-ms must be >= --poll-ms", {
+			field: "max-poll-ms",
+			value: maxPollFlag,
+		});
+	}
+	if (Number.isNaN(backoff) || backoff < 1) {
+		throw new ValidationError("--backoff must be a number >= 1", {
+			field: "backoff",
+			value: backoffFlag,
+		});
+	}
+
+	const capability = resolveAgentCapability(cwd, agent);
+	const wakeOnPendingNudge =
+		capability === "coordinator" || capability === "lead" || agent === "coordinator";
+
+	const client = openClient(cwd);
+	try {
+		const result = await waitForMail(client, {
+			cwd,
+			agent,
+			timeoutMs,
+			initialPollMs,
+			maxPollMs,
+			backoff,
+			cancelFile,
+			wakeOnPendingNudge,
+		});
+		if (json) {
+			process.stdout.write(`${JSON.stringify(result)}\n`);
+			return;
+		}
+		if (result.status === "cancelled") {
+			process.stdout.write(
+				`Mail wait cancelled for ${agent} (${result.waitedMs}ms, ${result.polls} polls).\n`,
+			);
+			return;
+		}
+		if (result.status === "timeout") {
+			process.stdout.write(`No new messages (timed out after ${result.waitedMs}ms).\n`);
+			return;
+		}
+		if (result.nudge !== null) {
+			process.stdout.write(
+				`📢 Wake event: ${result.nudge.reason} from ${result.nudge.from} — "${result.nudge.subject}"\n\n`,
+			);
+		}
+		if (result.status === "nudged") {
+			process.stdout.write(`No unread messages yet for ${agent}. Mail wait woke on nudge.\n`);
+			return;
+		}
+		process.stdout.write(
+			`📬 ${result.messages.length} new message${result.messages.length === 1 ? "" : "s"}:\n\n`,
+		);
+		for (const msg of result.messages) {
+			process.stdout.write(`${formatMessage(msg)}\n\n`);
 		}
 	} finally {
 		client.close();
@@ -633,6 +907,7 @@ function handleReply(args: string[], cwd: string): void {
 	const id = positional[0];
 	const body = getFlag(args, "--body");
 	const from = getFlag(args, "--agent") ?? getFlag(args, "--from") ?? "orchestrator";
+	touchAgentSession(cwd, from);
 
 	if (!id) {
 		throw new ValidationError("Message ID is required for mail reply", { field: "id" });
@@ -715,6 +990,9 @@ Subcommands:
                   escalation, health_check, dispatch, assign (protocol)
   check    Check inbox (unread messages)
              [--agent <name>] [--inject] [--json]
+  wait     Long-poll inbox until message, timeout, or cancellation
+             [--agent <name>] [--timeout-ms <ms>] [--poll-ms <ms>]
+             [--max-poll-ms <ms>] [--backoff <factor>] [--cancel-file <path>] [--json]
   list     List messages with filters
              [--from <name>] [--to <name>] [--agent <name> (alias for --to)]
              [--unread] [--json]
@@ -751,6 +1029,9 @@ export async function mailCommand(args: string[]): Promise<void> {
 		case "check":
 			await handleCheck(subArgs, root);
 			break;
+		case "wait":
+			await handleWait(subArgs, root);
+			break;
 		case "list":
 			handleList(subArgs, root);
 			break;
@@ -765,7 +1046,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 			break;
 		default:
 			throw new MailError(
-				`Unknown mail subcommand: ${subcommand ?? "(none)"}. Use: send, check, list, read, reply, purge`,
+				`Unknown mail subcommand: ${subcommand ?? "(none)"}. Use: send, check, wait, list, read, reply, purge`,
 			);
 	}
 }

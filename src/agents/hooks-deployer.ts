@@ -17,19 +17,6 @@ const NON_IMPLEMENTATION_CAPABILITIES = new Set([
 ]);
 
 /**
- * Capabilities that coordinate work and need git add/commit for syncing
- * beads, mulch, and other metadata — but must NOT git push.
- */
-const COORDINATION_CAPABILITIES = new Set(["coordinator", "supervisor", "monitor"]);
-
-/**
- * Additional safe Bash prefixes for coordination capabilities.
- * Allows git add/commit for beads sync, mulch records, etc.
- * git push remains blocked via DANGEROUS_BASH_PATTERNS.
- */
-const COORDINATION_SAFE_PREFIXES = ["git add", "git commit"];
-
-/**
  * Claude Code native team/task tools that bypass overstory orchestration.
  * All overstory agents must use `overstory sling` for delegation, not these.
  */
@@ -420,7 +407,6 @@ export function getBashPathBoundaryGuards(): HookEntry[] {
  * Non-implementation capabilities (scout, reviewer, lead, coordinator, supervisor, monitor) get:
  * - Write, Edit, NotebookEdit tool blocks
  * - Bash file-modification command guards (sed -i, echo >, mv, rm, etc.)
- * - Coordination capabilities (coordinator, supervisor) get git add/commit whitelisted
  *
  * Implementation capabilities (builder, merger) get:
  * - Bash path boundary guards (validates absolute paths stay in worktree)
@@ -450,14 +436,12 @@ export function getCapabilityGuards(capability: string): HookEntry[] {
 		);
 		guards.push(...toolGuards);
 
-		// Coordination capabilities get git add/commit whitelisted for beads/mulch sync
-		const extraSafe = COORDINATION_CAPABILITIES.has(capability) ? COORDINATION_SAFE_PREFIXES : [];
 		const bashFileGuard: HookEntry = {
 			matcher: "Bash",
 			hooks: [
 				{
 					type: "command",
-					command: buildBashFileGuardScript(capability, extraSafe),
+					command: buildBashFileGuardScript(capability),
 				},
 			],
 		};

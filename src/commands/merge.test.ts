@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ValidationError } from "../errors.ts";
@@ -32,18 +32,30 @@ describe("mergeCommand", () => {
 	/**
 	 * Setup helper: Create .overstory/ dir and write config.yaml with project canonicalBranch.
 	 */
-	async function setupProject(dir: string, canonicalBranch: string): Promise<void> {
+	async function setupProject(
+		dir: string,
+		canonicalBranch: string,
+		options?: {
+			aiResolveEnabled?: boolean;
+			reimagineEnabled?: boolean;
+			cliBase?: "claude" | "codex";
+		},
+	): Promise<void> {
 		const overstoryDir = join(dir, ".overstory");
 		await mkdir(overstoryDir);
+
+		const aiResolveEnabled = options?.aiResolveEnabled ?? false;
+		const reimagineEnabled = options?.reimagineEnabled ?? false;
+		const cliBase = options?.cliBase;
 
 		const configYaml = `project:
   canonicalBranch: ${canonicalBranch}
   root: ${dir}
 
 merge:
-  aiResolveEnabled: false
-  reimagineEnabled: false
-`;
+  aiResolveEnabled: ${aiResolveEnabled}
+  reimagineEnabled: ${reimagineEnabled}
+${cliBase ? `\ncli:\n  base: ${cliBase}\n` : ""}`;
 		await Bun.write(join(overstoryDir, "config.yaml"), configYaml);
 	}
 
@@ -61,6 +73,40 @@ merge:
 		await runGitInDir(dir, ["checkout", "-b", branchName]);
 		await commitFile(dir, `src/${branchName}.ts`, "feature content");
 		await runGitInDir(dir, ["checkout", defaultBranch]);
+	}
+
+	async function commitBinaryFile(
+		dir: string,
+		filePath: string,
+		content: Uint8Array,
+		message: string,
+	): Promise<void> {
+		await Bun.write(join(dir, filePath), content);
+		await runGitInDir(dir, ["add", filePath]);
+		await runGitInDir(dir, ["commit", "-m", message]);
+	}
+
+	async function createBinaryConflictBranch(dir: string, branchName: string): Promise<void> {
+		const binaryPath = "src/conflict.bin";
+		await mkdir(join(dir, "src"), { recursive: true });
+
+		await commitBinaryFile(dir, binaryPath, new Uint8Array([0, 1, 2, 3]), "add binary base");
+
+		await runGitInDir(dir, ["checkout", "-b", branchName]);
+		await commitBinaryFile(
+			dir,
+			binaryPath,
+			new Uint8Array([11, 12, 13, 14]),
+			"update binary on feature",
+		);
+
+		await runGitInDir(dir, ["checkout", defaultBranch]);
+		await commitBinaryFile(
+			dir,
+			binaryPath,
+			new Uint8Array([21, 22, 23, 24]),
+			"update binary on default",
+		);
 	}
 
 	describe("help and validation", () => {
@@ -665,6 +711,108 @@ merge:
 			// Verify incoming (feature branch) content wins
 			const sharedFile = await Bun.file(join(repoDir, "src/shared.ts")).text();
 			expect(sharedFile).toBe("feature branch content");
+		});
+
+		test("codex mode skips Claude AI tiers even when merge.aiResolveEnabled is true", async () => {
+			await setupProject(repoDir, defaultBranch, {
+				aiResolveEnabled: true,
+				reimagineEnabled: false,
+				cliBase: "codex",
+			});
+			const branchName = "overstory/codex/bead-binary";
+			await createBinaryConflictBranch(repoDir, branchName);
+
+			const originalSpawn = Bun.spawn;
+			let claudeCalled = false;
+			const selectiveMock = (...args: unknown[]): ReturnType<typeof Bun.spawn> => {
+				const [cmd, options] = args as [string[] | { cmd: string[] }, { cwd?: string } | undefined];
+				const cmdArray = Array.isArray(cmd) ? cmd : cmd.cmd;
+				if (!cmdArray) {
+					return originalSpawn(...(args as Parameters<typeof Bun.spawn>));
+				}
+				if (cmdArray[0] === "claude") {
+					claudeCalled = true;
+					return originalSpawn(["sh", "-c", "echo 'mock claude failure' 1>&2; exit 1"], {
+						cwd: options?.cwd,
+						stdout: "pipe",
+						stderr: "pipe",
+					});
+				}
+				return originalSpawn(...(args as Parameters<typeof Bun.spawn>));
+			};
+			const spawnSpy = spyOn(Bun, "spawn").mockImplementation(
+				selectiveMock as unknown as typeof Bun.spawn,
+			);
+
+			let output = "";
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (chunk: unknown): boolean => {
+				output += String(chunk);
+				return true;
+			};
+
+			try {
+				await expect(mergeCommand(["--branch", branchName, "--json"])).rejects.toThrow();
+			} finally {
+				process.stdout.write = originalWrite;
+				spawnSpy.mockRestore();
+			}
+
+			expect(claudeCalled).toBe(false);
+			const parsed = JSON.parse(output);
+			expect(parsed.success).toBe(false);
+			expect(parsed.tier).toBe("auto-resolve");
+		});
+
+		test("claude mode still attempts Claude AI tier when merge.aiResolveEnabled is true", async () => {
+			await setupProject(repoDir, defaultBranch, {
+				aiResolveEnabled: true,
+				reimagineEnabled: false,
+				cliBase: "claude",
+			});
+			const branchName = "overstory/claude/bead-binary";
+			await createBinaryConflictBranch(repoDir, branchName);
+
+			const originalSpawn = Bun.spawn;
+			let claudeCalled = false;
+			const selectiveMock = (...args: unknown[]): ReturnType<typeof Bun.spawn> => {
+				const [cmd, options] = args as [string[] | { cmd: string[] }, { cwd?: string } | undefined];
+				const cmdArray = Array.isArray(cmd) ? cmd : cmd.cmd;
+				if (!cmdArray) {
+					return originalSpawn(...(args as Parameters<typeof Bun.spawn>));
+				}
+				if (cmdArray[0] === "claude") {
+					claudeCalled = true;
+					return originalSpawn(["sh", "-c", "echo 'mock claude failure' 1>&2; exit 1"], {
+						cwd: options?.cwd,
+						stdout: "pipe",
+						stderr: "pipe",
+					});
+				}
+				return originalSpawn(...(args as Parameters<typeof Bun.spawn>));
+			};
+			const spawnSpy = spyOn(Bun, "spawn").mockImplementation(
+				selectiveMock as unknown as typeof Bun.spawn,
+			);
+
+			let output = "";
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (chunk: unknown): boolean => {
+				output += String(chunk);
+				return true;
+			};
+
+			try {
+				await expect(mergeCommand(["--branch", branchName, "--json"])).rejects.toThrow();
+			} finally {
+				process.stdout.write = originalWrite;
+				spawnSpy.mockRestore();
+			}
+
+			expect(claudeCalled).toBe(true);
+			const parsed = JSON.parse(output);
+			expect(parsed.success).toBe(false);
+			expect(parsed.tier).toBe("ai-resolve");
 		});
 	});
 });

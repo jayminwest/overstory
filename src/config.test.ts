@@ -65,6 +65,17 @@ agents:
 		expect(config.beads.enabled).toBe(true);
 	});
 
+	test("parses cli.base override", async () => {
+		await ensureOverstoryDir();
+		await writeConfig(`
+cli:
+  base: codex
+`);
+
+		const config = await loadConfig(tempDir);
+		expect(config.cli?.base).toBe("codex");
+	});
+
 	test("always sets project.root to the actual projectRoot", async () => {
 		await ensureOverstoryDir();
 		await writeConfig(`
@@ -224,17 +235,21 @@ watchdog:
 providers:
   openrouter:
     type: gateway
+    runtimes:
+      - codex
     baseUrl: https://openrouter.ai/api/v1
     authTokenEnv: OPENROUTER_API_KEY
 `);
 		const config = await loadConfig(tempDir);
 		expect(config.providers.openrouter).toEqual({
 			type: "gateway",
+			runtimes: ["codex"],
 			baseUrl: "https://openrouter.ai/api/v1",
 			authTokenEnv: "OPENROUTER_API_KEY",
 		});
 		// Default anthropic provider preserved via deep merge
-		expect(config.providers.anthropic).toEqual({ type: "native" });
+		expect(config.providers.anthropic).toEqual({ type: "native", runtimes: ["claude"] });
+		expect(config.providers.codex).toEqual({ type: "native", runtimes: ["codex"] });
 	});
 
 	test("config.local.yaml overrides provider settings", async () => {
@@ -246,12 +261,14 @@ providers:
 `);
 		await Bun.write(
 			join(tempDir, ".overstory", "config.local.yaml"),
-			`providers:\n  anthropic:\n    type: gateway\n    baseUrl: http://localhost:8080\n`,
+			`providers:\n  anthropic:\n    type: gateway\n    baseUrl: http://localhost:8080\n    authTokenEnv: ANTHROPIC_API_KEY\n`,
 		);
 		const config = await loadConfig(tempDir);
 		expect(config.providers.anthropic).toEqual({
 			type: "gateway",
+			runtimes: ["claude"],
 			baseUrl: "http://localhost:8080",
+			authTokenEnv: "ANTHROPIC_API_KEY",
 		});
 	});
 
@@ -261,7 +278,8 @@ providers:
 providers:
 `);
 		const config = await loadConfig(tempDir);
-		expect(config.providers.anthropic).toEqual({ type: "native" });
+		expect(config.providers.anthropic).toEqual({ type: "native", runtimes: ["claude"] });
+		expect(config.providers.codex).toEqual({ type: "native", runtimes: ["codex"] });
 	});
 
 	test("migrates deprecated watchdog tier1/tier2 keys to tier0/tier1", async () => {
@@ -355,6 +373,14 @@ mulch:
 		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
 	});
 
+	test("rejects invalid cli.base", async () => {
+		await writeConfig(`
+cli:
+  base: invalid
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
 	test("rejects zombieThresholdMs <= staleThresholdMs", async () => {
 		await writeConfig(`
 watchdog:
@@ -369,6 +395,224 @@ watchdog:
 watchdog:
   tier0Enabled: true
   tier0IntervalMs: 0
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects provider with missing runtimes", async () => {
+		await writeConfig(`
+providers:
+  openrouter:
+    type: native
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects provider with empty runtimes", async () => {
+		await writeConfig(`
+providers:
+  openrouter:
+    type: native
+    runtimes: []
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects provider with invalid runtime value", async () => {
+		await writeConfig(`
+providers:
+  openrouter:
+    type: native
+    runtimes:
+      - invalid
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects gateway provider without baseUrl", async () => {
+		await writeConfig(`
+providers:
+  openrouter:
+    type: gateway
+    runtimes:
+      - codex
+    authTokenEnv: OPENROUTER_API_KEY
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects gateway provider without authTokenEnv", async () => {
+		await writeConfig(`
+providers:
+  openrouter:
+    type: gateway
+    runtimes:
+      - codex
+    baseUrl: https://openrouter.ai/api/v1
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects adapter for undeclared runtime", async () => {
+		await writeConfig(`
+providers:
+  openrouter:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      claude:
+        staticEnv:
+          OPENAI_BASE_URL: https://openrouter.ai/api/v1
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects adapter authTokenTargetEnv without provider authTokenEnv", async () => {
+		await writeConfig(`
+providers:
+  codex:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      codex:
+        authTokenTargetEnv: OPENAI_API_KEY
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects adapter baseUrlEnv without provider baseUrl", async () => {
+		await writeConfig(`
+providers:
+  codex:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      codex:
+        baseUrlEnv: OPENAI_BASE_URL
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects adapter commandArgs when not an array", async () => {
+		await writeConfig(`
+providers:
+  codex:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      codex:
+        commandArgs: --dangerously-bypass-approvals-and-sandbox
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects adapter commandArgs with empty entries", async () => {
+		await writeConfig(`
+providers:
+  codex:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      codex:
+        commandArgs:
+          - ""
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("accepts valid modelProfiles and roleProfiles", async () => {
+		await writeConfig(`
+providers:
+  anthropic:
+    type: native
+    runtimes:
+      - claude
+modelProfiles:
+  default-claude:
+    provider: anthropic
+    model: sonnet
+roleProfiles:
+  default:
+    - default-claude
+  coordinator:
+    - default-claude
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.modelProfiles?.["default-claude"]).toEqual({
+			provider: "anthropic",
+			model: "sonnet",
+		});
+		expect(config.roleProfiles?.default).toEqual(["default-claude"]);
+	});
+
+	test("rejects roleProfiles when modelProfiles is empty", async () => {
+		await writeConfig(`
+roleProfiles:
+  default:
+    - default-claude
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects roleProfiles with unsupported key", async () => {
+		await writeConfig(`
+modelProfiles:
+  default-claude:
+    provider: anthropic
+    model: sonnet
+roleProfiles:
+  random:
+    - default-claude
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects empty roleProfiles alias arrays", async () => {
+		await writeConfig(`
+modelProfiles:
+  default-claude:
+    provider: anthropic
+    model: sonnet
+roleProfiles:
+  coordinator: []
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects unknown roleProfiles aliases", async () => {
+		await writeConfig(`
+modelProfiles:
+  default-claude:
+    provider: anthropic
+    model: sonnet
+roleProfiles:
+  coordinator:
+    - missing-alias
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects modelProfiles that reference unknown providers", async () => {
+		await writeConfig(`
+modelProfiles:
+  invalid:
+    provider: openrouter
+    model: gpt-5
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects modelProfiles with empty model values", async () => {
+		await writeConfig(`
+modelProfiles:
+  invalid:
+    provider: anthropic
+    model: ""
 `);
 		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
 	});
@@ -394,10 +638,33 @@ models:
 		expect(config.models.builder).toBe("opus");
 	});
 
-	test("rejects invalid model name in models section", async () => {
+	test("rejects invalid model name in models section when cli.base=claude", async () => {
 		await writeConfig(`
 models:
   coordinator: gpt4
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("accepts arbitrary model ids in codex mode", async () => {
+		await writeConfig(`
+cli:
+  base: codex
+models:
+  default: gpt-5
+  coordinator: o3
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.models.default).toBe("gpt-5");
+		expect(config.models.coordinator).toBe("o3");
+	});
+
+	test("rejects empty model ids in codex mode", async () => {
+		await writeConfig(`
+cli:
+  base: codex
+models:
+  coordinator: ""
 `);
 		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
 	});
@@ -516,15 +783,19 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_CONFIG.beads).toBeDefined();
 		expect(DEFAULT_CONFIG.mulch).toBeDefined();
 		expect(DEFAULT_CONFIG.merge).toBeDefined();
+		expect(DEFAULT_CONFIG.cli).toBeDefined();
 		expect(DEFAULT_CONFIG.providers).toBeDefined();
 		expect(DEFAULT_CONFIG.watchdog).toBeDefined();
 		expect(DEFAULT_CONFIG.models).toBeDefined();
+		expect(DEFAULT_CONFIG.roleProfiles).toBeDefined();
+		expect(DEFAULT_CONFIG.modelProfiles).toBeDefined();
 		expect(DEFAULT_CONFIG.logging).toBeDefined();
 	});
 
-	test("has default providers with anthropic native", () => {
+	test("has default providers with runtime mappings", () => {
 		expect(DEFAULT_CONFIG.providers).toBeDefined();
-		expect(DEFAULT_CONFIG.providers.anthropic).toEqual({ type: "native" });
+		expect(DEFAULT_CONFIG.providers.anthropic).toEqual({ type: "native", runtimes: ["claude"] });
+		expect(DEFAULT_CONFIG.providers.codex).toEqual({ type: "native", runtimes: ["codex"] });
 	});
 
 	test("has sensible default values", () => {
@@ -535,5 +806,6 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_CONFIG.watchdog.tier0IntervalMs).toBe(30_000);
 		expect(DEFAULT_CONFIG.watchdog.staleThresholdMs).toBe(300_000);
 		expect(DEFAULT_CONFIG.watchdog.zombieThresholdMs).toBe(600_000);
+		expect(DEFAULT_CONFIG.cli?.base).toBe("claude");
 	});
 });

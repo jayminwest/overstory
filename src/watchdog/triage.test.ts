@@ -1,12 +1,12 @@
 /**
  * Tests for Tier 1 AI-assisted triage.
  * classifyResponse and buildTriagePrompt are pure functions — tested directly.
- * triageAgent uses real filesystem (temp dirs). Claude spawn is expected to
- * fail in test environments, exercising the fallback-to-extend path.
- * spawnClaude is NOT mocked — we rely on it failing naturally in tests.
+ * triageAgent uses real filesystem (temp dirs). In codex mode, triage is
+ * deterministic "extend" without invoking Claude. In claude mode, fallback to
+ * "extend" is exercised when Claude spawn fails.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -157,8 +157,90 @@ describe("triageAgent", () => {
 			agentName: "test-agent",
 			root: tempRoot,
 			lastActivity: "2026-02-13T10:00:00Z",
+			cliBase: "claude",
 			timeoutMs: 500,
 		});
 		expect(result).toBe("extend");
+	});
+
+	test("returns 'extend' in codex mode without invoking Claude", async () => {
+		const timestamp = "2026-02-13T10-00-00";
+		const sessionLogPath = join(
+			tempRoot,
+			".overstory",
+			"logs",
+			"test-agent",
+			timestamp,
+			"session.log",
+		);
+
+		await Bun.write(sessionLogPath, "Agent started\nStill working...\n");
+
+		const spawnSpy = spyOn(Bun, "spawn");
+
+		try {
+			const result = await triageAgent({
+				agentName: "test-agent",
+				root: tempRoot,
+				lastActivity: "2026-02-13T10:00:00Z",
+				cliBase: "codex",
+			});
+			expect(result).toBe("extend");
+			expect(spawnSpy).not.toHaveBeenCalled();
+		} finally {
+			spawnSpy.mockRestore();
+		}
+	});
+
+	test("auto-detects codex mode from config and returns 'extend' without invoking Claude", async () => {
+		const configPath = join(tempRoot, ".overstory", "config.yaml");
+		await Bun.write(
+			configPath,
+			[
+				"project:",
+				"  name: triage-test",
+				`  root: ${tempRoot}`,
+				"  canonicalBranch: main",
+				"cli:",
+				"  base: codex",
+			].join("\n"),
+		);
+
+		const timestamp = "2026-02-13T10-00-00";
+		const sessionLogPath = join(
+			tempRoot,
+			".overstory",
+			"logs",
+			"test-agent",
+			timestamp,
+			"session.log",
+		);
+		await Bun.write(sessionLogPath, "Agent started\nStill working...\n");
+
+		const originalSpawn = Bun.spawn;
+		let claudeCalled = false;
+		const selectiveSpawn = (...args: unknown[]): ReturnType<typeof Bun.spawn> => {
+			const [cmd] = args as [string[] | { cmd: string[] }];
+			const cmdArray = Array.isArray(cmd) ? cmd : cmd.cmd;
+			if (cmdArray?.[0] === "claude") {
+				claudeCalled = true;
+			}
+			return originalSpawn(...(args as Parameters<typeof Bun.spawn>));
+		};
+		const spawnSpy = spyOn(Bun, "spawn").mockImplementation(
+			selectiveSpawn as unknown as typeof Bun.spawn,
+		);
+
+		try {
+			const result = await triageAgent({
+				agentName: "test-agent",
+				root: tempRoot,
+				lastActivity: "2026-02-13T10:00:00Z",
+			});
+			expect(result).toBe("extend");
+			expect(claudeCalled).toBe(false);
+		} finally {
+			spawnSpy.mockRestore();
+		}
 	});
 });

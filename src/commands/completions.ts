@@ -79,15 +79,6 @@ export const COMMANDS: readonly CommandDef[] = [
 		],
 	},
 	{
-		name: "prime",
-		desc: "Load context for orchestrator/agent",
-		flags: [
-			{ name: "--agent", desc: "Per-agent priming", takesValue: true },
-			{ name: "--compact", desc: "Less context (for PreCompact hook)" },
-			{ name: "--help", desc: "Show help" },
-		],
-	},
-	{
 		name: "status",
 		desc: "Show all active agents and project state",
 		flags: [
@@ -489,6 +480,31 @@ export const COMMANDS: readonly CommandDef[] = [
 				],
 			},
 			{
+				name: "wait",
+				desc: "Wait for inbox activity with timeout/backoff controls",
+				flags: [
+					{ name: "--agent", desc: "Agent name", takesValue: true },
+					{ name: "--timeout-ms", desc: "Timeout in milliseconds", takesValue: true },
+					{ name: "--poll-ms", desc: "Initial poll interval in milliseconds", takesValue: true },
+					{
+						name: "--max-poll-ms",
+						desc: "Maximum poll interval in milliseconds",
+						takesValue: true,
+					},
+					{
+						name: "--backoff",
+						desc: "Exponential backoff multiplier (>= 1)",
+						takesValue: true,
+					},
+					{
+						name: "--cancel-file",
+						desc: "Cancel wait when this file exists",
+						takesValue: true,
+					},
+					{ name: "--json", desc: "JSON output" },
+				],
+			},
+			{
 				name: "list",
 				desc: "List messages with filters",
 				flags: [
@@ -605,7 +621,7 @@ export function generateBash(): string {
 		"  local cur prev words cword",
 		"  _init_completion || return",
 		"",
-		"  local commands='init sling prime status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run'",
+		"  local commands='init sling status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run'",
 		"",
 		"  # Top-level completion",
 		"  if [[ $cword -eq 1 ]]; then",

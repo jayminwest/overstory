@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
 import type { AgentManifest, OverstoryConfig } from "../types.ts";
-import { createManifestLoader, resolveModel } from "./manifest.ts";
+import { createManifestLoader, resolveModel, resolveRoute } from "./manifest.ts";
 
 const VALID_MANIFEST = {
 	version: "1.0",
@@ -485,7 +485,7 @@ describe("createManifestLoader", () => {
 	});
 });
 
-describe("resolveModel", () => {
+describe("resolveRoute / resolveModel", () => {
 	const baseManifest: AgentManifest = {
 		version: "1.0",
 		agents: {
@@ -509,7 +509,13 @@ describe("resolveModel", () => {
 		capabilityIndex: { coordinate: ["coordinator"], monitor: ["monitor"] },
 	};
 
-	function makeConfig(models: OverstoryConfig["models"] = {}): OverstoryConfig {
+	function makeConfig(opts?: {
+		models?: OverstoryConfig["models"];
+		cliBase?: "claude" | "codex";
+		providers?: OverstoryConfig["providers"];
+		modelProfiles?: OverstoryConfig["modelProfiles"];
+		roleProfiles?: OverstoryConfig["roleProfiles"];
+	}): OverstoryConfig {
 		return {
 			project: { name: "test", root: "/tmp/test", canonicalBranch: "main" },
 			agents: {
@@ -523,9 +529,13 @@ describe("resolveModel", () => {
 			beads: { enabled: false },
 			mulch: { enabled: false, domains: [], primeFormat: "markdown" },
 			merge: { aiResolveEnabled: false, reimagineEnabled: false },
-			providers: {
-				anthropic: { type: "native" },
-			},
+			cli: { base: opts?.cliBase ?? "claude" },
+			providers:
+				opts?.providers ??
+				({
+					anthropic: { type: "native", runtimes: ["claude"] },
+					codex: { type: "native", runtimes: ["codex"] },
+				} as OverstoryConfig["providers"]),
 			watchdog: {
 				tier0Enabled: false,
 				tier0IntervalMs: 30000,
@@ -535,28 +545,215 @@ describe("resolveModel", () => {
 				zombieThresholdMs: 600000,
 				nudgeIntervalMs: 60000,
 			},
-			models,
+			models: opts?.models ?? {},
+			roleProfiles: opts?.roleProfiles ?? {},
+			modelProfiles: opts?.modelProfiles ?? {},
 			logging: { verbose: false, redactSecrets: true },
 		};
 	}
 
-	test("returns manifest model when no config override", () => {
-		const config = makeConfig();
+	test("profile precedence over models", () => {
+		const config = makeConfig({
+			models: { coordinator: "haiku" },
+			modelProfiles: {
+				coordProfile: {
+					provider: "anthropic",
+					model: "opus",
+				},
+			},
+			roleProfiles: {
+				coordinator: ["coordProfile"],
+			},
+		});
+
+		const route = resolveRoute(config, baseManifest, "coordinator", "haiku");
+
+		expect(route.model).toBe("opus");
+		expect(route.providerName).toBe("anthropic");
+		expect(route.selectedProfileAlias).toBe("coordProfile");
+		expect(route.source).toBe("roleProfiles.coordinator");
 		expect(resolveModel(config, baseManifest, "coordinator", "haiku")).toBe("opus");
 	});
 
-	test("config override takes precedence over manifest", () => {
-		const config = makeConfig({ coordinator: "sonnet" });
-		expect(resolveModel(config, baseManifest, "coordinator", "haiku")).toBe("sonnet");
+	test("default profile fallback", () => {
+		const config = makeConfig({
+			modelProfiles: {
+				defaultProfile: {
+					provider: "anthropic",
+					model: "sonnet",
+				},
+			},
+			roleProfiles: {
+				default: ["defaultProfile"],
+			},
+		});
+
+		const route = resolveRoute(config, baseManifest, "monitor", "haiku");
+		expect(route.model).toBe("sonnet");
+		expect(route.selectedProfileAlias).toBe("defaultProfile");
+		expect(route.source).toBe("roleProfiles.default");
 	});
 
-	test("falls back to default when role is not in manifest or config", () => {
-		const config = makeConfig();
-		expect(resolveModel(config, baseManifest, "unknown-role", "haiku")).toBe("haiku");
+	test("ordered alias resolution picks first valid alias", () => {
+		const config = makeConfig({
+			modelProfiles: {
+				codexOnly: {
+					provider: "codex",
+					model: "gpt-5.3-codex",
+				},
+				claudeFallback: {
+					provider: "anthropic",
+					model: "opus",
+				},
+			},
+			roleProfiles: {
+				coordinator: ["codexOnly", "claudeFallback"],
+			},
+		});
+
+		const route = resolveRoute(config, baseManifest, "coordinator", "haiku");
+		expect(route.model).toBe("opus");
+		expect(route.selectedProfileAlias).toBe("claudeFallback");
+		expect(route.providerName).toBe("anthropic");
 	});
 
-	test("config override works for roles not in manifest", () => {
-		const config = makeConfig({ supervisor: "opus" });
-		expect(resolveModel(config, baseManifest, "supervisor", "sonnet")).toBe("opus");
+	test("invalid alias chain throws when profiles are configured but none are valid", () => {
+		const config = makeConfig({
+			modelProfiles: {
+				missingProvider: {
+					provider: "not-configured",
+					model: "gpt-5.3-codex",
+				},
+				wrongRuntime: {
+					provider: "codex",
+					model: "gpt-5.3-codex",
+				},
+			},
+			roleProfiles: {
+				coordinator: ["missingProvider", "wrongRuntime"],
+			},
+		});
+
+		expect(() => resolveRoute(config, baseManifest, "coordinator", "haiku")).toThrow(
+			"No valid model profile alias",
+		);
+		expect(() => resolveRoute(config, baseManifest, "coordinator", "haiku")).toThrow(
+			"roleProfiles.coordinator",
+		);
+	});
+
+	test("legacy-only behavior unchanged", () => {
+		const config = makeConfig({
+			models: {
+				coordinator: "sonnet",
+				default: "haiku",
+			},
+		});
+
+		const roleRoute = resolveRoute(config, baseManifest, "coordinator", "opus");
+		expect(roleRoute.model).toBe("sonnet");
+		expect(roleRoute.providerName).toBeNull();
+		expect(roleRoute.selectedProfileAlias).toBeNull();
+		expect(roleRoute.env).toEqual({});
+		expect(roleRoute.cliArgs).toEqual([]);
+		expect(roleRoute.source).toBe("models.coordinator");
+
+		const defaultRoute = resolveRoute(config, baseManifest, "unknown-role", "opus");
+		expect(defaultRoute.model).toBe("haiku");
+		expect(defaultRoute.source).toBe("models.default");
+	});
+
+	test("codex runtime normalizes legacy models.<role> Claude alias to codex fallback", () => {
+		const config = makeConfig({
+			cliBase: "codex",
+			models: {
+				coordinator: "sonnet",
+			},
+		});
+
+		const route = resolveRoute(config, baseManifest, "coordinator", "gpt-5.3-codex");
+		expect(route.model).toBe("gpt-5");
+		expect(route.source).toBe("codex-final-fallback");
+	});
+
+	test("codex runtime normalizes legacy models.default Claude alias to codex fallback", () => {
+		const config = makeConfig({
+			cliBase: "codex",
+			models: {
+				default: "haiku",
+			},
+		});
+
+		const route = resolveRoute(config, baseManifest, "unknown-role", "gpt-5.3-codex");
+		expect(route.model).toBe("gpt-5");
+		expect(route.source).toBe("codex-final-fallback");
+	});
+
+	test("codex final fallback preserved", () => {
+		const config = makeConfig({ cliBase: "codex" });
+		const route = resolveRoute(config, baseManifest, "coordinator", "opus");
+
+		expect(route.model).toBe("gpt-5");
+		expect(route.providerName).toBeNull();
+		expect(route.selectedProfileAlias).toBeNull();
+		expect(route.env).toEqual({});
+		expect(route.cliArgs).toEqual([]);
+		expect(route.source).toBe("codex-final-fallback");
+		expect(resolveModel(config, baseManifest, "coordinator", "opus")).toBe("gpt-5");
+	});
+
+	test("route env/provider fields are set for profile-selected routes", () => {
+		const previousToken = process.env.OPENROUTER_API_KEY;
+		process.env.OPENROUTER_API_KEY = "token-test";
+
+		try {
+			const config = makeConfig({
+				cliBase: "codex",
+				providers: {
+					codex: { type: "native", runtimes: ["codex"] },
+					openrouter: {
+						type: "gateway",
+						runtimes: ["codex"],
+						baseUrl: "https://openrouter.ai/api/v1",
+						authTokenEnv: "OPENROUTER_API_KEY",
+						adapters: {
+							codex: {
+								authTokenTargetEnv: "OPENAI_API_KEY",
+								baseUrlEnv: "OPENAI_BASE_URL",
+								staticEnv: { OPENAI_ORG_ID: "org-overstory" },
+								commandArgs: ["--dangerously-bypass-approvals-and-sandbox"],
+							},
+						},
+					},
+				},
+				modelProfiles: {
+					routerFast: {
+						provider: "openrouter",
+						model: "openai/gpt-5",
+					},
+				},
+				roleProfiles: {
+					monitor: ["routerFast"],
+				},
+			});
+
+			const route = resolveRoute(config, baseManifest, "monitor", "sonnet");
+			expect(route.model).toBe("openai/gpt-5");
+			expect(route.providerName).toBe("openrouter");
+			expect(route.selectedProfileAlias).toBe("routerFast");
+			expect(route.source).toBe("roleProfiles.monitor");
+			expect(route.env).toEqual({
+				OPENAI_API_KEY: "token-test",
+				OPENAI_BASE_URL: "https://openrouter.ai/api/v1",
+				OPENAI_ORG_ID: "org-overstory",
+			});
+			expect(route.cliArgs).toEqual(["--dangerously-bypass-approvals-and-sandbox"]);
+		} finally {
+			if (previousToken === undefined) {
+				delete process.env.OPENROUTER_API_KEY;
+			} else {
+				process.env.OPENROUTER_API_KEY = previousToken;
+			}
+		}
 	});
 });

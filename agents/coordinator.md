@@ -16,7 +16,7 @@ You are the top-level decision-maker for automated work. When a human gives you 
   - `bd create`, `bd show`, `bd ready`, `bd update`, `bd close`, `bd list`, `bd sync` (full beads lifecycle)
   - `overstory sling` (spawn lead agents into worktrees)
   - `overstory status` (monitor active agents and worktrees)
-  - `overstory mail send`, `overstory mail check`, `overstory mail list`, `overstory mail read`, `overstory mail reply` (full mail protocol)
+  - `overstory mail send`, `overstory mail check`, `overstory mail wait`, `overstory mail list`, `overstory mail read`, `overstory mail reply` (full mail protocol)
   - `overstory nudge <agent> [message]` (poke stalled leads)
   - `overstory group create`, `overstory group status`, `overstory group add`, `overstory group remove`, `overstory group list` (task group management)
   - `overstory merge --branch <name>`, `overstory merge --all`, `overstory merge --dry-run` (merge completed branches)
@@ -48,7 +48,8 @@ Coordinator (you, depth 0)
 
 ### Communication
 - **Send typed mail:** `overstory mail send --to <agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority>`
-- **Check inbox:** `overstory mail check` (unread messages)
+- **Check inbox (short poll):** `overstory mail check --agent $OVERSTORY_AGENT_NAME` (one-shot unread check)
+- **Wait for child updates (long poll):** `overstory mail wait --agent $OVERSTORY_AGENT_NAME --timeout-ms 300000 --poll-ms 1000 --max-poll-ms 10000`
 - **List mail:** `overstory mail list [--from <agent>] [--to <agent>] [--unread]`
 - **Read message:** `overstory mail read <id>`
 - **Reply in thread:** `overstory mail reply <id> --body "<reply>"`
@@ -103,7 +104,8 @@ Coordinator (you, depth 0)
    overstory group create '<batch-name>' <bead-id-1> <bead-id-2> [<bead-id-3>...]
    ```
 8. **Monitor the batch.** Enter a monitoring loop:
-   - `overstory mail check` -- process incoming messages from leads.
+   - `overstory mail check --agent $OVERSTORY_AGENT_NAME` -- one-shot processing of incoming messages.
+   - `overstory mail wait --agent $OVERSTORY_AGENT_NAME --timeout-ms 300000 --poll-ms 1000 --max-poll-ms 10000` -- block efficiently when waiting for the next lead event.
    - `overstory status` -- check agent states (booting, working, completed, zombie).
    - `overstory group status <group-id>` -- check batch progress.
    - Handle each message by type (see Escalation Routing below).
@@ -238,7 +240,7 @@ Receive the objective. Execute immediately. Do not ask for confirmation, do not 
 
 ## Overlay
 
-Unlike other agent types, the coordinator does **not** receive a per-task overlay CLAUDE.md via `overstory sling`. The coordinator runs at the project root and receives its objectives through:
+Unlike other agent types, the coordinator does **not** receive a per-task instruction overlay (`AGENTS.md`/`.claude/CLAUDE.md`) via `overstory sling`. The coordinator runs at the project root and receives its objectives through:
 
 1. **Direct human instruction** -- the human tells you what to build or fix.
 2. **Mail** -- leads send you progress reports, completion signals, and escalations.

@@ -5,6 +5,7 @@
  */
 
 import { join } from "node:path";
+import { getInstructionLayout, resolveCliBase } from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { openSessionStore } from "../sessions/compat.ts";
@@ -42,16 +43,20 @@ export interface DiscoveredAgent {
 }
 
 /**
- * Extract file scope from an agent's overlay CLAUDE.md.
+ * Extract file scope from an agent's overlay instructions document.
  * Returns empty array if overlay doesn't exist, has no file scope restrictions,
  * or can't be read.
  *
  * @param worktreePath - Absolute path to the agent's worktree
+ * @param instructionsPath - Relative overlay path (e.g. ".claude/CLAUDE.md" or "AGENTS.md")
  * @returns Array of file paths (relative to worktree root)
  */
-export async function extractFileScope(worktreePath: string): Promise<string[]> {
+export async function extractFileScope(
+	worktreePath: string,
+	instructionsPath = ".claude/CLAUDE.md",
+): Promise<string[]> {
 	try {
-		const overlayPath = join(worktreePath, ".claude", "CLAUDE.md");
+		const overlayPath = join(worktreePath, instructionsPath);
 		const overlayFile = Bun.file(overlayPath);
 
 		if (!(await overlayFile.exists())) {
@@ -109,7 +114,7 @@ export async function extractFileScope(worktreePath: string): Promise<string[]> 
  */
 export async function discoverAgents(
 	root: string,
-	opts?: { capability?: string; includeAll?: boolean },
+	opts?: { capability?: string; includeAll?: boolean; instructionsPath?: string },
 ): Promise<DiscoveredAgent[]> {
 	const overstoryDir = join(root, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
@@ -126,7 +131,6 @@ export async function discoverAgents(
 		// Extract file scopes for each agent
 		const agents: DiscoveredAgent[] = await Promise.all(
 			filteredSessions.map(async (session) => {
-				const fileScope = await extractFileScope(session.worktreePath);
 				return {
 					agentName: session.agentName,
 					capability: session.capability,
@@ -135,7 +139,10 @@ export async function discoverAgents(
 					branchName: session.branchName,
 					parentAgent: session.parentAgent,
 					depth: session.depth,
-					fileScope,
+					fileScope: await extractFileScope(
+						session.worktreePath,
+						opts?.instructionsPath ?? ".claude/CLAUDE.md",
+					),
 					startedAt: session.startedAt,
 					lastActivity: session.lastActivity,
 				};
@@ -244,8 +251,13 @@ async function discoverCommand(args: string[]): Promise<void> {
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
 	const root = config.project.root;
+	const instructionLayout = getInstructionLayout(resolveCliBase(config));
 
-	const agents = await discoverAgents(root, { capability, includeAll });
+	const agents = await discoverAgents(root, {
+		capability,
+		includeAll,
+		instructionsPath: instructionLayout.startupPath,
+	});
 
 	if (json) {
 		process.stdout.write(`${JSON.stringify(agents, null, "\t")}\n`);

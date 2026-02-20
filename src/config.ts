@@ -1,10 +1,11 @@
 import { dirname, join, resolve } from "node:path";
 import { ConfigError, ValidationError } from "./errors.ts";
-import type { OverstoryConfig } from "./types.ts";
+import type { OverstoryConfig, ProviderRuntime } from "./types.ts";
+import { SUPPORTED_CAPABILITIES } from "./types.ts";
 
 /**
  * Default configuration with all fields populated.
- * Used as the base; file-loaded values are merged on top.
+ * Used as the base; loaded file values are merged on top.
  */
 export const DEFAULT_CONFIG: OverstoryConfig = {
 	project: {
@@ -34,8 +35,12 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		aiResolveEnabled: true,
 		reimagineEnabled: false,
 	},
+	cli: {
+		base: "claude",
+	},
 	providers: {
-		anthropic: { type: "native" },
+		anthropic: { type: "native", runtimes: ["claude"] },
+		codex: { type: "native", runtimes: ["codex"] },
 	},
 	watchdog: {
 		tier0Enabled: true, // Tier 0: Mechanical daemon
@@ -47,6 +52,8 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		nudgeIntervalMs: 60_000, // 1 minute between progressive nudge stages
 	},
 	models: {},
+	roleProfiles: {},
+	modelProfiles: {},
 	logging: {
 		verbose: false,
 		redactSecrets: true,
@@ -420,14 +427,350 @@ function validateConfig(config: OverstoryConfig): void {
 		});
 	}
 
-	// models: each value must be a valid model name
-	const validModels = ["sonnet", "opus", "haiku"];
+	// cli.base must be one of the supported runtime CLIs when configured
+	const cliBase = config.cli?.base ?? "claude";
+	if (config.cli !== undefined) {
+		const validCliBases = ["claude", "codex"] as const;
+		if (!validCliBases.includes(config.cli.base)) {
+			throw new ValidationError(`cli.base must be one of: ${validCliBases.join(", ")}`, {
+				field: "cli.base",
+				value: config.cli.base,
+			});
+		}
+	}
+
+	// providers: validate runtime compatibility and gateway requirements.
+	if (
+		config.providers === null ||
+		config.providers === undefined ||
+		typeof config.providers !== "object" ||
+		Array.isArray(config.providers)
+	) {
+		throw new ValidationError("providers must be an object", {
+			field: "providers",
+			value: config.providers,
+		});
+	}
+
+	const validProviderRuntimes: ProviderRuntime[] = ["claude", "codex"];
+	const validProviderRuntimeSet = new Set(validProviderRuntimes);
+	for (const [providerName, provider] of Object.entries(config.providers)) {
+		if (provider === null || provider === undefined || typeof provider !== "object") {
+			throw new ValidationError(`providers.${providerName} must be an object`, {
+				field: `providers.${providerName}`,
+				value: provider,
+			});
+		}
+
+		if (provider.type !== "native" && provider.type !== "gateway") {
+			throw new ValidationError(`providers.${providerName}.type must be native or gateway`, {
+				field: `providers.${providerName}.type`,
+				value: provider.type,
+			});
+		}
+
+		if (!Array.isArray(provider.runtimes) || provider.runtimes.length === 0) {
+			throw new ValidationError(`providers.${providerName}.runtimes must be a non-empty array`, {
+				field: `providers.${providerName}.runtimes`,
+				value: provider.runtimes,
+			});
+		}
+
+		for (const runtime of provider.runtimes) {
+			if (!validProviderRuntimeSet.has(runtime)) {
+				throw new ValidationError(
+					`providers.${providerName}.runtimes contains invalid runtime "${runtime}"`,
+					{
+						field: `providers.${providerName}.runtimes`,
+						value: runtime,
+					},
+				);
+			}
+		}
+
+		if (provider.type === "gateway") {
+			if (typeof provider.baseUrl !== "string" || provider.baseUrl.trim().length === 0) {
+				throw new ValidationError(
+					`providers.${providerName}.baseUrl is required when type=gateway`,
+					{
+						field: `providers.${providerName}.baseUrl`,
+						value: provider.baseUrl,
+					},
+				);
+			}
+			if (typeof provider.authTokenEnv !== "string" || provider.authTokenEnv.trim().length === 0) {
+				throw new ValidationError(
+					`providers.${providerName}.authTokenEnv is required when type=gateway`,
+					{
+						field: `providers.${providerName}.authTokenEnv`,
+						value: provider.authTokenEnv,
+					},
+				);
+			}
+		}
+
+		if (provider.adapters === undefined) {
+			continue;
+		}
+
+		if (
+			provider.adapters === null ||
+			typeof provider.adapters !== "object" ||
+			Array.isArray(provider.adapters)
+		) {
+			throw new ValidationError(`providers.${providerName}.adapters must be an object`, {
+				field: `providers.${providerName}.adapters`,
+				value: provider.adapters,
+			});
+		}
+
+		for (const [runtime, adapter] of Object.entries(provider.adapters)) {
+			if (!provider.runtimes.includes(runtime as ProviderRuntime)) {
+				throw new ValidationError(
+					`providers.${providerName}.adapters.${runtime} is not allowed because runtime "${runtime}" is not declared in providers.${providerName}.runtimes`,
+					{
+						field: `providers.${providerName}.adapters.${runtime}`,
+						value: adapter,
+					},
+				);
+			}
+
+			if (adapter === null || adapter === undefined || typeof adapter !== "object") {
+				throw new ValidationError(
+					`providers.${providerName}.adapters.${runtime} must be an object`,
+					{
+						field: `providers.${providerName}.adapters.${runtime}`,
+						value: adapter,
+					},
+				);
+			}
+
+			if (adapter.authTokenTargetEnv !== undefined) {
+				if (
+					typeof adapter.authTokenTargetEnv !== "string" ||
+					adapter.authTokenTargetEnv.trim().length === 0
+				) {
+					throw new ValidationError(
+						`providers.${providerName}.adapters.${runtime}.authTokenTargetEnv must be a non-empty string`,
+						{
+							field: `providers.${providerName}.adapters.${runtime}.authTokenTargetEnv`,
+							value: adapter.authTokenTargetEnv,
+						},
+					);
+				}
+				if (
+					typeof provider.authTokenEnv !== "string" ||
+					provider.authTokenEnv.trim().length === 0
+				) {
+					throw new ValidationError(
+						`providers.${providerName}.adapters.${runtime}.authTokenTargetEnv requires providers.${providerName}.authTokenEnv`,
+						{
+							field: `providers.${providerName}.adapters.${runtime}.authTokenTargetEnv`,
+							value: adapter.authTokenTargetEnv,
+						},
+					);
+				}
+			}
+
+			if (adapter.baseUrlEnv !== undefined) {
+				if (typeof adapter.baseUrlEnv !== "string" || adapter.baseUrlEnv.trim().length === 0) {
+					throw new ValidationError(
+						`providers.${providerName}.adapters.${runtime}.baseUrlEnv must be a non-empty string`,
+						{
+							field: `providers.${providerName}.adapters.${runtime}.baseUrlEnv`,
+							value: adapter.baseUrlEnv,
+						},
+					);
+				}
+				if (typeof provider.baseUrl !== "string" || provider.baseUrl.trim().length === 0) {
+					throw new ValidationError(
+						`providers.${providerName}.adapters.${runtime}.baseUrlEnv requires providers.${providerName}.baseUrl`,
+						{
+							field: `providers.${providerName}.adapters.${runtime}.baseUrlEnv`,
+							value: adapter.baseUrlEnv,
+						},
+					);
+				}
+			}
+
+			if (adapter.staticEnv !== undefined) {
+				if (
+					adapter.staticEnv === null ||
+					typeof adapter.staticEnv !== "object" ||
+					Array.isArray(adapter.staticEnv)
+				) {
+					throw new ValidationError(
+						`providers.${providerName}.adapters.${runtime}.staticEnv must be an object`,
+						{
+							field: `providers.${providerName}.adapters.${runtime}.staticEnv`,
+							value: adapter.staticEnv,
+						},
+					);
+				}
+
+				for (const [envKey, envValue] of Object.entries(adapter.staticEnv)) {
+					if (typeof envValue !== "string") {
+						throw new ValidationError(
+							`providers.${providerName}.adapters.${runtime}.staticEnv.${envKey} must be a string`,
+							{
+								field: `providers.${providerName}.adapters.${runtime}.staticEnv.${envKey}`,
+								value: envValue,
+							},
+						);
+					}
+				}
+			}
+
+			if (adapter.commandArgs !== undefined) {
+				if (!Array.isArray(adapter.commandArgs)) {
+					throw new ValidationError(
+						`providers.${providerName}.adapters.${runtime}.commandArgs must be an array`,
+						{
+							field: `providers.${providerName}.adapters.${runtime}.commandArgs`,
+							value: adapter.commandArgs,
+						},
+					);
+				}
+
+				for (let i = 0; i < adapter.commandArgs.length; i++) {
+					const arg = adapter.commandArgs[i];
+					if (typeof arg !== "string" || arg.trim().length === 0) {
+						throw new ValidationError(
+							`providers.${providerName}.adapters.${runtime}.commandArgs[${i}] must be a non-empty string`,
+							{
+								field: `providers.${providerName}.adapters.${runtime}.commandArgs[${i}]`,
+								value: arg,
+							},
+						);
+					}
+				}
+			}
+		}
+	}
+
+	const modelProfiles = config.modelProfiles ?? {};
+	if (modelProfiles === null || typeof modelProfiles !== "object" || Array.isArray(modelProfiles)) {
+		throw new ValidationError("modelProfiles must be an object", {
+			field: "modelProfiles",
+			value: modelProfiles,
+		});
+	}
+
+	const modelProfileEntries = Object.entries(modelProfiles);
+	for (const [alias, profile] of modelProfileEntries) {
+		if (profile === null || profile === undefined || typeof profile !== "object") {
+			throw new ValidationError(`modelProfiles.${alias} must be an object`, {
+				field: `modelProfiles.${alias}`,
+				value: profile,
+			});
+		}
+
+		if (typeof profile.provider !== "string" || profile.provider.trim().length === 0) {
+			throw new ValidationError(`modelProfiles.${alias}.provider must be a non-empty string`, {
+				field: `modelProfiles.${alias}.provider`,
+				value: profile.provider,
+			});
+		}
+
+		if (!(profile.provider in config.providers)) {
+			throw new ValidationError(
+				`modelProfiles.${alias}.provider must reference a configured provider`,
+				{
+					field: `modelProfiles.${alias}.provider`,
+					value: profile.provider,
+				},
+			);
+		}
+
+		if (typeof profile.model !== "string" || profile.model.trim().length === 0) {
+			throw new ValidationError(`modelProfiles.${alias}.model must be a non-empty string`, {
+				field: `modelProfiles.${alias}.model`,
+				value: profile.model,
+			});
+		}
+	}
+
+	const roleProfiles = config.roleProfiles ?? {};
+	if (roleProfiles === null || typeof roleProfiles !== "object" || Array.isArray(roleProfiles)) {
+		throw new ValidationError("roleProfiles must be an object", {
+			field: "roleProfiles",
+			value: roleProfiles,
+		});
+	}
+
+	const roleProfileEntries = Object.entries(roleProfiles);
+	if (roleProfileEntries.length > 0 && modelProfileEntries.length === 0) {
+		throw new ValidationError(
+			"modelProfiles must be a non-empty object when roleProfiles are configured",
+			{
+				field: "modelProfiles",
+				value: modelProfiles,
+			},
+		);
+	}
+
+	const validRoleProfileKeys = new Set<string>(["default", ...SUPPORTED_CAPABILITIES]);
+	for (const [role, aliases] of roleProfileEntries) {
+		if (!validRoleProfileKeys.has(role)) {
+			throw new ValidationError(
+				`roleProfiles.${role} is invalid; allowed keys are default or supported capability names`,
+				{
+					field: `roleProfiles.${role}`,
+					value: aliases,
+				},
+			);
+		}
+
+		if (!Array.isArray(aliases) || aliases.length === 0) {
+			throw new ValidationError(`roleProfiles.${role} must be a non-empty array`, {
+				field: `roleProfiles.${role}`,
+				value: aliases,
+			});
+		}
+
+		for (const alias of aliases) {
+			if (typeof alias !== "string" || alias.trim().length === 0) {
+				throw new ValidationError(`roleProfiles.${role} must contain non-empty profile aliases`, {
+					field: `roleProfiles.${role}`,
+					value: aliases,
+				});
+			}
+			if (!(alias in modelProfiles)) {
+				throw new ValidationError(
+					`roleProfiles.${role} references unknown modelProfiles alias "${alias}"`,
+					{
+						field: `roleProfiles.${role}`,
+						value: aliases,
+					},
+				);
+			}
+		}
+	}
+
+	// models: in claude mode only aliases are valid; in codex mode any non-empty
+	// model id string is allowed (e.g. gpt-5, o3, etc.).
+	const validClaudeModels = ["sonnet", "opus", "haiku"];
+	const validClaudeModelSet = new Set(validClaudeModels);
 	for (const [role, model] of Object.entries(config.models)) {
-		if (model !== undefined && !validModels.includes(model)) {
-			throw new ValidationError(`models.${role} must be one of: ${validModels.join(", ")}`, {
+		if (model === undefined) {
+			continue;
+		}
+
+		if (typeof model !== "string" || model.trim().length === 0) {
+			throw new ValidationError(`models.${role} must be a non-empty string`, {
 				field: `models.${role}`,
 				value: model,
 			});
+		}
+
+		if (cliBase === "claude" && !validClaudeModelSet.has(model)) {
+			throw new ValidationError(
+				`models.${role} must be one of: ${validClaudeModels.join(", ")} when cli.base=claude`,
+				{
+					field: `models.${role}`,
+					value: model,
+				},
+			);
 		}
 	}
 }
