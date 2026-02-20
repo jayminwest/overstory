@@ -27,7 +27,7 @@ When you open Claude Code in a project with `.overstory/` initialized:
 Use profile-based routing in `.overstory/config.yaml`:
 - `roleProfiles.<role>` selects one or more profile aliases for each agent role.
 - `modelProfiles.<alias>` resolves that alias to `{ provider, model }`.
-- `runtime.provider` sets the active provider context; runtime adapters live in `providers.*.adapters.*` (for example `codex` and `claude` adapters).
+- `cli.base` selects the active runtime (`codex` or `claude`); provider adapters live in `providers.*.adapters.*`.
 - Legacy `models.<role>` and `models.default` still work as fallback during migration.
 
 Precedence:

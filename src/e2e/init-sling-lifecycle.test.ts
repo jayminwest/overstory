@@ -60,7 +60,6 @@ describe("E2E: init→sling lifecycle on external project", () => {
 		const configFile = Bun.file(join(overstoryDir, "config.yaml"));
 		expect(await configFile.exists()).toBe(true);
 		const configText = await configFile.text();
-		expect(configText).toContain("runtime:");
 		expect(configText).toContain("modelProfiles:");
 		expect(configText).toContain("roleProfiles:");
 		expect(configText).toContain("adapters:");

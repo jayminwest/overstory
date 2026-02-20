@@ -100,9 +100,6 @@ overstory mail check --inject
 Configure model routing in `.overstory/config.yaml` using profile aliases:
 
 ```yaml
-runtime:
-  provider: codex
-  modelProfile: balanced
 cli:
   base: codex
 providers:

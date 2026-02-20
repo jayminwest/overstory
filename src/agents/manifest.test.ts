@@ -662,6 +662,32 @@ describe("resolveRoute / resolveModel", () => {
 		expect(defaultRoute.source).toBe("models.default");
 	});
 
+	test("codex runtime normalizes legacy models.<role> Claude alias to codex fallback", () => {
+		const config = makeConfig({
+			cliBase: "codex",
+			models: {
+				coordinator: "sonnet",
+			},
+		});
+
+		const route = resolveRoute(config, baseManifest, "coordinator", "gpt-5.3-codex");
+		expect(route.model).toBe("gpt-5");
+		expect(route.source).toBe("codex-final-fallback");
+	});
+
+	test("codex runtime normalizes legacy models.default Claude alias to codex fallback", () => {
+		const config = makeConfig({
+			cliBase: "codex",
+			models: {
+				default: "haiku",
+			},
+		});
+
+		const route = resolveRoute(config, baseManifest, "unknown-role", "gpt-5.3-codex");
+		expect(route.model).toBe("gpt-5");
+		expect(route.source).toBe("codex-final-fallback");
+	});
+
 	test("codex final fallback preserved", () => {
 		const config = makeConfig({ cliBase: "codex" });
 		const route = resolveRoute(config, baseManifest, "coordinator", "opus");

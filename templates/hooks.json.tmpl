@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; overstory init --ensure"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; overstory init --ensure --agent \"$OVERSTORY_AGENT_NAME\""
 					}
 				]
 			}
@@ -87,7 +87,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; overstory init --ensure"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; overstory init --ensure --agent \"$OVERSTORY_AGENT_NAME\""
 					}
 				]
 			}

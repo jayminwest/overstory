@@ -366,6 +366,27 @@ function resolveProfileChain(
 	);
 }
 
+function resolveRuntimeModel(runtime: CliRuntime, model: string, source: string): ResolvedRoute {
+	const normalizedModel = model.trim();
+	if (runtime === "codex" && CLAUDE_MODEL_ALIASES.has(normalizedModel)) {
+		return {
+			model: DEFAULT_CODEX_MODEL,
+			providerName: null,
+			selectedProfileAlias: null,
+			env: {},
+			source: "codex-final-fallback",
+		};
+	}
+
+	return {
+		model: normalizedModel,
+		providerName: null,
+		selectedProfileAlias: null,
+		env: {},
+		source,
+	};
+}
+
 /**
  * Resolve model/provider/env routing for an agent role.
  *
@@ -390,11 +411,7 @@ export function resolveRoute(
 	if (roleAliases.length > 0) {
 		const roleModel = config.models[role];
 		if (typeof roleModel === "string" && roleModel.trim().length > 0) {
-			warnRoleProfilesLegacyModelsDeprecationOnce(
-				role,
-				`roleProfiles.${role}`,
-				`models.${role}`,
-			);
+			warnRoleProfilesLegacyModelsDeprecationOnce(role, `roleProfiles.${role}`, `models.${role}`);
 		}
 		return resolveProfileChain(config, role, `roleProfiles.${role}`, roleAliases, runtime);
 	}
@@ -410,64 +427,22 @@ export function resolveRoute(
 
 	const roleModel = config.models[role];
 	if (typeof roleModel === "string" && roleModel.trim().length > 0) {
-		return {
-			model: roleModel.trim(),
-			providerName: null,
-			selectedProfileAlias: null,
-			env: {},
-			source: `models.${role}`,
-		};
+		return resolveRuntimeModel(runtime, roleModel, `models.${role}`);
 	}
 
 	const defaultModel = config.models.default;
 	if (typeof defaultModel === "string" && defaultModel.trim().length > 0) {
-		return {
-			model: defaultModel.trim(),
-			providerName: null,
-			selectedProfileAlias: null,
-			env: {},
-			source: "models.default",
-		};
+		return resolveRuntimeModel(runtime, defaultModel, "models.default");
 	}
 
 	const manifestModel = manifest.agents[role]?.model;
 	if (manifestModel) {
-		if (runtime === "codex" && CLAUDE_MODEL_ALIASES.has(manifestModel)) {
-			return {
-				model: DEFAULT_CODEX_MODEL,
-				providerName: null,
-				selectedProfileAlias: null,
-				env: {},
-				source: "codex-final-fallback",
-			};
-		}
-		return {
-			model: manifestModel,
-			providerName: null,
-			selectedProfileAlias: null,
-			env: {},
-			source: `manifest.${role}`,
-		};
+		return resolveRuntimeModel(runtime, manifestModel, `manifest.${role}`);
 	}
 
 	const normalizedFallback = fallback.trim();
 	if (normalizedFallback.length > 0) {
-		if (runtime === "codex" && CLAUDE_MODEL_ALIASES.has(normalizedFallback)) {
-			return {
-				model: DEFAULT_CODEX_MODEL,
-				providerName: null,
-				selectedProfileAlias: null,
-				env: {},
-				source: "codex-final-fallback",
-			};
-		}
-		return {
-			model: normalizedFallback,
-			providerName: null,
-			selectedProfileAlias: null,
-			env: {},
-			source: "fallback",
-		};
+		return resolveRuntimeModel(runtime, normalizedFallback, "fallback");
 	}
 
 	return {

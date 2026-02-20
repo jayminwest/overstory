@@ -12,12 +12,44 @@
 import { Database } from "bun:sqlite";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { DEFAULT_CONFIG } from "../config.ts";
+import { DEFAULT_CONFIG, resolveProjectRoot } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import type { AgentManifest } from "../types.ts";
 import { getCurrentSessionName } from "../worktree/tmux.ts";
 
 const OVERSTORY_DIR = ".overstory";
+
+function parseAgentNameArg(args: string[]): string | null {
+	const idx = args.indexOf("--agent");
+	if (idx === -1) {
+		return null;
+	}
+
+	const value = args[idx + 1];
+	if (value === undefined || value.startsWith("-")) {
+		throw new ValidationError("--agent requires a non-empty name", {
+			field: "agent",
+			value,
+		});
+	}
+
+	const name = value.trim();
+	if (name.length === 0) {
+		throw new ValidationError("--agent requires a non-empty name", {
+			field: "agent",
+			value,
+		});
+	}
+
+	return name;
+}
+
+function shouldUpdateSessionRuntimeMarkers(agentName: string | null): boolean {
+	if (agentName === null) {
+		return true;
+	}
+	return agentName === "orchestrator";
+}
 
 /**
  * Spawn a subprocess and capture output.
@@ -110,7 +142,10 @@ async function bootstrapExternalStores(projectRoot: string): Promise<void> {
  * Update session-scoped runtime markers used by merge/nudge behavior.
  * Best-effort only — failures are non-fatal.
  */
-async function updateSessionRuntimeMarkers(projectRoot: string, overstoryPath: string): Promise<void> {
+async function updateSessionRuntimeMarkers(
+	projectRoot: string,
+	overstoryPath: string,
+): Promise<void> {
 	// Record the current branch as default merge target for this session.
 	try {
 		const proc = Bun.spawn(["git", "symbolic-ref", "--short", "HEAD"], {
@@ -254,10 +289,6 @@ function buildInitConfig(
 		beads: defaults.beads,
 		mulch: defaults.mulch,
 		merge: defaults.merge,
-		runtime: {
-			provider: "codex",
-			modelProfile: "balanced",
-		},
 		// Legacy runtime selector retained for compatibility with older releases.
 		cli: {
 			base: "codex",
@@ -509,7 +540,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory init --ensure",
+							command: "overstory init --ensure --agent orchestrator",
 						},
 					],
 				},
@@ -578,7 +609,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory init --ensure",
+							command: "overstory init --ensure --agent orchestrator",
 						},
 					],
 				},
@@ -701,7 +732,7 @@ Overstory turns a single Claude Code session into a multi-agent team by spawning
 
 /**
  * Write .overstory/.gitignore for runtime state files.
- * Always overwrites to support --force reinit and auto-healing via prime.
+ * Always overwrites to support --force reinit and auto-healing via init --ensure.
  */
 export async function writeOverstoryGitignore(overstoryPath: string): Promise<void> {
 	const gitignorePath = join(overstoryPath, ".gitignore");
@@ -733,11 +764,12 @@ function printCreated(relativePath: string): void {
  */
 const INIT_HELP = `overstory init — Initialize .overstory/ in current project
 
-Usage: overstory init [--force] [--ensure]
+Usage: overstory init [--force] [--ensure] [--agent <name>]
 
 Options:
   --force      Reinitialize even if .overstory/ already exists
   --ensure     Idempotent startup mode (no warning if already initialized)
+  --agent      Optional hook context agent name
   --help, -h   Show this help`;
 
 export async function initCommand(args: string[]): Promise<void> {
@@ -748,7 +780,9 @@ export async function initCommand(args: string[]): Promise<void> {
 
 	const force = args.includes("--force");
 	const ensure = args.includes("--ensure");
-	const projectRoot = process.cwd();
+	const agentName = parseAgentNameArg(args);
+	const startDir = process.cwd();
+	const projectRoot = await resolveProjectRoot(startDir);
 	const overstoryPath = join(projectRoot, OVERSTORY_DIR);
 
 	// 0. Verify we're inside a git repository
@@ -772,7 +806,9 @@ export async function initCommand(args: string[]): Promise<void> {
 			await writeOverstoryGitignore(overstoryPath);
 			await writeOverstoryReadme(overstoryPath);
 			await bootstrapExternalStores(projectRoot);
-			await updateSessionRuntimeMarkers(projectRoot, overstoryPath);
+			if (shouldUpdateSessionRuntimeMarkers(agentName)) {
+				await updateSessionRuntimeMarkers(projectRoot, overstoryPath);
+			}
 			return;
 		}
 
@@ -858,7 +894,9 @@ export async function initCommand(args: string[]): Promise<void> {
 	await bootstrapExternalStores(projectRoot);
 
 	// 10. Update per-session runtime markers for merge/nudge ergonomics.
-	await updateSessionRuntimeMarkers(projectRoot, overstoryPath);
+	if (shouldUpdateSessionRuntimeMarkers(agentName)) {
+		await updateSessionRuntimeMarkers(projectRoot, overstoryPath);
+	}
 
 	process.stdout.write("\nDone.\n");
 	process.stdout.write("  Next: run `overstory hooks install` to enable Claude Code hooks.\n");
