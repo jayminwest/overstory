@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { buildProviderRuntimeEnv } from "./runtime.ts";
+import { buildProviderRuntimeCliArgs, buildProviderRuntimeEnv } from "./runtime.ts";
 
 describe("buildProviderRuntimeEnv", () => {
 	let envSnapshot: Record<string, string | undefined>;
@@ -97,5 +97,38 @@ describe("buildProviderRuntimeEnv", () => {
 		);
 
 		expect(env).toEqual({});
+	});
+});
+
+describe("buildProviderRuntimeCliArgs", () => {
+	test("returns adapter command args when configured", () => {
+		const args = buildProviderRuntimeCliArgs(
+			{
+				type: "native",
+				runtimes: ["codex"],
+				adapters: {
+					codex: {
+						commandArgs: ["--dangerously-bypass-approvals-and-sandbox"],
+					},
+				},
+			},
+			"codex",
+		);
+
+		expect(args).toEqual(["--dangerously-bypass-approvals-and-sandbox"]);
+	});
+
+	test("returns empty args when adapter has none", () => {
+		const args = buildProviderRuntimeCliArgs(
+			{
+				type: "native",
+				runtimes: ["codex"],
+				adapters: {
+					codex: {},
+				},
+			},
+			"codex",
+		);
+		expect(args).toEqual([]);
 	});
 });

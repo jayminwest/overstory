@@ -17,6 +17,13 @@ function escapeSingleQuotes(value: string): string {
 	return value.replace(/'/g, "'\\''");
 }
 
+function quoteShellArg(arg: string): string {
+	if (/^[a-zA-Z0-9_./:=+-]+$/.test(arg)) {
+		return arg;
+	}
+	return `'${escapeSingleQuotes(arg)}'`;
+}
+
 /**
  * Resolve the active CLI base from config.
  * Falls back to "claude" when cli.base is unset.
@@ -59,15 +66,19 @@ export function buildInteractiveAgentCommand(options: {
 	cliBase: CliBase;
 	model: string;
 	systemPrompt?: string;
+	extraArgs?: string[];
 }): InteractiveAgentCommand {
+	const extraArgs = options.extraArgs ?? [];
+	const extraArgString = extraArgs.length > 0 ? ` ${extraArgs.map(quoteShellArg).join(" ")}` : "";
+
 	if (options.cliBase === "codex") {
 		return {
-			command: `codex --model ${options.model}`,
+			command: `codex --model ${options.model}${extraArgString}`,
 			systemPromptEmbedded: false,
 		};
 	}
 
-	let command = `claude --model ${options.model} --dangerously-skip-permissions`;
+	let command = `claude --model ${options.model} --dangerously-skip-permissions${extraArgString}`;
 	if (options.systemPrompt && options.systemPrompt.trim().length > 0) {
 		command += ` --append-system-prompt '${escapeSingleQuotes(options.systemPrompt)}'`;
 	}

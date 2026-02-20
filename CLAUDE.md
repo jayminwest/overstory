@@ -28,6 +28,7 @@ Use profile-based routing in `.overstory/config.yaml`:
 - `roleProfiles.<role>` selects one or more profile aliases for each agent role.
 - `modelProfiles.<alias>` resolves that alias to `{ provider, model }`.
 - `cli.base` selects the active runtime (`codex` or `claude`); provider adapters live in `providers.*.adapters.*`.
+- `providers.<name>.adapters.<runtime>.commandArgs` appends runtime-specific CLI flags (for example Codex unsafe execution flags).
 - Legacy `models.<role>` and `models.default` still work as fallback during migration.
 
 Precedence:

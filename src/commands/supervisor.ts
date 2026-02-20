@@ -214,6 +214,7 @@ async function startSupervisor(args: string[]): Promise<void> {
 			cliBase,
 			model: route.model,
 			systemPrompt,
+			extraArgs: route.cliArgs,
 		});
 		const pid = await createSession(tmuxSession, projectRoot, launchCommand.command, {
 			...route.env,

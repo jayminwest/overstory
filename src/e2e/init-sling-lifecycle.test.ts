@@ -65,6 +65,7 @@ describe("E2E: init→sling lifecycle on external project", () => {
 		expect(configText).toContain("adapters:");
 		expect(configText).toContain("adapters:\n      codex:");
 		expect(configText).toContain("adapters:\n      claude:");
+		expect(configText).toContain("--dangerously-bypass-approvals-and-sandbox");
 
 		// agent-manifest.json exists and is valid JSON
 		const manifestFile = Bun.file(join(overstoryDir, "agent-manifest.json"));

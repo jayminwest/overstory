@@ -347,6 +347,7 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			cliBase,
 			model: route.model,
 			systemPrompt,
+			extraArgs: route.cliArgs,
 		});
 		const pid = await tmux.createSession(tmuxSession, projectRoot, launchCommand.command, {
 			...route.env,

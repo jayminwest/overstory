@@ -17,6 +17,7 @@ export interface ProviderAdapter {
 	baseUrlEnv?: string;
 	authTokenTargetEnv?: string;
 	staticEnv?: Record<string, string>;
+	commandArgs?: string[];
 }
 
 /** Configuration for a model provider. */

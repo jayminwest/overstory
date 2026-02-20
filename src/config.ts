@@ -558,7 +558,10 @@ function validateConfig(config: OverstoryConfig): void {
 						},
 					);
 				}
-				if (typeof provider.authTokenEnv !== "string" || provider.authTokenEnv.trim().length === 0) {
+				if (
+					typeof provider.authTokenEnv !== "string" ||
+					provider.authTokenEnv.trim().length === 0
+				) {
 					throw new ValidationError(
 						`providers.${providerName}.adapters.${runtime}.authTokenTargetEnv requires providers.${providerName}.authTokenEnv`,
 						{
@@ -617,15 +620,36 @@ function validateConfig(config: OverstoryConfig): void {
 					}
 				}
 			}
+
+			if (adapter.commandArgs !== undefined) {
+				if (!Array.isArray(adapter.commandArgs)) {
+					throw new ValidationError(
+						`providers.${providerName}.adapters.${runtime}.commandArgs must be an array`,
+						{
+							field: `providers.${providerName}.adapters.${runtime}.commandArgs`,
+							value: adapter.commandArgs,
+						},
+					);
+				}
+
+				for (let i = 0; i < adapter.commandArgs.length; i++) {
+					const arg = adapter.commandArgs[i];
+					if (typeof arg !== "string" || arg.trim().length === 0) {
+						throw new ValidationError(
+							`providers.${providerName}.adapters.${runtime}.commandArgs[${i}] must be a non-empty string`,
+							{
+								field: `providers.${providerName}.adapters.${runtime}.commandArgs[${i}]`,
+								value: arg,
+							},
+						);
+					}
+				}
+			}
 		}
 	}
 
 	const modelProfiles = config.modelProfiles ?? {};
-	if (
-		modelProfiles === null ||
-		typeof modelProfiles !== "object" ||
-		Array.isArray(modelProfiles)
-	) {
+	if (modelProfiles === null || typeof modelProfiles !== "object" || Array.isArray(modelProfiles)) {
 		throw new ValidationError("modelProfiles must be an object", {
 			field: "modelProfiles",
 			value: modelProfiles,
@@ -667,11 +691,7 @@ function validateConfig(config: OverstoryConfig): void {
 	}
 
 	const roleProfiles = config.roleProfiles ?? {};
-	if (
-		roleProfiles === null ||
-		typeof roleProfiles !== "object" ||
-		Array.isArray(roleProfiles)
-	) {
+	if (roleProfiles === null || typeof roleProfiles !== "object" || Array.isArray(roleProfiles)) {
 		throw new ValidationError("roleProfiles must be an object", {
 			field: "roleProfiles",
 			value: roleProfiles,
@@ -710,13 +730,10 @@ function validateConfig(config: OverstoryConfig): void {
 
 		for (const alias of aliases) {
 			if (typeof alias !== "string" || alias.trim().length === 0) {
-				throw new ValidationError(
-					`roleProfiles.${role} must contain non-empty profile aliases`,
-					{
-						field: `roleProfiles.${role}`,
-						value: aliases,
-					},
-				);
+				throw new ValidationError(`roleProfiles.${role} must contain non-empty profile aliases`, {
+					field: `roleProfiles.${role}`,
+					value: aliases,
+				});
 			}
 			if (!(alias in modelProfiles)) {
 				throw new ValidationError(

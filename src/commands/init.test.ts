@@ -313,6 +313,7 @@ describe("initCommand: config profile routing defaults", () => {
 		expect(content).toContain("adapters:");
 		expect(content).toContain("adapters:\n      codex:");
 		expect(content).toContain("adapters:\n      claude:");
+		expect(content).toContain("--dangerously-bypass-approvals-and-sandbox");
 		expect(content).toContain("# Legacy compatibility fallback (models.* still supported");
 		expect(content).toContain("# models:");
 		expect(content).toContain("#   default: gpt-5");

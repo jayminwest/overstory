@@ -109,6 +109,8 @@ providers:
       - codex
     adapters:
       codex:
+        commandArgs:
+          - --dangerously-bypass-approvals-and-sandbox
   claude:
     type: native
     runtimes:
@@ -153,6 +155,8 @@ providers:
       - codex
     adapters:
       codex:
+        commandArgs:
+          - --dangerously-bypass-approvals-and-sandbox
   claude:
     type: native
     runtimes:

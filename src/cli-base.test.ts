@@ -88,6 +88,17 @@ describe("buildInteractiveAgentCommand", () => {
 		expect(result.command).toBe("codex --model gpt-5");
 		expect(result.systemPromptEmbedded).toBe(false);
 	});
+
+	test("appends adapter-provided extra args to codex launch command", () => {
+		const result = buildInteractiveAgentCommand({
+			cliBase: "codex",
+			model: "gpt-5",
+			extraArgs: ["--dangerously-bypass-approvals-and-sandbox", "--sandbox", "danger-full-access"],
+		});
+		expect(result.command).toBe(
+			"codex --model gpt-5 --dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access",
+		);
+	});
 });
 
 describe("requiresNonRoot", () => {

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
-import { buildProviderRuntimeEnv } from "../providers/runtime.ts";
+import { buildProviderRuntimeCliArgs, buildProviderRuntimeEnv } from "../providers/runtime.ts";
 import type { AgentDefinition, AgentManifest, OverstoryConfig } from "../types.ts";
 
 /**
@@ -40,6 +40,7 @@ export interface ResolvedRoute {
 	providerName: string | null;
 	selectedProfileAlias: string | null;
 	env: Record<string, string>;
+	cliArgs: string[];
 	source: string;
 }
 
@@ -357,6 +358,7 @@ function resolveProfileChain(
 			providerName,
 			selectedProfileAlias: alias,
 			env: buildProviderRuntimeEnv(providerName, provider, runtime),
+			cliArgs: buildProviderRuntimeCliArgs(provider, runtime),
 			source,
 		};
 	}
@@ -374,6 +376,7 @@ function resolveRuntimeModel(runtime: CliRuntime, model: string, source: string)
 			providerName: null,
 			selectedProfileAlias: null,
 			env: {},
+			cliArgs: [],
 			source: "codex-final-fallback",
 		};
 	}
@@ -383,6 +386,7 @@ function resolveRuntimeModel(runtime: CliRuntime, model: string, source: string)
 		providerName: null,
 		selectedProfileAlias: null,
 		env: {},
+		cliArgs: [],
 		source,
 	};
 }
@@ -450,6 +454,7 @@ export function resolveRoute(
 		providerName: null,
 		selectedProfileAlias: null,
 		env: {},
+		cliArgs: [],
 		source: runtime === "codex" ? "codex-final-fallback" : "fallback",
 	};
 }

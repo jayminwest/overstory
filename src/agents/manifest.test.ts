@@ -655,6 +655,7 @@ describe("resolveRoute / resolveModel", () => {
 		expect(roleRoute.providerName).toBeNull();
 		expect(roleRoute.selectedProfileAlias).toBeNull();
 		expect(roleRoute.env).toEqual({});
+		expect(roleRoute.cliArgs).toEqual([]);
 		expect(roleRoute.source).toBe("models.coordinator");
 
 		const defaultRoute = resolveRoute(config, baseManifest, "unknown-role", "opus");
@@ -696,6 +697,7 @@ describe("resolveRoute / resolveModel", () => {
 		expect(route.providerName).toBeNull();
 		expect(route.selectedProfileAlias).toBeNull();
 		expect(route.env).toEqual({});
+		expect(route.cliArgs).toEqual([]);
 		expect(route.source).toBe("codex-final-fallback");
 		expect(resolveModel(config, baseManifest, "coordinator", "opus")).toBe("gpt-5");
 	});
@@ -719,6 +721,7 @@ describe("resolveRoute / resolveModel", () => {
 								authTokenTargetEnv: "OPENAI_API_KEY",
 								baseUrlEnv: "OPENAI_BASE_URL",
 								staticEnv: { OPENAI_ORG_ID: "org-overstory" },
+								commandArgs: ["--dangerously-bypass-approvals-and-sandbox"],
 							},
 						},
 					},
@@ -744,6 +747,7 @@ describe("resolveRoute / resolveModel", () => {
 				OPENAI_BASE_URL: "https://openrouter.ai/api/v1",
 				OPENAI_ORG_ID: "org-overstory",
 			});
+			expect(route.cliArgs).toEqual(["--dangerously-bypass-approvals-and-sandbox"]);
 		} finally {
 			if (previousToken === undefined) {
 				delete process.env.OPENROUTER_API_KEY;

@@ -60,3 +60,17 @@ export function buildProviderRuntimeEnv(
 
 	return env;
 }
+
+/**
+ * Build runtime-specific CLI args contributed by a provider adapter.
+ */
+export function buildProviderRuntimeCliArgs(
+	providerConfig: ProviderConfig,
+	cliBase: CliBase,
+): string[] {
+	const adapter = providerConfig.adapters?.[cliBase];
+	if (adapter?.commandArgs === undefined) {
+		return [];
+	}
+	return adapter.commandArgs;
+}

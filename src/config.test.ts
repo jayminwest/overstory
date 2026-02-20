@@ -496,6 +496,35 @@ providers:
 		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
 	});
 
+	test("rejects adapter commandArgs when not an array", async () => {
+		await writeConfig(`
+providers:
+  codex:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      codex:
+        commandArgs: --dangerously-bypass-approvals-and-sandbox
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects adapter commandArgs with empty entries", async () => {
+		await writeConfig(`
+providers:
+  codex:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      codex:
+        commandArgs:
+          - ""
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
 	test("accepts valid modelProfiles and roleProfiles", async () => {
 		await writeConfig(`
 providers:

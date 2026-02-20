@@ -298,7 +298,9 @@ function buildInitConfig(
 				type: "native",
 				runtimes: ["codex"],
 				adapters: {
-					codex: {},
+					codex: {
+						commandArgs: ["--dangerously-bypass-approvals-and-sandbox"],
+					},
 				},
 			},
 			claude: {

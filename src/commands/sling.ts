@@ -487,6 +487,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 		const launchCommand = buildInteractiveAgentCommand({
 			cliBase,
 			model: route.model,
+			extraArgs: route.cliArgs,
 		});
 		const pid = await createSession(tmuxSessionName, worktreePath, launchCommand.command, {
 			...route.env,
