@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
+import { buildProviderRuntimeEnv } from "../providers/runtime.ts";
 import type { AgentDefinition, AgentManifest, OverstoryConfig } from "../types.ts";
 
 /**
@@ -26,7 +27,21 @@ interface RawManifest {
 	capabilityIndex?: unknown;
 }
 
-const VALID_MODELS = new Set(["sonnet", "opus", "haiku"]);
+const CLAUDE_MODEL_ALIASES = new Set(["sonnet", "opus", "haiku"]);
+const DEFAULT_CODEX_MODEL = "gpt-5";
+const LEGACY_MODELS_DEPRECATION_WARNED = new Set<string>();
+type CliRuntime = "claude" | "codex";
+
+/**
+ * Fully-resolved routing outcome for an agent role.
+ */
+export interface ResolvedRoute {
+	model: string;
+	providerName: string | null;
+	selectedProfileAlias: string | null;
+	env: Record<string, string>;
+	source: string;
+}
 
 /**
  * Validate that a raw parsed object conforms to the AgentDefinition shape.
@@ -46,7 +61,7 @@ function validateAgentDefinition(name: string, raw: unknown): string[] {
 		errors.push(`Agent "${name}": "file" must be a non-empty string`);
 	}
 
-	if (typeof def.model !== "string" || !VALID_MODELS.has(def.model)) {
+	if (typeof def.model !== "string" || !CLAUDE_MODEL_ALIASES.has(def.model)) {
 		errors.push(`Agent "${name}": "model" must be one of: sonnet, opus, haiku`);
 	}
 
@@ -273,10 +288,201 @@ export function createManifestLoader(manifestPath: string, agentBaseDir: string)
 	};
 }
 
+function parseAliases(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return [];
+	const aliases: string[] = [];
+	for (const entry of raw) {
+		if (typeof entry !== "string") continue;
+		const trimmed = entry.trim();
+		if (trimmed.length > 0) aliases.push(trimmed);
+	}
+	return aliases;
+}
+
+function warnRoleProfilesLegacyModelsDeprecationOnce(
+	role: string,
+	profileSource: `roleProfiles.${string}` | "roleProfiles.default",
+	modelSource: `models.${string}` | "models.default",
+): void {
+	const key = `${profileSource}|${modelSource}`;
+	if (LEGACY_MODELS_DEPRECATION_WARNED.has(key)) return;
+	LEGACY_MODELS_DEPRECATION_WARNED.add(key);
+
+	process.stderr.write(
+		`[overstory] DEPRECATED: ${modelSource} is ignored for role "${role}" because ${profileSource} is configured. Remove ${modelSource} and use roleProfiles/modelProfiles only.\n`,
+	);
+}
+
+function resolveProfileChain(
+	config: OverstoryConfig,
+	role: string,
+	source: `roleProfiles.${string}` | "roleProfiles.default",
+	aliases: string[],
+	runtime: CliRuntime,
+): ResolvedRoute {
+	const modelProfiles = config.modelProfiles ?? {};
+	const failures: string[] = [];
+	for (const alias of aliases) {
+		const profile = modelProfiles[alias];
+		if (!profile) {
+			failures.push(`${alias} (missing modelProfiles entry)`);
+			continue;
+		}
+
+		const providerName = profile.provider.trim();
+		if (providerName.length === 0) {
+			failures.push(`${alias} (empty provider)`);
+			continue;
+		}
+
+		const model = profile.model.trim();
+		if (model.length === 0) {
+			failures.push(`${alias} (empty model)`);
+			continue;
+		}
+
+		const provider = config.providers[providerName];
+		if (!provider) {
+			failures.push(`${alias} (provider "${providerName}" is not configured)`);
+			continue;
+		}
+
+		if (!provider.runtimes.includes(runtime)) {
+			failures.push(`${alias} (provider "${providerName}" does not support runtime "${runtime}")`);
+			continue;
+		}
+
+		return {
+			model,
+			providerName,
+			selectedProfileAlias: alias,
+			env: buildProviderRuntimeEnv(providerName, provider, runtime),
+			source,
+		};
+	}
+
+	throw new AgentError(
+		`No valid model profile alias for role "${role}" from ${source}. Tried aliases in order: ${failures.join(", ")}`,
+	);
+}
+
+/**
+ * Resolve model/provider/env routing for an agent role.
+ *
+ * Resolution order:
+ * 1) roleProfiles.<role> aliases (first valid alias wins)
+ * 2) roleProfiles.default aliases (first valid alias wins)
+ * 3) legacy models.<role>, then models.default
+ * 4) manifest role model
+ * 5) explicit fallback
+ * 6) codex final fallback (gpt-5)
+ */
+export function resolveRoute(
+	config: OverstoryConfig,
+	manifest: AgentManifest,
+	role: string,
+	fallback: string,
+): ResolvedRoute {
+	const runtime: CliRuntime = config.cli?.base === "codex" ? "codex" : "claude";
+
+	const roleProfiles = (config.roleProfiles ?? {}) as Record<string, unknown>;
+	const roleAliases = parseAliases(roleProfiles[role]);
+	if (roleAliases.length > 0) {
+		const roleModel = config.models[role];
+		if (typeof roleModel === "string" && roleModel.trim().length > 0) {
+			warnRoleProfilesLegacyModelsDeprecationOnce(
+				role,
+				`roleProfiles.${role}`,
+				`models.${role}`,
+			);
+		}
+		return resolveProfileChain(config, role, `roleProfiles.${role}`, roleAliases, runtime);
+	}
+
+	const defaultAliases = parseAliases(roleProfiles.default);
+	if (defaultAliases.length > 0) {
+		const defaultModel = config.models.default;
+		if (typeof defaultModel === "string" && defaultModel.trim().length > 0) {
+			warnRoleProfilesLegacyModelsDeprecationOnce(role, "roleProfiles.default", "models.default");
+		}
+		return resolveProfileChain(config, role, "roleProfiles.default", defaultAliases, runtime);
+	}
+
+	const roleModel = config.models[role];
+	if (typeof roleModel === "string" && roleModel.trim().length > 0) {
+		return {
+			model: roleModel.trim(),
+			providerName: null,
+			selectedProfileAlias: null,
+			env: {},
+			source: `models.${role}`,
+		};
+	}
+
+	const defaultModel = config.models.default;
+	if (typeof defaultModel === "string" && defaultModel.trim().length > 0) {
+		return {
+			model: defaultModel.trim(),
+			providerName: null,
+			selectedProfileAlias: null,
+			env: {},
+			source: "models.default",
+		};
+	}
+
+	const manifestModel = manifest.agents[role]?.model;
+	if (manifestModel) {
+		if (runtime === "codex" && CLAUDE_MODEL_ALIASES.has(manifestModel)) {
+			return {
+				model: DEFAULT_CODEX_MODEL,
+				providerName: null,
+				selectedProfileAlias: null,
+				env: {},
+				source: "codex-final-fallback",
+			};
+		}
+		return {
+			model: manifestModel,
+			providerName: null,
+			selectedProfileAlias: null,
+			env: {},
+			source: `manifest.${role}`,
+		};
+	}
+
+	const normalizedFallback = fallback.trim();
+	if (normalizedFallback.length > 0) {
+		if (runtime === "codex" && CLAUDE_MODEL_ALIASES.has(normalizedFallback)) {
+			return {
+				model: DEFAULT_CODEX_MODEL,
+				providerName: null,
+				selectedProfileAlias: null,
+				env: {},
+				source: "codex-final-fallback",
+			};
+		}
+		return {
+			model: normalizedFallback,
+			providerName: null,
+			selectedProfileAlias: null,
+			env: {},
+			source: "fallback",
+		};
+	}
+
+	return {
+		model: runtime === "codex" ? DEFAULT_CODEX_MODEL : fallback,
+		providerName: null,
+		selectedProfileAlias: null,
+		env: {},
+		source: runtime === "codex" ? "codex-final-fallback" : "fallback",
+	};
+}
+
 /**
  * Resolve the model for an agent role.
  *
- * Resolution order: config.models override > manifest default > fallback.
+ * Backward-compatible wrapper around resolveRoute().
  */
 export function resolveModel(
 	config: OverstoryConfig,
@@ -284,9 +490,5 @@ export function resolveModel(
 	role: string,
 	fallback: string,
 ): string {
-	const configModel = config.models[role];
-	if (configModel) return configModel;
-	const manifestModel = manifest.agents[role]?.model;
-	if (manifestModel) return manifestModel;
-	return fallback;
+	return resolveRoute(config, manifest, role, fallback).model;
 }

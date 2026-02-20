@@ -65,14 +65,14 @@ describe("buildSupervisorBeacon", () => {
 			parent: "coordinator",
 		});
 
-		// Should include mulch prime
-		expect(beacon).toContain("mulch prime");
+		// Should include overstory init
+		expect(beacon).toContain("overstory init");
 
 		// Should include mail check with agent name
 		expect(beacon).toContain("overstory mail check --agent supervisor-1");
 
-		// Should include bd show with beadId
-		expect(beacon).toContain("bd show task-1");
+		// Should include optional bd show with beadId
+		expect(beacon).toContain("bd show task-1 if available");
 	});
 
 	test("contains ISO timestamp", () => {

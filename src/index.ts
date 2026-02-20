@@ -27,7 +27,6 @@ import { mergeCommand } from "./commands/merge.ts";
 import { metricsCommand } from "./commands/metrics.ts";
 import { monitorCommand } from "./commands/monitor.ts";
 import { nudgeCommand } from "./commands/nudge.ts";
-import { primeCommand } from "./commands/prime.ts";
 import { replayCommand } from "./commands/replay.ts";
 import { runCommand } from "./commands/run.ts";
 import { slingCommand } from "./commands/sling.ts";
@@ -51,7 +50,6 @@ Commands:
   init                    Initialize .overstory/ in current project
   sling <task-id>         Spawn a worker agent
   spec <sub>              Manage task specs (write)
-  prime                   Load context for orchestrator/agent
   status                  Show all active agents and project state
   dashboard               Live TUI dashboard for agent monitoring
   inspect <agent>         Deep inspection of a single agent
@@ -90,7 +88,6 @@ const COMMANDS = [
 	"init",
 	"sling",
 	"spec",
-	"prime",
 	"status",
 	"dashboard",
 	"inspect",
@@ -196,9 +193,6 @@ async function main(): Promise<void> {
 			break;
 		case "spec":
 			await specCommand(commandArgs);
-			break;
-		case "prime":
-			await primeCommand(commandArgs);
 			break;
 		case "status":
 			await statusCommand(commandArgs);

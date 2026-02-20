@@ -10,14 +10,32 @@ export type ModelAlias = "sonnet" | "opus" | "haiku";
 export type ModelRef = ModelAlias | (string & {});
 
 /** Configuration for a model provider. */
+export type ProviderRuntime = "codex" | "claude";
+
+/** Optional environment adaptation for a provider under a specific runtime. */
+export interface ProviderAdapter {
+	baseUrlEnv?: string;
+	authTokenTargetEnv?: string;
+	staticEnv?: Record<string, string>;
+}
+
+/** Configuration for a model provider. */
 export interface ProviderConfig {
 	type: "native" | "gateway";
+	runtimes: ProviderRuntime[];
 	baseUrl?: string;
 	authTokenEnv?: string;
+	adapters?: Partial<Record<ProviderRuntime, ProviderAdapter>>;
 }
 
 /** Primary interactive CLI used for spawned agents. */
 export type CliBase = "claude" | "codex";
+
+/** Provider-qualified model profile alias. */
+export interface ModelProfile {
+	provider: string;
+	model: string;
+}
 
 // === Project Configuration ===
 
@@ -63,7 +81,18 @@ export interface OverstoryConfig {
 		zombieThresholdMs: number; // When to kill
 		nudgeIntervalMs: number; // Time between progressive nudge stages (default 60_000)
 	};
+	/**
+	 * Per-role model overrides (keyed by role name, e.g. coordinator/monitor).
+	 * Optional `default` key applies to all roles when a role-specific override
+	 * is not provided.
+	 *
+	 * Validation:
+	 * - cli.base=claude -> values must be sonnet|opus|haiku
+	 * - cli.base=codex  -> values may be any non-empty model id string
+	 */
 	models: Partial<Record<string, ModelRef>>;
+	roleProfiles?: Partial<Record<Capability | "default", string[]>>;
+	modelProfiles?: Record<string, ModelProfile>;
 	logging: {
 		verbose: boolean;
 		redactSecrets: boolean;

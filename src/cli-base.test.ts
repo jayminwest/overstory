@@ -22,7 +22,7 @@ function makeConfig(overrides: Partial<OverstoryConfig> = {}): OverstoryConfig {
 		mulch: { enabled: true, domains: [], primeFormat: "markdown" },
 		merge: { aiResolveEnabled: true, reimagineEnabled: false },
 		cli: { base: "claude" },
-		providers: { anthropic: { type: "native" } },
+		providers: { anthropic: { type: "native", runtimes: ["claude"] } },
 		watchdog: {
 			tier0Enabled: true,
 			tier0IntervalMs: 30_000,

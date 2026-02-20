@@ -22,7 +22,7 @@ const SAMPLE_HOOKS = {
 		SessionStart: [
 			{
 				matcher: "",
-				hooks: [{ type: "command", command: "overstory prime --agent orchestrator" }],
+				hooks: [{ type: "command", command: "overstory init" }],
 			},
 		],
 		Stop: [
@@ -120,7 +120,7 @@ describe("hooks install", () => {
 		const content = await Bun.file(targetPath).text();
 		const parsed = JSON.parse(content) as Record<string, unknown>;
 		expect(parsed.hooks).toBeDefined();
-		expect(content).toContain("overstory prime");
+		expect(content).toContain("overstory init");
 	});
 
 	test("preserves existing non-hooks keys in settings.local.json", async () => {
@@ -184,7 +184,7 @@ describe("hooks install", () => {
 
 		const content = await Bun.file(join(claudeDir, "settings.local.json")).text();
 		expect(content).not.toContain("old");
-		expect(content).toContain("overstory prime");
+		expect(content).toContain("overstory init");
 	});
 
 	test("throws when .overstory/hooks.json does not exist", async () => {

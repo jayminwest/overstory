@@ -52,7 +52,7 @@ describe("checkLogs", () => {
 				reimagineEnabled: false,
 			},
 			providers: {
-				anthropic: { type: "native" },
+				anthropic: { type: "native", runtimes: ["claude"] },
 			},
 			watchdog: {
 				tier0Enabled: true,

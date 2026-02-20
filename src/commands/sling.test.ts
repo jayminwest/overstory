@@ -399,7 +399,7 @@ describe("buildBeacon", () => {
 		const beacon = buildBeacon(opts);
 
 		expect(beacon).toContain("read .claude/CLAUDE.md");
-		expect(beacon).toContain("mulch prime");
+		expect(beacon).toContain("overstory init");
 		expect(beacon).toContain("overstory mail check --agent scout-1");
 		expect(beacon).toContain("begin task overstory-xyz");
 	});

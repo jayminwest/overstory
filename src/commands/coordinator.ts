@@ -8,7 +8,7 @@
  * Unlike regular agents spawned by sling, the coordinator:
  * - Has no worktree (operates on the main working tree)
  * - Has no bead assignment (it creates beads, not works on them)
- * - Has no overlay CLAUDE.md (context comes via mail + beads + checkpoints)
+ * - Has no per-task instruction overlay (context comes via mail + beads + checkpoints)
  * - Persists across work batches
  */
 
@@ -16,7 +16,7 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
-import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { createManifestLoader, resolveRoute } from "../agents/manifest.ts";
 import { buildInteractiveAgentCommand, requiresNonRoot, resolveCliBase } from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
@@ -234,7 +234,7 @@ export function buildCoordinatorBeacon(): string {
 		"Depth: 0 | Parent: none | Role: persistent orchestrator",
 		"HIERARCHY: You ONLY spawn leads (overstory sling --capability lead). Leads spawn scouts, builders, reviewers. NEVER spawn non-lead agents directly.",
 		"DELEGATION: For any exploration/scouting, spawn a lead who will spawn scouts. Do NOT explore the codebase yourself beyond initial planning.",
-		`Startup: run mulch prime, check mail (overstory mail check --agent ${COORDINATOR_NAME}), check bd ready, check overstory group status, then begin work`,
+		`Startup: run overstory init --ensure, check mail (overstory mail check --agent ${COORDINATOR_NAME}), optionally check backlog (bd ready if available), check overstory group status, then begin work`,
 	];
 	return parts.join(" — ");
 }
@@ -325,13 +325,13 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			});
 		}
 
-		// Resolve model from config > manifest > fallback
+		// Resolve model/provider route from config > manifest > fallback chain.
 		const manifestLoader = createManifestLoader(
 			join(projectRoot, config.agents.manifestPath),
 			join(projectRoot, config.agents.baseDir),
 		);
 		const manifest = await manifestLoader.load();
-		const model = resolveModel(config, manifest, "coordinator", "opus");
+		const route = resolveRoute(config, manifest, "coordinator", "opus");
 
 		// Spawn tmux session at project root with Claude Code (interactive mode).
 		// Inject the coordinator base definition via --append-system-prompt so the
@@ -345,10 +345,11 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 		}
 		const launchCommand = buildInteractiveAgentCommand({
 			cliBase,
-			model,
+			model: route.model,
 			systemPrompt,
 		});
 		const pid = await tmux.createSession(tmuxSession, projectRoot, launchCommand.command, {
+			...route.env,
 			OVERSTORY_AGENT_NAME: COORDINATOR_NAME,
 		});
 
@@ -637,7 +638,7 @@ const COORDINATOR_HELP = `overstory coordinator — Manage the persistent coordi
 Usage: overstory coordinator <subcommand> [flags]
 
 Subcommands:
-  start                    Start the coordinator (spawns Claude Code at project root)
+  start                    Start the coordinator (spawns configured CLI at project root)
   stop                     Stop the coordinator (kills tmux session)
   status                   Show coordinator state
 

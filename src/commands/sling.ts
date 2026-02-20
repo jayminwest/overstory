@@ -9,11 +9,11 @@
  * 5. Check name uniqueness + concurrency limit
  * 6. Validate bead exists
  * 7. Create worktree
- * 8. Generate + write overlay CLAUDE.md
+ * 8. Generate + write instruction overlay
  * 9. Deploy hooks config
  * 10. Claim beads issue
  * 11. Create agent identity
- * 12. Create tmux session running claude
+ * 12. Create tmux session running configured CLI
  * 13. Record session in SessionStore + increment run agent count
  * 14. Return AgentSession
  */
@@ -22,7 +22,7 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
-import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { createManifestLoader, resolveRoute } from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
 import type { BeadIssue } from "../beads/client.ts";
 import { createBeadsClient } from "../beads/client.ts";
@@ -107,7 +107,7 @@ export interface BeaconOptions {
 /**
  * Build a structured startup beacon for an agent.
  *
- * The beacon is the first user message sent to a Claude Code agent via
+ * The beacon is the first user message sent to an overstory-managed agent via
  * tmux send-keys. It provides identity context and a numbered startup
  * protocol so the agent knows exactly what to do on boot.
  *
@@ -115,8 +115,8 @@ export interface BeaconOptions {
  *   [OVERSTORY] <agent-name> (<capability>) <ISO timestamp> task:<bead-id>
  *   Depth: <n> | Parent: <parent-name|none>
  *   Startup protocol:
- *   1. Read your assignment in .claude/CLAUDE.md
- *   2. Load expertise: mulch prime
+ *   1. Read your assignment in the resolved instruction file
+ *   2. Ensure runtime scaffolding: overstory init
  *   3. Check mail: overstory mail check --agent <name>
  *   4. Begin working on task <bead-id>
  */
@@ -127,7 +127,7 @@ export function buildBeacon(opts: BeaconOptions): string {
 	const parts = [
 		`[OVERSTORY] ${opts.agentName} (${opts.capability}) ${timestamp} task:${opts.taskId}`,
 		`Depth: ${opts.depth} | Parent: ${parent}`,
-		`Startup: read ${instructionsPath}, run mulch prime, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`,
+		`Startup: read ${instructionsPath}, run overstory init --ensure, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`,
 	];
 	return parts.join(" — ");
 }
@@ -397,7 +397,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 			beadId: taskId,
 		});
 
-		// 8. Generate + write overlay CLAUDE.md
+		// 8. Generate + write instruction overlay
 		const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
 		const baseDefinition = await Bun.file(agentDefPath).text();
 
@@ -478,12 +478,13 @@ export async function slingCommand(args: string[]): Promise<void> {
 
 		// 12. Create tmux session running claude in interactive mode
 		const tmuxSessionName = `overstory-${config.project.name}-${name}`;
-		const model = resolveModel(config, manifest, capability, agentDef.model);
+		const route = resolveRoute(config, manifest, capability, agentDef.model);
 		const launchCommand = buildInteractiveAgentCommand({
 			cliBase,
-			model,
+			model: route.model,
 		});
 		const pid = await createSession(tmuxSessionName, worktreePath, launchCommand.command, {
+			...route.env,
 			OVERSTORY_AGENT_NAME: name,
 			OVERSTORY_WORKTREE_PATH: worktreePath,
 		});

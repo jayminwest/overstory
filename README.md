@@ -72,7 +72,8 @@ bun link
 cd your-project
 overstory init
 
-# Install hooks into .claude/settings.local.json
+# Install hooks for Claude mode (.claude/settings.local.json).
+# In codex mode this command is a safe no-op.
 overstory hooks install
 
 # Start a coordinator (persistent orchestrator)
@@ -92,6 +93,105 @@ overstory nudge <agent-name>
 
 # Check mail from agents
 overstory mail check --inject
+```
+
+## Model Selection
+
+Configure model routing in `.overstory/config.yaml` using profile aliases:
+
+```yaml
+runtime:
+  provider: codex
+  modelProfile: balanced
+cli:
+  base: codex
+providers:
+  codex:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      codex:
+  claude:
+    type: native
+    runtimes:
+      - claude
+    adapters:
+      claude:
+modelProfiles:
+  fast:
+    provider: codex
+    model: gpt-5.1-codex-mini
+  balanced:
+    provider: codex
+    model: gpt-5.3-codex
+  claudeBalanced:
+    provider: claude
+    model: sonnet
+roleProfiles:
+  default:
+    - balanced
+  coordinator:
+    - balanced
+  monitor:
+    - fast
+```
+
+Resolution precedence (highest first):
+
+| Priority | Source | Notes |
+|---|---|---|
+| 1 | `roleProfiles.<role>` -> `modelProfiles.<alias>` | Preferred routing path |
+| 2 | `roleProfiles.default` -> `modelProfiles.<alias>` | Role fallback in profiles flow |
+| 3 | `models.<role>` | Legacy fallback |
+| 4 | `models.default` | Legacy default fallback |
+
+Provider adapter example (codex + claude):
+
+```yaml
+providers:
+  codex:
+    type: native
+    runtimes:
+      - codex
+    adapters:
+      codex:
+  claude:
+    type: native
+    runtimes:
+      - claude
+    adapters:
+      claude:
+modelProfiles:
+  codexQuality:
+    provider: codex
+    model: gpt-5.3-codex
+  claudeQuality:
+    provider: claude
+    model: sonnet
+```
+
+Migration from `models.*` to profiles:
+
+```yaml
+# Before
+models:
+  default: gpt-5
+  coordinator: o3
+
+# After
+modelProfiles:
+  baseline:
+    provider: codex
+    model: gpt-5
+  planning:
+    provider: codex
+    model: o3
+roleProfiles:
+  default:
+    - baseline
+  coordinator:
+    - planning
 ```
 
 ## CLI Reference
@@ -128,9 +228,7 @@ overstory sling <task-id>              Spawn a worker agent
   --depth <n>                            Current hierarchy depth
   --json                                 JSON output
 
-overstory prime                         Load context for orchestrator/agent
-  --agent <name>                         Per-agent priming
-  --compact                              Restore from checkpoint (compaction)
+overstory init --ensure                Idempotent startup/setup refresh
 
 overstory status                        Show all active agents, worktrees, beads state
   --json                                 JSON output
@@ -141,7 +239,7 @@ overstory dashboard                     Live TUI dashboard for agent monitoring
   --interval <ms>                        Refresh interval (default: 2000)
   --all                                  Show all runs (default: current run only)
 
-overstory hooks install                 Install orchestrator hooks to .claude/settings.local.json
+overstory hooks install                 Install orchestrator hooks for Claude mode (.claude/settings.local.json)
   --force                                Overwrite existing hooks
 overstory hooks uninstall               Remove orchestrator hooks
 overstory hooks status                  Check if hooks are installed
@@ -326,7 +424,6 @@ overstory/
       monitor.ts                  Tier 2 monitor management
       merge.ts                    Branch merging
       status.ts                   Fleet status overview
-      prime.ts                    Context priming
       init.ts                     Project initialization
       worktree.ts                 Worktree management
       watch.ts                    Watchdog daemon

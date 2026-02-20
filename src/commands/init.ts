@@ -2,7 +2,7 @@
  * CLI command: overstory init [--force]
  *
  * Scaffolds the `.overstory/` directory in the current project with:
- * - config.yaml (serialized from DEFAULT_CONFIG)
+ * - config.yaml (serialized from init defaults)
  * - agent-manifest.json (starter agent definitions)
  * - hooks.json (central hooks config)
  * - Required subdirectories (agents/, worktrees/, specs/, logs/)
@@ -10,13 +10,140 @@
  */
 
 import { Database } from "bun:sqlite";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DEFAULT_CONFIG } from "../config.ts";
 import { ValidationError } from "../errors.ts";
-import type { AgentManifest, OverstoryConfig } from "../types.ts";
+import type { AgentManifest } from "../types.ts";
+import { getCurrentSessionName } from "../worktree/tmux.ts";
 
 const OVERSTORY_DIR = ".overstory";
+
+/**
+ * Spawn a subprocess and capture output.
+ */
+async function runCommand(
+	cmd: string[],
+	cwd: string,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+	const stdout = await new Response(proc.stdout).text();
+	const stderr = await new Response(proc.stderr).text();
+	const exitCode = await proc.exited;
+	return { exitCode, stdout, stderr };
+}
+
+/**
+ * Check whether a filesystem path exists (file or directory).
+ */
+async function pathExists(path: string): Promise<boolean> {
+	try {
+		await stat(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Return the first non-empty line from stderr/stdout for concise warnings.
+ */
+function firstLine(stderr: string, stdout: string): string {
+	const combined = `${stderr}\n${stdout}`
+		.split("\n")
+		.map((line) => line.trim())
+		.find((line) => line.length > 0);
+	return combined ?? "unknown error";
+}
+
+/**
+ * Best-effort command availability probe.
+ */
+async function isCommandAvailable(command: string): Promise<boolean> {
+	try {
+		const proc = Bun.spawn([command, "--version"], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		await proc.exited;
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Ensure optional external stores exist when their CLIs are available.
+ * Best-effort only — failures are warnings, never fatal.
+ */
+async function bootstrapExternalStores(projectRoot: string): Promise<void> {
+	const hasMulch = await isCommandAvailable("mulch");
+	if (hasMulch) {
+		const mulchConfigPath = join(projectRoot, ".mulch", "mulch.config.yaml");
+		const hasMulchConfig = await pathExists(mulchConfigPath);
+		if (!hasMulchConfig) {
+			const init = await runCommand(["mulch", "init"], projectRoot);
+			if (init.exitCode !== 0) {
+				process.stderr.write(
+					`Warning: mulch init failed (exit ${init.exitCode}): ${firstLine(init.stderr, init.stdout)}\n`,
+				);
+			}
+		}
+	}
+
+	const hasBd = await isCommandAvailable("bd");
+	if (hasBd) {
+		const beadsDirPath = join(projectRoot, ".beads");
+		const hasBeadsDir = await pathExists(beadsDirPath);
+		if (!hasBeadsDir) {
+			const init = await runCommand(["bd", "init"], projectRoot);
+			if (init.exitCode !== 0) {
+				process.stderr.write(
+					`Warning: bd init failed (exit ${init.exitCode}): ${firstLine(init.stderr, init.stdout)}\n`,
+				);
+			}
+		}
+	}
+}
+
+/**
+ * Update session-scoped runtime markers used by merge/nudge behavior.
+ * Best-effort only — failures are non-fatal.
+ */
+async function updateSessionRuntimeMarkers(projectRoot: string, overstoryPath: string): Promise<void> {
+	// Record the current branch as default merge target for this session.
+	try {
+		const proc = Bun.spawn(["git", "symbolic-ref", "--short", "HEAD"], {
+			cwd: projectRoot,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const exitCode = await proc.exited;
+		if (exitCode === 0) {
+			const branch = (await new Response(proc.stdout).text()).trim();
+			if (branch) {
+				const sessionBranchPath = join(overstoryPath, "session-branch.txt");
+				await Bun.write(sessionBranchPath, `${branch}\n`);
+			}
+		}
+	} catch {
+		// Optional marker — ignore errors.
+	}
+
+	// If running inside tmux, register current session for orchestrator nudges.
+	try {
+		const tmuxSession = await getCurrentSessionName();
+		if (tmuxSession) {
+			const regPath = join(overstoryPath, "orchestrator-tmux.json");
+			await Bun.write(
+				regPath,
+				`${JSON.stringify({ tmuxSession, registeredAt: new Date().toISOString() }, null, "\t")}\n`,
+			);
+		}
+	} catch {
+		// Optional marker — ignore errors.
+	}
+}
 
 /**
  * Detect the project name from git or fall back to directory name.
@@ -95,15 +222,115 @@ async function detectCanonicalBranch(root: string): Promise<string> {
  * Handles nested objects with indentation, scalar values,
  * arrays with `- item` syntax, and empty arrays as `[]`.
  */
-function serializeConfigToYaml(config: OverstoryConfig): string {
+function serializeConfigToYaml(config: Record<string, unknown>): string {
 	const lines: string[] = [];
 	lines.push("# Overstory configuration");
 	lines.push("# See: https://github.com/overstory/overstory");
 	lines.push("");
 
-	serializeObject(config as unknown as Record<string, unknown>, lines, 0);
+	serializeObject(config, lines, 0);
 
 	return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Build the `overstory init` config with profile-based model routing.
+ */
+function buildInitConfig(
+	projectName: string,
+	projectRoot: string,
+	canonicalBranch: string,
+): Record<string, unknown> {
+	const defaults = structuredClone(DEFAULT_CONFIG);
+
+	return {
+		project: {
+			name: projectName,
+			root: projectRoot,
+			canonicalBranch,
+		},
+		agents: defaults.agents,
+		worktrees: defaults.worktrees,
+		beads: defaults.beads,
+		mulch: defaults.mulch,
+		merge: defaults.merge,
+		runtime: {
+			provider: "codex",
+			modelProfile: "balanced",
+		},
+		// Legacy runtime selector retained for compatibility with older releases.
+		cli: {
+			base: "codex",
+		},
+		providers: {
+			codex: {
+				type: "native",
+				runtimes: ["codex"],
+				adapters: {
+					codex: {},
+				},
+			},
+			claude: {
+				type: "native",
+				runtimes: ["claude"],
+				adapters: {
+					claude: {},
+				},
+			},
+		},
+		watchdog: defaults.watchdog,
+		logging: defaults.logging,
+		modelProfiles: {
+			fast: {
+				provider: "codex",
+				model: "gpt-5.1-codex-mini",
+			},
+			balanced: {
+				provider: "codex",
+				model: "gpt-5.3-codex",
+			},
+			deep: {
+				provider: "codex",
+				model: "gpt-5.3-codex",
+			},
+			claudeFast: {
+				provider: "claude",
+				model: "haiku",
+			},
+			claudeBalanced: {
+				provider: "claude",
+				model: "sonnet",
+			},
+			claudeDeep: {
+				provider: "claude",
+				model: "opus",
+			},
+		},
+		roleProfiles: {
+			default: ["balanced"],
+			coordinator: ["deep"],
+			lead: ["deep"],
+			supervisor: ["deep"],
+			builder: ["balanced"],
+			reviewer: ["balanced"],
+			merger: ["balanced"],
+			scout: ["fast"],
+			monitor: ["fast"],
+		},
+	};
+}
+
+/**
+ * Add a legacy override snippet so older `models.*` users can migrate safely.
+ */
+function appendLegacyModelsCompatibilityComment(yaml: string): string {
+	return `${yaml.trimEnd()}
+
+# Legacy compatibility fallback (models.* still supported in current releases):
+# models:
+#   default: gpt-5
+#   coordinator: o3
+`;
 }
 
 /**
@@ -282,7 +509,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory prime --agent orchestrator",
+							command: "overstory init --ensure",
 						},
 					],
 				},
@@ -351,7 +578,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory prime --agent orchestrator --compact",
+							command: "overstory init --ensure",
 						},
 					],
 				},
@@ -426,11 +653,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 /**
  * Content for .overstory/.gitignore — runtime state that should not be tracked.
  * Uses wildcard+whitelist pattern: ignore everything, whitelist tracked files.
- * Auto-healed by overstory prime on each session start.
+ * Auto-healed by overstory init on each session start.
  * Config files (config.yaml, agent-manifest.json, hooks.json) remain tracked.
  */
 export const OVERSTORY_GITIGNORE = `# Wildcard+whitelist: ignore everything, whitelist tracked files
-# Auto-healed by overstory prime on each session start
+# Auto-healed by overstory init on each session start
 *
 !.gitignore
 !config.yaml
@@ -506,10 +733,11 @@ function printCreated(relativePath: string): void {
  */
 const INIT_HELP = `overstory init — Initialize .overstory/ in current project
 
-Usage: overstory init [--force]
+Usage: overstory init [--force] [--ensure]
 
 Options:
   --force      Reinitialize even if .overstory/ already exists
+  --ensure     Idempotent startup mode (no warning if already initialized)
   --help, -h   Show this help`;
 
 export async function initCommand(args: string[]): Promise<void> {
@@ -519,6 +747,7 @@ export async function initCommand(args: string[]): Promise<void> {
 	}
 
 	const force = args.includes("--force");
+	const ensure = args.includes("--ensure");
 	const projectRoot = process.cwd();
 	const overstoryPath = join(projectRoot, OVERSTORY_DIR);
 
@@ -538,6 +767,15 @@ export async function initCommand(args: string[]): Promise<void> {
 	// 1. Check if .overstory/ already exists
 	const existingDir = Bun.file(join(overstoryPath, "config.yaml"));
 	if (await existingDir.exists()) {
+		if (ensure && !force) {
+			// Startup path: keep tracked scaffolding healthy and ensure optional stores.
+			await writeOverstoryGitignore(overstoryPath);
+			await writeOverstoryReadme(overstoryPath);
+			await bootstrapExternalStores(projectRoot);
+			await updateSessionRuntimeMarkers(projectRoot, overstoryPath);
+			return;
+		}
+
 		if (!force) {
 			process.stdout.write(
 				"Warning: .overstory/ already initialized in this project.\n" +
@@ -582,12 +820,8 @@ export async function initCommand(args: string[]): Promise<void> {
 	}
 
 	// 4. Write config.yaml
-	const config = structuredClone(DEFAULT_CONFIG);
-	config.project.name = projectName;
-	config.project.root = projectRoot;
-	config.project.canonicalBranch = canonicalBranch;
-
-	const configYaml = serializeConfigToYaml(config);
+	const config = buildInitConfig(projectName, projectRoot, canonicalBranch);
+	const configYaml = appendLegacyModelsCompatibilityComment(serializeConfigToYaml(config));
 	const configPath = join(overstoryPath, "config.yaml");
 	await Bun.write(configPath, configYaml);
 	printCreated(`${OVERSTORY_DIR}/config.yaml`);
@@ -619,6 +853,12 @@ export async function initCommand(args: string[]): Promise<void> {
 			process.stdout.write(`  \u2713 Migrated ${OVERSTORY_DIR}/${dbName} (schema validated)\n`);
 		}
 	}
+
+	// 9. Best-effort bootstrap of optional external stores.
+	await bootstrapExternalStores(projectRoot);
+
+	// 10. Update per-session runtime markers for merge/nudge ergonomics.
+	await updateSessionRuntimeMarkers(projectRoot, overstoryPath);
 
 	process.stdout.write("\nDone.\n");
 	process.stdout.write("  Next: run `overstory hooks install` to enable Claude Code hooks.\n");

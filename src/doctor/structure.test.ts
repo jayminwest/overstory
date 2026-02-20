@@ -50,7 +50,7 @@ describe("checkStructure", () => {
 				reimagineEnabled: false,
 			},
 			providers: {
-				anthropic: { type: "native" },
+				anthropic: { type: "native", runtimes: ["claude"] },
 			},
 			watchdog: {
 				tier0Enabled: true,
@@ -102,7 +102,7 @@ describe("checkStructure", () => {
 		await Bun.write(
 			join(overstoryDir, ".gitignore"),
 			`# Wildcard+whitelist: ignore everything, whitelist tracked files
-# Auto-healed by overstory prime on each session start
+# Auto-healed by overstory init on each session start
 *
 !.gitignore
 !config.yaml

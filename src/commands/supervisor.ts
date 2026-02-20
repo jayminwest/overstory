@@ -16,7 +16,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
-import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { createManifestLoader, resolveRoute } from "../agents/manifest.ts";
 import { createBeadsClient } from "../beads/client.ts";
 import { buildInteractiveAgentCommand, requiresNonRoot, resolveCliBase } from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
@@ -44,7 +44,7 @@ export function buildSupervisorBeacon(opts: {
 	const parts = [
 		`[OVERSTORY] ${opts.name} (supervisor) ${timestamp} task:${opts.beadId}`,
 		`Depth: ${opts.depth} | Parent: ${opts.parent} | Role: per-project supervisor`,
-		`Startup: run mulch prime, check mail (overstory mail check --agent ${opts.name}), read task (bd show ${opts.beadId}), then begin supervising`,
+		`Startup: run overstory init --ensure, check mail (overstory mail check --agent ${opts.name}), review task context (bd show ${opts.beadId} if available), then begin supervising`,
 	];
 	return parts.join(" — ");
 }
@@ -193,13 +193,13 @@ async function startSupervisor(args: string[]): Promise<void> {
 			});
 		}
 
-		// Resolve model from config > manifest > fallback
+		// Resolve model/provider route from config > manifest > fallback chain.
 		const manifestLoader = createManifestLoader(
 			join(projectRoot, config.agents.manifestPath),
 			join(projectRoot, config.agents.baseDir),
 		);
 		const manifest = await manifestLoader.load();
-		const model = resolveModel(config, manifest, "supervisor", "opus");
+		const route = resolveRoute(config, manifest, "supervisor", "opus");
 
 		// Spawn tmux session at project root with Claude Code (interactive mode).
 		// Inject the supervisor base definition via --append-system-prompt.
@@ -212,10 +212,11 @@ async function startSupervisor(args: string[]): Promise<void> {
 		}
 		const launchCommand = buildInteractiveAgentCommand({
 			cliBase,
-			model,
+			model: route.model,
 			systemPrompt,
 		});
 		const pid = await createSession(tmuxSession, projectRoot, launchCommand.command, {
+			...route.env,
 			OVERSTORY_AGENT_NAME: flags.name,
 		});
 
@@ -472,7 +473,7 @@ const SUPERVISOR_HELP = `overstory supervisor — Manage per-project supervisor 
 Usage: overstory supervisor <subcommand> [flags]
 
 Subcommands:
-  start                    Start a supervisor (spawns Claude Code at project root)
+  start                    Start a supervisor (spawns configured CLI at project root)
   stop                     Stop a supervisor (kills tmux session)
   status                   Show supervisor state
 

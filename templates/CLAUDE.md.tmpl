@@ -34,7 +34,7 @@ overstory worktree list       # Show all worktrees with status
 overstory worktree clean --completed  # Remove finished worktrees
 
 # Context and monitoring
-overstory prime               # Reload context (config, mulch, recent activity)
+overstory init --ensure       # Idempotent startup/setup refresh
 overstory watch --background  # Start watchdog daemon
 overstory metrics             # Performance summary
 overstory log <event> --agent <name>  # Hook-driven event logging

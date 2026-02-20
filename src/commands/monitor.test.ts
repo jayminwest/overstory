@@ -34,9 +34,9 @@ describe("buildMonitorBeacon", () => {
 		expect(beacon).toContain(today);
 	});
 
-	test("contains startup instruction: mulch prime", () => {
+	test("contains startup instruction: overstory init", () => {
 		const beacon = buildMonitorBeacon();
-		expect(beacon).toContain("mulch prime");
+		expect(beacon).toContain("overstory init");
 	});
 
 	test("contains startup instruction: overstory status --json", () => {

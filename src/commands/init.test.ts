@@ -280,3 +280,43 @@ describe("initCommand: .overstory/README.md", () => {
 		expect(afterSecondInit).toBe("# custom content\n");
 	});
 });
+
+describe("initCommand: config profile routing defaults", () => {
+	let tempDir: string;
+	let originalCwd: string;
+	let originalWrite: typeof process.stdout.write;
+
+	beforeEach(async () => {
+		tempDir = await createTempGitRepo();
+		originalCwd = process.cwd();
+		process.chdir(tempDir);
+
+		originalWrite = process.stdout.write;
+		process.stdout.write = (() => true) as typeof process.stdout.write;
+	});
+
+	afterEach(async () => {
+		process.chdir(originalCwd);
+		process.stdout.write = originalWrite;
+		await cleanupTempDir(tempDir);
+	});
+
+	test("writes runtime/provider + profile routing config with legacy models snippet", async () => {
+		await initCommand([]);
+
+		const configPath = join(tempDir, ".overstory", "config.yaml");
+		const content = await Bun.file(configPath).text();
+
+		expect(content).toContain("runtime:");
+		expect(content).toContain("provider: codex");
+		expect(content).toContain("modelProfiles:");
+		expect(content).toContain("roleProfiles:");
+		expect(content).toContain("runtimes:");
+		expect(content).toContain("adapters:");
+		expect(content).toContain("adapters:\n      codex:");
+		expect(content).toContain("adapters:\n      claude:");
+		expect(content).toContain("# Legacy compatibility fallback (models.* still supported");
+		expect(content).toContain("# models:");
+		expect(content).toContain("#   default: gpt-5");
+	});
+});

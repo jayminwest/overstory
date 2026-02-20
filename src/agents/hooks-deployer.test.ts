@@ -183,7 +183,7 @@ describe("deployHooks", () => {
 		expect(hookTypes).toHaveLength(6);
 	});
 
-	test("SessionStart hook runs overstory prime with agent name", async () => {
+	test("SessionStart hook runs overstory init", async () => {
 		const worktreePath = join(tempDir, "worktree");
 
 		await deployHooks(worktreePath, "prime-agent");
@@ -193,7 +193,7 @@ describe("deployHooks", () => {
 		const parsed = JSON.parse(content);
 		const sessionStart = parsed.hooks.SessionStart[0];
 		expect(sessionStart.hooks[0].type).toBe("command");
-		expect(sessionStart.hooks[0].command).toContain("overstory prime --agent prime-agent");
+		expect(sessionStart.hooks[0].command).toContain("overstory init");
 		expect(sessionStart.hooks[0].command).toContain("OVERSTORY_AGENT_NAME");
 	});
 
@@ -212,7 +212,7 @@ describe("deployHooks", () => {
 		expect(userPrompt.hooks[0].command).toContain("OVERSTORY_AGENT_NAME");
 	});
 
-	test("PreCompact hook runs overstory prime with --compact flag", async () => {
+	test("PreCompact hook runs overstory init", async () => {
 		const worktreePath = join(tempDir, "worktree");
 
 		await deployHooks(worktreePath, "compact-agent");
@@ -222,9 +222,7 @@ describe("deployHooks", () => {
 		const parsed = JSON.parse(content);
 		const preCompact = parsed.hooks.PreCompact[0];
 		expect(preCompact.hooks[0].type).toBe("command");
-		expect(preCompact.hooks[0].command).toContain(
-			"overstory prime --agent compact-agent --compact",
-		);
+		expect(preCompact.hooks[0].command).toContain("overstory init");
 		expect(preCompact.hooks[0].command).toContain("OVERSTORY_AGENT_NAME");
 	});
 

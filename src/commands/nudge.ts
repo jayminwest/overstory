@@ -62,7 +62,7 @@ function getPositionalArgs(args: string[]): string[] {
 /**
  * Load the orchestrator's registered tmux session name.
  *
- * Written by `overstory prime` at SessionStart when the orchestrator
+ * Written by `overstory init --ensure` at SessionStart when the orchestrator
  * is running inside tmux. Enables agents to nudge the orchestrator
  * even though it's not tracked in the SessionStore.
  */
@@ -86,7 +86,7 @@ async function loadOrchestratorTmuxSession(projectRoot: string): Promise<string 
  *
  * For regular agents, looks up the SessionStore.
  * For "orchestrator", falls back to the orchestrator-tmux.json registration
- * file written by `overstory prime`.
+ * file written by `overstory init --ensure`.
  */
 async function resolveTargetSession(
 	projectRoot: string,

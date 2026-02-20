@@ -9,7 +9,7 @@
  * Unlike regular agents spawned by sling, the monitor:
  * - Has no worktree (operates on the main working tree)
  * - Has no bead assignment (it monitors, not implements)
- * - Has no overlay CLAUDE.md (context comes via overstory status + mail)
+ * - Has no per-task instruction overlay (context comes via overstory status + mail)
  * - Persists across patrol cycles
  */
 
@@ -17,7 +17,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
-import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { createManifestLoader, resolveRoute } from "../agents/manifest.ts";
 import { buildInteractiveAgentCommand, requiresNonRoot, resolveCliBase } from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
@@ -46,7 +46,7 @@ export function buildMonitorBeacon(): string {
 	const parts = [
 		`[OVERSTORY] ${MONITOR_NAME} (monitor/tier-2) ${timestamp}`,
 		"Depth: 0 | Parent: none | Role: continuous fleet patrol",
-		`Startup: run mulch prime, check fleet (overstory status --json), check mail (overstory mail check --agent ${MONITOR_NAME}), then begin patrol loop`,
+		`Startup: run overstory init --ensure, check fleet (overstory status --json), check mail (overstory mail check --agent ${MONITOR_NAME}), then begin patrol loop`,
 	];
 	return parts.join(" — ");
 }
@@ -138,13 +138,13 @@ async function startMonitor(args: string[]): Promise<void> {
 			});
 		}
 
-		// Resolve model from config > manifest > fallback
+		// Resolve model/provider route from config > manifest > fallback chain.
 		const manifestLoader = createManifestLoader(
 			join(projectRoot, config.agents.manifestPath),
 			join(projectRoot, config.agents.baseDir),
 		);
 		const manifest = await manifestLoader.load();
-		const model = resolveModel(config, manifest, "monitor", "sonnet");
+		const route = resolveRoute(config, manifest, "monitor", "sonnet");
 
 		// Spawn tmux session at project root with Claude Code (interactive mode).
 		// Inject the monitor base definition via --append-system-prompt.
@@ -156,10 +156,11 @@ async function startMonitor(args: string[]): Promise<void> {
 		}
 		const launchCommand = buildInteractiveAgentCommand({
 			cliBase,
-			model,
+			model: route.model,
 			systemPrompt,
 		});
 		const pid = await createSession(tmuxSession, projectRoot, launchCommand.command, {
+			...route.env,
 			OVERSTORY_AGENT_NAME: MONITOR_NAME,
 		});
 
@@ -343,7 +344,7 @@ const MONITOR_HELP = `overstory monitor — Manage the persistent Tier 2 monitor
 Usage: overstory monitor <subcommand> [flags]
 
 Subcommands:
-  start                    Start the monitor (spawns Claude Code at project root)
+  start                    Start the monitor (spawns configured CLI at project root)
   stop                     Stop the monitor (kills tmux session)
   status                   Show monitor state
 

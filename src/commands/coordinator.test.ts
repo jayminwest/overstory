@@ -916,9 +916,9 @@ describe("buildCoordinatorBeacon", () => {
 
 	test("includes startup instructions", () => {
 		const beacon = buildCoordinatorBeacon();
-		expect(beacon).toContain("mulch prime");
+		expect(beacon).toContain("overstory init");
 		expect(beacon).toContain("overstory mail check --agent coordinator");
-		expect(beacon).toContain("bd ready");
+		expect(beacon).toContain("bd ready if available");
 		expect(beacon).toContain("overstory group status");
 	});
 
