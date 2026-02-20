@@ -16,6 +16,9 @@ export interface ProviderConfig {
 	authTokenEnv?: string;
 }
 
+/** Primary interactive CLI used for spawned agents. */
+export type CliBase = "claude" | "codex";
+
 // === Project Configuration ===
 
 export interface OverstoryConfig {
@@ -45,6 +48,10 @@ export interface OverstoryConfig {
 	merge: {
 		aiResolveEnabled: boolean;
 		reimagineEnabled: boolean;
+	};
+	/** Optional runtime CLI base selection. Defaults to "claude" when omitted. */
+	cli?: {
+		base: CliBase;
 	};
 	providers: Record<string, ProviderConfig>;
 	watchdog: {
@@ -274,6 +281,10 @@ export interface OverlayConfig {
 	baseDefinition: string;
 	/** Pre-fetched mulch expertise output to embed directly in the overlay. */
 	mulchExpertise?: string;
+	/** Output directory for the instruction overlay (defaults to ".claude"). */
+	instructionsDir?: string;
+	/** Output filename for the instruction overlay (defaults to "CLAUDE.md"). */
+	instructionsFile?: string;
 }
 
 // === Merge Queue ===

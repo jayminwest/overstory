@@ -65,6 +65,17 @@ agents:
 		expect(config.beads.enabled).toBe(true);
 	});
 
+	test("parses cli.base override", async () => {
+		await ensureOverstoryDir();
+		await writeConfig(`
+cli:
+  base: codex
+`);
+
+		const config = await loadConfig(tempDir);
+		expect(config.cli?.base).toBe("codex");
+	});
+
 	test("always sets project.root to the actual projectRoot", async () => {
 		await ensureOverstoryDir();
 		await writeConfig(`
@@ -355,6 +366,14 @@ mulch:
 		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
 	});
 
+	test("rejects invalid cli.base", async () => {
+		await writeConfig(`
+cli:
+  base: invalid
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
 	test("rejects zombieThresholdMs <= staleThresholdMs", async () => {
 		await writeConfig(`
 watchdog:
@@ -516,6 +535,7 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_CONFIG.beads).toBeDefined();
 		expect(DEFAULT_CONFIG.mulch).toBeDefined();
 		expect(DEFAULT_CONFIG.merge).toBeDefined();
+		expect(DEFAULT_CONFIG.cli).toBeDefined();
 		expect(DEFAULT_CONFIG.providers).toBeDefined();
 		expect(DEFAULT_CONFIG.watchdog).toBeDefined();
 		expect(DEFAULT_CONFIG.models).toBeDefined();
@@ -535,5 +555,6 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_CONFIG.watchdog.tier0IntervalMs).toBe(30_000);
 		expect(DEFAULT_CONFIG.watchdog.staleThresholdMs).toBe(300_000);
 		expect(DEFAULT_CONFIG.watchdog.zombieThresholdMs).toBe(600_000);
+		expect(DEFAULT_CONFIG.cli?.base).toBe("claude");
 	});
 });

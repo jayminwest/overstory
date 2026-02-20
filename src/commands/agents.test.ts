@@ -3,7 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionStore } from "../sessions/store.ts";
@@ -62,6 +62,24 @@ Some expertise here.
 			"src/commands/agents.test.ts",
 			"src/index.ts",
 		]);
+	});
+
+	it("should extract file paths from AGENTS.md when custom instructions path is provided", async () => {
+		const overlayPath = join(tempDir, "AGENTS.md");
+		const content = `# Agent Overlay
+
+## File Scope (exclusive ownership)
+
+These files are yours to modify:
+
+- \`src/codex/one.ts\`
+- \`src/codex/two.ts\`
+
+## Expertise
+`;
+		await Bun.write(overlayPath, content);
+		const scope = await extractFileScope(tempDir, "AGENTS.md");
+		expect(scope).toEqual(["src/codex/one.ts", "src/codex/two.ts"]);
 	});
 
 	afterEach(async () => {
@@ -227,6 +245,41 @@ describe("discoverAgents", () => {
 		const names = allAgents.map((a) => a.agentName);
 		expect(names).toContain("builder-working");
 		expect(names).toContain("builder-completed");
+	});
+
+	it("should use custom instructions path when discovering file scope", async () => {
+		const worktreePath = join(tempDir, ".overstory", "worktrees", "builder-codex");
+		await mkdir(worktreePath, { recursive: true });
+		await Bun.write(
+			join(worktreePath, "AGENTS.md"),
+			`## File Scope (exclusive ownership)\n\n- \`src/codex.ts\`\n\n## Expertise\n`,
+		);
+
+		const store = createSessionStore(dbPath);
+		const session: AgentSession = {
+			id: "session-codex",
+			agentName: "builder-codex",
+			capability: "builder",
+			worktreePath,
+			branchName: "overstory/builder-codex/task-123",
+			beadId: "task-123",
+			tmuxSession: "overstory-test-builder-codex",
+			state: "working",
+			pid: 12345,
+			parentAgent: null,
+			depth: 0,
+			runId: "run-1",
+			startedAt: "2024-01-01T00:00:00Z",
+			lastActivity: "2024-01-01T00:01:00Z",
+			escalationLevel: 0,
+			stalledSince: null,
+		};
+		store.upsert(session);
+		store.close();
+
+		const agents = await discoverAgents(tempDir, { instructionsPath: "AGENTS.md" });
+		expect(agents).toHaveLength(1);
+		expect(agents[0]?.fileScope).toEqual(["src/codex.ts"]);
 	});
 
 	afterEach(async () => {

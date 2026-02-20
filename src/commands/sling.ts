@@ -26,6 +26,12 @@ import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
 import type { BeadIssue } from "../beads/client.ts";
 import { createBeadsClient } from "../beads/client.ts";
+import {
+	buildInteractiveAgentCommand,
+	getInstructionLayout,
+	requiresNonRoot,
+	resolveCliBase,
+} from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
 import { createMulchClient } from "../mulch/client.ts";
@@ -95,6 +101,7 @@ export interface BeaconOptions {
 	taskId: string;
 	parentAgent: string | null;
 	depth: number;
+	instructionsPath?: string;
 }
 
 /**
@@ -116,10 +123,11 @@ export interface BeaconOptions {
 export function buildBeacon(opts: BeaconOptions): string {
 	const timestamp = new Date().toISOString();
 	const parent = opts.parentAgent ?? "none";
+	const instructionsPath = opts.instructionsPath ?? ".claude/CLAUDE.md";
 	const parts = [
 		`[OVERSTORY] ${opts.agentName} (${opts.capability}) ${timestamp} task:${opts.taskId}`,
 		`Depth: ${opts.depth} | Parent: ${parent}`,
-		`Startup: read .claude/CLAUDE.md, run mulch prime, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`,
+		`Startup: read ${instructionsPath}, run mulch prime, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`,
 	];
 	return parts.join(" — ");
 }
@@ -232,13 +240,6 @@ export async function slingCommand(args: string[]): Promise<void> {
 		});
 	}
 
-	if (isRunningAsRoot()) {
-		throw new AgentError(
-			"Cannot spawn agents as root (UID 0). The claude CLI rejects --dangerously-skip-permissions when run as root, causing the tmux session to die immediately. Run overstory as a non-root user.",
-			{ agentName: name },
-		);
-	}
-
 	// Validate that spec file exists if provided, and resolve to absolute path
 	// so agents in worktrees can access it (worktrees don't have .overstory/)
 	let absoluteSpecPath: string | null = null;
@@ -264,6 +265,15 @@ export async function slingCommand(args: string[]): Promise<void> {
 	// 1. Load config
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const cliBase = resolveCliBase(config);
+	const instructionLayout = getInstructionLayout(cliBase);
+
+	if (requiresNonRoot(cliBase) && isRunningAsRoot()) {
+		throw new AgentError(
+			"Cannot spawn agents as root (UID 0). The claude CLI rejects --dangerously-skip-permissions when run as root, causing the tmux session to die immediately. Run overstory as a non-root user.",
+			{ agentName: name },
+		);
+	}
 
 	// 2. Validate depth limit
 	// Hierarchy: orchestrator(0) -> lead(1) -> specialist(2)
@@ -417,6 +427,8 @@ export async function slingCommand(args: string[]): Promise<void> {
 			capability,
 			baseDefinition,
 			mulchExpertise,
+			instructionsDir: instructionLayout.dir,
+			instructionsFile: instructionLayout.file,
 		};
 
 		try {
@@ -436,8 +448,10 @@ export async function slingCommand(args: string[]): Promise<void> {
 			throw err;
 		}
 
-		// 9. Deploy hooks config (capability-specific guards)
-		await deployHooks(worktreePath, name, capability);
+		// 9. Deploy hooks config (capability-specific guards) for Claude runtime.
+		if (cliBase === "claude") {
+			await deployHooks(worktreePath, name, capability);
+		}
 
 		// 10. Claim beads issue
 		if (config.beads.enabled) {
@@ -465,8 +479,11 @@ export async function slingCommand(args: string[]): Promise<void> {
 		// 12. Create tmux session running claude in interactive mode
 		const tmuxSessionName = `overstory-${config.project.name}-${name}`;
 		const model = resolveModel(config, manifest, capability, agentDef.model);
-		const claudeCmd = `claude --model ${model} --dangerously-skip-permissions`;
-		const pid = await createSession(tmuxSessionName, worktreePath, claudeCmd, {
+		const launchCommand = buildInteractiveAgentCommand({
+			cliBase,
+			model,
+		});
+		const pid = await createSession(tmuxSessionName, worktreePath, launchCommand.command, {
 			OVERSTORY_AGENT_NAME: name,
 			OVERSTORY_WORKTREE_PATH: worktreePath,
 		});
@@ -514,6 +531,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 			taskId,
 			parentAgent,
 			depth,
+			instructionsPath: instructionLayout.startupPath,
 		});
 		await sendKeys(tmuxSessionName, beacon);
 

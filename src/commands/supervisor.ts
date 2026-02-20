@@ -18,6 +18,7 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { createBeadsClient } from "../beads/client.ts";
+import { buildInteractiveAgentCommand, requiresNonRoot, resolveCliBase } from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { openSessionStore } from "../sessions/compat.ts";
@@ -129,14 +130,14 @@ async function startSupervisor(args: string[]): Promise<void> {
 		});
 	}
 
-	if (isRunningAsRoot()) {
+	const cwd = process.cwd();
+	const config = await loadConfig(cwd);
+	const cliBase = resolveCliBase(config);
+	if (requiresNonRoot(cliBase) && isRunningAsRoot()) {
 		throw new AgentError(
 			"Cannot spawn agents as root (UID 0). The claude CLI rejects --dangerously-skip-permissions when run as root, causing the tmux session to die immediately. Run overstory as a non-root user.",
 		);
 	}
-
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
 	const projectRoot = config.project.root;
 
 	// Validate bead exists and is workable (open or in_progress)
@@ -172,8 +173,10 @@ async function startSupervisor(args: string[]): Promise<void> {
 			store.updateState(flags.name, "completed");
 		}
 
-		// Deploy supervisor-specific hooks to the project root's .claude/ directory.
-		await deployHooks(projectRoot, flags.name, "supervisor");
+		// Deploy supervisor-specific hooks only for Claude runtime sessions.
+		if (cliBase === "claude") {
+			await deployHooks(projectRoot, flags.name, "supervisor");
+		}
 
 		// Create supervisor identity if first run
 		const identityBaseDir = join(projectRoot, ".overstory", "agents");
@@ -203,13 +206,16 @@ async function startSupervisor(args: string[]): Promise<void> {
 		const tmuxSession = `overstory-${config.project.name}-supervisor-${flags.name}`;
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "supervisor.md");
 		const agentDefFile = Bun.file(agentDefPath);
-		let claudeCmd = `claude --model ${model} --dangerously-skip-permissions`;
+		let systemPrompt: string | undefined;
 		if (await agentDefFile.exists()) {
-			const agentDef = await agentDefFile.text();
-			const escaped = agentDef.replace(/'/g, "'\\''");
-			claudeCmd += ` --append-system-prompt '${escaped}'`;
+			systemPrompt = await agentDefFile.text();
 		}
-		const pid = await createSession(tmuxSession, projectRoot, claudeCmd, {
+		const launchCommand = buildInteractiveAgentCommand({
+			cliBase,
+			model,
+			systemPrompt,
+		});
+		const pid = await createSession(tmuxSession, projectRoot, launchCommand.command, {
 			OVERSTORY_AGENT_NAME: flags.name,
 		});
 

@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { buildInteractiveAgentCommand, requiresNonRoot, resolveCliBase } from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { openSessionStore } from "../sessions/compat.ts";
@@ -74,14 +75,14 @@ async function startMonitor(args: string[]): Promise<void> {
 	const json = args.includes("--json");
 	const shouldAttach = resolveAttach(args, !!process.stdout.isTTY);
 
-	if (isRunningAsRoot()) {
+	const cwd = process.cwd();
+	const config = await loadConfig(cwd);
+	const cliBase = resolveCliBase(config);
+	if (requiresNonRoot(cliBase) && isRunningAsRoot()) {
 		throw new AgentError(
 			"Cannot spawn agents as root (UID 0). The claude CLI rejects --dangerously-skip-permissions when run as root, causing the tmux session to die immediately. Run overstory as a non-root user.",
 		);
 	}
-
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
 
 	// Gate on tier2Enabled config flag
 	if (!config.watchdog.tier2Enabled) {
@@ -117,10 +118,10 @@ async function startMonitor(args: string[]): Promise<void> {
 			store.updateState(MONITOR_NAME, "completed");
 		}
 
-		// Deploy monitor-specific hooks to the project root's .claude/ directory.
-		// The monitor gets the same structural enforcement as other non-implementation
-		// agents (Write/Edit/NotebookEdit blocked, dangerous bash commands blocked).
-		await deployHooks(projectRoot, MONITOR_NAME, "monitor");
+		// Deploy monitor-specific hooks only for Claude runtime sessions.
+		if (cliBase === "claude") {
+			await deployHooks(projectRoot, MONITOR_NAME, "monitor");
+		}
 
 		// Create monitor identity if first run
 		const identityBaseDir = join(projectRoot, ".overstory", "agents");
@@ -149,13 +150,16 @@ async function startMonitor(args: string[]): Promise<void> {
 		// Inject the monitor base definition via --append-system-prompt.
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "monitor.md");
 		const agentDefFile = Bun.file(agentDefPath);
-		let claudeCmd = `claude --model ${model} --dangerously-skip-permissions`;
+		let systemPrompt: string | undefined;
 		if (await agentDefFile.exists()) {
-			const agentDef = await agentDefFile.text();
-			const escaped = agentDef.replace(/'/g, "'\\''");
-			claudeCmd += ` --append-system-prompt '${escaped}'`;
+			systemPrompt = await agentDefFile.text();
 		}
-		const pid = await createSession(tmuxSession, projectRoot, claudeCmd, {
+		const launchCommand = buildInteractiveAgentCommand({
+			cliBase,
+			model,
+			systemPrompt,
+		});
+		const pid = await createSession(tmuxSession, projectRoot, launchCommand.command, {
 			OVERSTORY_AGENT_NAME: MONITOR_NAME,
 		});
 

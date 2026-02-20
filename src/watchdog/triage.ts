@@ -2,13 +2,19 @@
  * Tier 1 AI-assisted failure classification for stalled agents.
  *
  * When an agent is detected as stalled, triage reads recent log entries and
- * uses Claude to classify the situation as recoverable, fatal, or long-running.
- * Falls back to "extend" if Claude is unavailable.
+ * uses Claude (in Claude CLI mode) to classify the situation as recoverable,
+ * fatal, or long-running.
+ *
+ * In Codex CLI mode, triage uses a deterministic safe fallback and returns
+ * "extend" without invoking Claude.
  */
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveCliBase } from "../cli-base.ts";
+import { loadConfig } from "../config.ts";
 import { AgentError } from "../errors.ts";
+import type { CliBase } from "../types.ts";
 
 /**
  * Triage a stalled agent by analyzing its recent log output with Claude.
@@ -28,10 +34,18 @@ export async function triageAgent(options: {
 	agentName: string;
 	root: string;
 	lastActivity: string;
+	/** Active runtime CLI base. Auto-detected from config when omitted. */
+	cliBase?: CliBase;
 	/** Timeout in ms for the Claude subprocess. Defaults to 30_000 (30s). */
 	timeoutMs?: number;
 }): Promise<"retry" | "terminate" | "extend"> {
 	const { agentName, root, lastActivity, timeoutMs } = options;
+	const cliBase = options.cliBase ?? (await detectCliBase(root));
+	if (cliBase === "codex") {
+		// Codex mode intentionally avoids Claude hard-dependency at Tier 1.
+		return "extend";
+	}
+
 	const logsDir = join(root, ".overstory", "logs", agentName);
 
 	let logContent: string;
@@ -50,6 +64,16 @@ export async function triageAgent(options: {
 	} catch {
 		// Claude not available — default to extend (safe fallback)
 		return "extend";
+	}
+}
+
+async function detectCliBase(root: string): Promise<CliBase> {
+	try {
+		const config = await loadConfig(root);
+		return resolveCliBase(config);
+	} catch {
+		// Fallback for partially initialized repos/tests.
+		return "claude";
 	}
 }
 

@@ -34,6 +34,9 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		aiResolveEnabled: true,
 		reimagineEnabled: false,
 	},
+	cli: {
+		base: "claude",
+	},
 	providers: {
 		anthropic: { type: "native" },
 	},
@@ -427,6 +430,17 @@ function validateConfig(config: OverstoryConfig): void {
 			throw new ValidationError(`models.${role} must be one of: ${validModels.join(", ")}`, {
 				field: `models.${role}`,
 				value: model,
+			});
+		}
+	}
+
+	// cli.base must be one of the supported runtime CLIs when configured
+	if (config.cli !== undefined) {
+		const validCliBases = ["claude", "codex"] as const;
+		if (!validCliBases.includes(config.cli.base)) {
+			throw new ValidationError(`cli.base must be one of: ${validCliBases.join(", ")}`, {
+				field: "cli.base",
+				value: config.cli.base,
 			});
 		}
 	}

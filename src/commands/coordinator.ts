@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { buildInteractiveAgentCommand, requiresNonRoot, resolveCliBase } from "../cli-base.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { openSessionStore } from "../sessions/compat.ts";
@@ -267,14 +268,14 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 	const watchdogFlag = args.includes("--watchdog");
 	const monitorFlag = args.includes("--monitor");
 
-	if (isRunningAsRoot()) {
+	const cwd = process.cwd();
+	const config = await loadConfig(cwd);
+	const cliBase = resolveCliBase(config);
+	if (requiresNonRoot(cliBase) && isRunningAsRoot()) {
 		throw new AgentError(
 			"Cannot spawn agents as root (UID 0). The claude CLI rejects --dangerously-skip-permissions when run as root, causing the tmux session to die immediately. Run overstory as a non-root user.",
 		);
 	}
-
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
 	const projectRoot = config.project.root;
 	const watchdog = deps._watchdog ?? createDefaultWatchdog(projectRoot);
 	const monitor = deps._monitor ?? createDefaultMonitor(projectRoot);
@@ -303,13 +304,11 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			store.updateState(COORDINATOR_NAME, "completed");
 		}
 
-		// Deploy hooks to the project root so the coordinator gets event logging,
-		// mail check --inject, and activity tracking via the standard hook pipeline.
-		// The ENV_GUARD prefix on all hooks (both template and generated guards)
-		// ensures they only activate when OVERSTORY_AGENT_NAME is set (i.e. for
-		// the coordinator's tmux session), so the user's own Claude Code session
-		// at the project root is unaffected.
-		await deployHooks(projectRoot, COORDINATOR_NAME, "coordinator");
+		// Deploy hooks only for Claude runtime sessions.
+		// ENV_GUARD ensures project-root hooks only affect overstory-managed sessions.
+		if (cliBase === "claude") {
+			await deployHooks(projectRoot, COORDINATOR_NAME, "coordinator");
+		}
 
 		// Create coordinator identity if first run
 		const identityBaseDir = join(projectRoot, ".overstory", "agents");
@@ -340,14 +339,16 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 		// (overstory-gaio, overstory-0kwf).
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "coordinator.md");
 		const agentDefFile = Bun.file(agentDefPath);
-		let claudeCmd = `claude --model ${model} --dangerously-skip-permissions`;
+		let systemPrompt: string | undefined;
 		if (await agentDefFile.exists()) {
-			const agentDef = await agentDefFile.text();
-			// Single-quote the content for safe shell expansion (only escape single quotes)
-			const escaped = agentDef.replace(/'/g, "'\\''");
-			claudeCmd += ` --append-system-prompt '${escaped}'`;
+			systemPrompt = await agentDefFile.text();
 		}
-		const pid = await tmux.createSession(tmuxSession, projectRoot, claudeCmd, {
+		const launchCommand = buildInteractiveAgentCommand({
+			cliBase,
+			model,
+			systemPrompt,
+		});
+		const pid = await tmux.createSession(tmuxSession, projectRoot, launchCommand.command, {
 			OVERSTORY_AGENT_NAME: COORDINATOR_NAME,
 		});
 

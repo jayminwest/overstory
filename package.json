@@ -33,10 +33,9 @@
 		"typecheck": "tsc --noEmit",
 		"version:bump": "bun scripts/version-bump.ts"
 	},
-	"dependencies": {},
 	"devDependencies": {
-		"@types/bun": "latest",
-		"typescript": "^5.9.0",
-		"@biomejs/biome": "^2.3.15"
+		"@biomejs/biome": "^2.3.15",
+		"@types/bun": "^1.3.9",
+		"typescript": "^5.9.0"
 	}
 }
