@@ -410,6 +410,13 @@ describe("buildBeacon", () => {
 		expect(beacon).toContain("overstory mail check --agent reviewer-beta");
 	});
 
+	test("omits init ensure step in codex worker beacon", () => {
+		const beacon = buildBeacon(makeBeaconOpts({ cliBase: "codex" }));
+
+		expect(beacon).not.toContain("overstory init --ensure");
+		expect(beacon).toContain("overstory mail check --agent test-builder");
+	});
+
 	test("reflects capability in header", () => {
 		const beacon = buildBeacon(makeBeaconOpts({ capability: "scout" }));
 

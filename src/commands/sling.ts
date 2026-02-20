@@ -102,6 +102,7 @@ export interface BeaconOptions {
 	parentAgent: string | null;
 	depth: number;
 	instructionsPath?: string;
+	cliBase?: "claude" | "codex";
 }
 
 /**
@@ -116,7 +117,7 @@ export interface BeaconOptions {
  *   Depth: <n> | Parent: <parent-name|none>
  *   Startup protocol:
  *   1. Read your assignment in the resolved instruction file
- *   2. Ensure runtime scaffolding: overstory init
+ *   2. Ensure runtime scaffolding (claude runtime): overstory init --ensure
  *   3. Check mail: overstory mail check --agent <name>
  *   4. Begin working on task <bead-id>
  */
@@ -124,10 +125,14 @@ export function buildBeacon(opts: BeaconOptions): string {
 	const timestamp = new Date().toISOString();
 	const parent = opts.parentAgent ?? "none";
 	const instructionsPath = opts.instructionsPath ?? ".claude/CLAUDE.md";
+	const startup =
+		opts.cliBase === "codex"
+			? `Startup: read ${instructionsPath}, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`
+			: `Startup: read ${instructionsPath}, run overstory init --ensure --agent ${opts.agentName}, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`;
 	const parts = [
 		`[OVERSTORY] ${opts.agentName} (${opts.capability}) ${timestamp} task:${opts.taskId}`,
 		`Depth: ${opts.depth} | Parent: ${parent}`,
-		`Startup: read ${instructionsPath}, run overstory init --ensure, check mail (overstory mail check --agent ${opts.agentName}), then begin task ${opts.taskId}`,
+		startup,
 	];
 	return parts.join(" — ");
 }
@@ -533,6 +538,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 			parentAgent,
 			depth,
 			instructionsPath: instructionLayout.startupPath,
+			cliBase,
 		});
 		await sendKeys(tmuxSessionName, beacon);
 
