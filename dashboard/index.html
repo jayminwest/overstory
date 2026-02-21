@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Overstory Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/dashboard/dashboard.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0/lib/addon-web-links.min.js"></script>
+</head>
+<body>
+  <div class="dashboard">
+    <!-- Top status strip -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 class="logo">OVERSTORY</h1>
+        <span class="logo-sub">swarm dashboard</span>
+      </div>
+      <div class="topbar-stats" id="topbar-stats"></div>
+      <div class="topbar-right">
+        <div class="refresh-indicator" id="refresh-dot"></div>
+        <span class="topbar-time" id="topbar-time"></span>
+      </div>
+    </header>
+
+    <!-- Left sidebar: agent tree -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-section-label">AGENTS</div>
+      <div class="agent-list" id="agent-list">
+        <div class="empty-state">Loading...</div>
+      </div>
+    </aside>
+
+    <!-- Center panel: agent detail -->
+    <main class="center" id="center">
+      <div class="center-header" id="center-header">
+        <div class="agent-identity" id="agent-identity">
+          <span class="empty-hint">Select an agent to inspect</span>
+        </div>
+        <div class="center-tabs" id="center-tabs">
+          <button type="button" class="tab active" data-tab="overview">Overview</button>
+          <button type="button" class="tab" data-tab="terminal">Terminal</button>
+          <button type="button" class="tab" data-tab="trace">Trace</button>
+          <button type="button" class="tab" data-tab="agent-mail">Mail</button>
+        </div>
+      </div>
+      <div class="center-content" id="center-content">
+        <div class="empty-state center-empty">
+          <div class="empty-icon">&#x25C7;</div>
+          <div>Click an agent in the sidebar to inspect it</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Right panel: mail, merges, events, metrics -->
+    <aside class="right-panel">
+      <div class="right-tabs" id="right-tabs">
+        <button type="button" class="tab active" data-tab="inbox">Mail</button>
+        <button type="button" class="tab" data-tab="merge-queue">Merges</button>
+        <button type="button" class="tab" data-tab="events">Events</button>
+        <button type="button" class="tab" data-tab="metrics">Metrics</button>
+        <button type="button" class="tab" data-tab="usage">Usage</button>
+      </div>
+      <div class="right-content" id="right-content">
+        <div class="empty-state">Loading...</div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="/dashboard/dashboard.js"></script>
+</body>
+</html>

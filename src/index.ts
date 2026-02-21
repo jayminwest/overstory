@@ -36,6 +36,7 @@ import { statusCommand } from "./commands/status.ts";
 import { supervisorCommand } from "./commands/supervisor.ts";
 import { traceCommand } from "./commands/trace.ts";
 import { watchCommand } from "./commands/watch.ts";
+import { webCommand } from "./commands/web.ts";
 import { worktreeCommand } from "./commands/worktree.ts";
 import { OverstoryError, WorktreeError } from "./errors.ts";
 import { setQuiet } from "./logging/color.ts";
@@ -69,6 +70,7 @@ Commands:
   log <event>             Log a hook event
   logs [options]          Query NDJSON logs across agents
   watch                   Start watchdog daemon
+  web                     Start web dashboard server
   feed [options]          Unified real-time event stream across all agents
   trace <target>         Chronological event timeline for agent/bead
   errors [options]        Aggregated error view across agents
@@ -108,6 +110,7 @@ const COMMANDS = [
 	"log",
 	"logs",
 	"watch",
+	"web",
 	"trace",
 	"feed",
 	"errors",
@@ -254,6 +257,9 @@ async function main(): Promise<void> {
 			break;
 		case "watch":
 			await watchCommand(commandArgs);
+			break;
+		case "web":
+			await webCommand(commandArgs);
 			break;
 		case "trace":
 			await traceCommand(commandArgs);

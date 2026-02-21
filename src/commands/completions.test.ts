@@ -13,7 +13,7 @@ import {
 
 describe("COMMANDS array", () => {
 	it("should have exactly 29 commands", () => {
-		expect(COMMANDS).toHaveLength(29);
+		expect(COMMANDS).toHaveLength(30);
 	});
 
 	it("should include all expected command names", () => {
@@ -31,6 +31,7 @@ describe("COMMANDS array", () => {
 		expect(names).toContain("doctor");
 		expect(names).toContain("log");
 		expect(names).toContain("watch");
+		expect(names).toContain("web");
 		expect(names).toContain("trace");
 		expect(names).toContain("errors");
 		expect(names).toContain("replay");

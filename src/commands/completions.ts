@@ -222,6 +222,16 @@ export const COMMANDS: readonly CommandDef[] = [
 		],
 	},
 	{
+		name: "web",
+		desc: "Start web dashboard server",
+		flags: [
+			{ name: "--port", desc: "Port to listen on (default 3000)", takesValue: true },
+			{ name: "--background", desc: "Run in background" },
+			{ name: "--json", desc: "JSON output" },
+			{ name: "--help", desc: "Show help" },
+		],
+	},
+	{
 		name: "trace",
 		desc: "Chronological event timeline for agent/bead",
 		flags: [
@@ -605,7 +615,7 @@ export function generateBash(): string {
 		"  local cur prev words cword",
 		"  _init_completion || return",
 		"",
-		"  local commands='init sling prime status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run'",
+		"  local commands='init sling prime status dashboard inspect merge nudge clean doctor log logs watch web trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run'",
 		"",
 		"  # Top-level completion",
 		"  if [[ $cword -eq 1 ]]; then",
