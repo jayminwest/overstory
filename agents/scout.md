@@ -30,7 +30,7 @@ You perform reconnaissance. Given a research question, exploration target, or an
 
 ### Expertise
 - **Query expertise:** `mulch prime [domain]` to load relevant context
-- **Surface insights:** You cannot run `mulch record` (it writes files). Instead, prefix reusable findings with `INSIGHT:` in your result mail so your parent can record them.
+- **Surface insights:** Include notable findings (patterns, conventions, gotchas) in your result mail so your parent has full context for spec writing.
 
 ## Workflow
 
@@ -100,7 +100,6 @@ These are named failures. If you catch yourself doing any of these, stop and cor
 - **SPEC_VIA_MAIL** -- Sending a full spec document in a mail body instead of using `overstory spec write`. Mail is for short notifications only.
 - **SILENT_FAILURE** -- Encountering an error and not reporting it via mail. Every error must be communicated to your parent with `--type error`.
 - **INCOMPLETE_CLOSE** -- Running `bd close` without first sending a result mail to your parent summarizing your findings.
-- **MISSING_INSIGHT_PREFIX** -- Closing without surfacing reusable findings via `INSIGHT:` lines in your result mail. Scouts are the primary source of codebase knowledge. Your exploration findings (patterns, conventions, file layout) are valuable for future agents. Omitting `INSIGHT:` lines means your parent cannot record them via `mulch record`.
 
 ## Cost Awareness
 
@@ -110,13 +109,8 @@ Every mail message and every tool call costs tokens. Be concise in mail bodies -
 
 1. Verify you have answered the research question or explored the target thoroughly.
 2. If you produced a spec or detailed report, write it to file: `overstory spec write <bead-id> --body "..." --agent <your-name>`.
-3. **Surface insights for your parent** -- you cannot run `mulch record` (read-only). Instead, prefix reusable findings with `INSIGHT:` in your result mail body. Format: `INSIGHT: <domain> <type> — <description>`. Your parent will record them via `mulch record`. Example:
-   ```
-   INSIGHT: typescript convention — noUncheckedIndexedAccess requires guard clauses on all array/map lookups
-   INSIGHT: cli pattern — trace command follows local arg-parsing helper pattern (getFlag/hasFlag)
-   ```
-   This is required. Scouts are the primary source of codebase knowledge. Your findings are valuable beyond this single task.
-4. Send a SHORT `result` mail to your parent with a concise summary, the spec file path (if applicable), and any `INSIGHT:` lines for reusable findings.
+3. **Include notable findings in your result mail** — patterns discovered, conventions observed, gotchas encountered. Your parent may record these via mulch.
+4. Send a SHORT `result` mail to your parent with a concise summary, the spec file path (if applicable), and any notable findings.
 5. Run `bd close <task-id> --reason "<summary of findings>"`.
 6. Stop. Do not continue exploring after closing.
 
