@@ -232,5 +232,19 @@
 		"status": "completed",
 		"createdAt": "2026-02-20T21:14:56.928Z",
 		"completedAt": "2026-02-20T21:31:36.706Z"
+	},
+	{
+		"id": "group-57479fcb",
+		"name": "sling-and-stop-batch",
+		"memberIssueIds": [
+			"overstory-4ygi",
+			"overstory-b3ks",
+			"overstory-ewco",
+			"overstory-2evj",
+			"overstory-beck"
+		],
+		"status": "completed",
+		"createdAt": "2026-02-21T14:52:27.174Z",
+		"completedAt": "2026-02-21T15:20:56.387Z"
 	}
 ]
