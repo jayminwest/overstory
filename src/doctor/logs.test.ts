@@ -35,6 +35,7 @@ describe("checkLogs", () => {
 				maxConcurrent: 5,
 				staggerDelayMs: 1000,
 				maxDepth: 2,
+				maxSessionsPerRun: 0,
 			},
 			worktrees: {
 				baseDir: ".overstory/worktrees",

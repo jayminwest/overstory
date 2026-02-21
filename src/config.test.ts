@@ -348,6 +348,40 @@ agents:
 		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
 	});
 
+	test("accepts maxSessionsPerRun of 0 (unlimited)", async () => {
+		await writeConfig(`
+agents:
+  maxSessionsPerRun: 0
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.agents.maxSessionsPerRun).toBe(0);
+	});
+
+	test("accepts positive maxSessionsPerRun", async () => {
+		await writeConfig(`
+agents:
+  maxSessionsPerRun: 20
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.agents.maxSessionsPerRun).toBe(20);
+	});
+
+	test("rejects negative maxSessionsPerRun", async () => {
+		await writeConfig(`
+agents:
+  maxSessionsPerRun: -1
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
+	test("rejects non-integer maxSessionsPerRun", async () => {
+		await writeConfig(`
+agents:
+  maxSessionsPerRun: 1.5
+`);
+		await expect(loadConfig(tempDir)).rejects.toThrow(ValidationError);
+	});
+
 	test("rejects invalid mulch.primeFormat", async () => {
 		await writeConfig(`
 mulch:
@@ -657,6 +691,7 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_CONFIG.agents.maxConcurrent).toBe(25);
 		expect(DEFAULT_CONFIG.agents.maxDepth).toBe(2);
 		expect(DEFAULT_CONFIG.agents.staggerDelayMs).toBe(2_000);
+		expect(DEFAULT_CONFIG.agents.maxSessionsPerRun).toBe(0);
 		expect(DEFAULT_CONFIG.watchdog.tier0IntervalMs).toBe(30_000);
 		expect(DEFAULT_CONFIG.watchdog.staleThresholdMs).toBe(300_000);
 		expect(DEFAULT_CONFIG.watchdog.zombieThresholdMs).toBe(600_000);

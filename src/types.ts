@@ -36,6 +36,7 @@ export interface OverstoryConfig {
 		maxConcurrent: number; // Rate limit ceiling
 		staggerDelayMs: number; // Delay between spawns
 		maxDepth: number; // Hierarchy depth limit (default 2)
+		maxSessionsPerRun: number; // Max total sessions per run (0 = unlimited)
 	};
 	worktrees: {
 		baseDir: string; // Where worktrees live
@@ -280,6 +281,8 @@ export interface OverlayConfig {
 	baseDefinition: string;
 	/** Pre-fetched mulch expertise output to embed directly in the overlay. */
 	mulchExpertise?: string;
+	/** When true, lead agents should skip Phase 1 (scout) and go straight to Phase 2 (build). */
+	skipScout?: boolean;
 }
 
 // === Merge Queue ===

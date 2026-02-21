@@ -18,6 +18,7 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		maxConcurrent: 25,
 		staggerDelayMs: 2_000,
 		maxDepth: 2,
+		maxSessionsPerRun: 0,
 	},
 	worktrees: {
 		baseDir: ".overstory/worktrees",
@@ -380,6 +381,17 @@ function validateConfig(config: OverstoryConfig): void {
 			field: "agents.staggerDelayMs",
 			value: config.agents.staggerDelayMs,
 		});
+	}
+
+	// agents.maxSessionsPerRun must be a non-negative integer (0 = unlimited)
+	if (!Number.isInteger(config.agents.maxSessionsPerRun) || config.agents.maxSessionsPerRun < 0) {
+		throw new ValidationError(
+			"agents.maxSessionsPerRun must be a non-negative integer (0 = unlimited)",
+			{
+				field: "agents.maxSessionsPerRun",
+				value: config.agents.maxSessionsPerRun,
+			},
+		);
 	}
 
 	// watchdog intervals must be positive if enabled

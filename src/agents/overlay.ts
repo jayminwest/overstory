@@ -57,6 +57,21 @@ function formatMulchExpertise(expertise: string | undefined): string {
 const READ_ONLY_CAPABILITIES = new Set(["scout", "reviewer"]);
 
 /**
+ * The skip-scout section injected into lead overlays when --skip-scout is passed.
+ * Instructs the lead to bypass Phase 1 (exploration) and go straight to Phase 2 (build).
+ */
+const SKIP_SCOUT_SECTION = `
+## Skip Scout Mode
+
+**IMPORTANT**: You have been spawned with \`--skip-scout\`. Skip Phase 1 (Scout) entirely.
+Go directly to Phase 2 (Build): write specs from your existing knowledge and the
+pre-loaded expertise above, then spawn builders immediately.
+
+Do NOT spawn scout agents. Do NOT explore the codebase extensively.
+Your parent has already gathered the context you need.
+`;
+
+/**
  * Format the quality gates section. Read-only agents (scout, reviewer) get
  * a lightweight section that only tells them to close the issue and report.
  * Writable agents get the full quality gates (tests, lint, build, commit).
@@ -191,6 +206,7 @@ export async function generateOverlay(config: OverlayConfig): Promise<string> {
 		"{{QUALITY_GATES}}": formatQualityGates(config),
 		"{{CONSTRAINTS}}": formatConstraints(config),
 		"{{SPEC_INSTRUCTION}}": specInstruction,
+		"{{SKIP_SCOUT}}": config.skipScout ? SKIP_SCOUT_SECTION : "",
 		"{{BASE_DEFINITION}}": config.baseDefinition,
 	};
 

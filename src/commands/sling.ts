@@ -159,6 +159,36 @@ export function parentHasScouts(
 }
 
 /**
+ * Check if any active agent is already working on the given bead ID.
+ * Returns the agent name if locked, or null if the bead is free.
+ *
+ * @param activeSessions - Currently active (non-zombie) sessions
+ * @param beadId - The bead task ID to check for concurrent work
+ */
+export function checkBeadLock(
+	activeSessions: ReadonlyArray<{ agentName: string; beadId: string }>,
+	beadId: string,
+): string | null {
+	const existing = activeSessions.find((s) => s.beadId === beadId);
+	return existing?.agentName ?? null;
+}
+
+/**
+ * Check if spawning another agent would exceed the per-run session limit.
+ * Returns true if the limit is reached. A limit of 0 means unlimited.
+ *
+ * @param maxSessionsPerRun - Config limit (0 = unlimited)
+ * @param currentRunAgentCount - Number of agents already spawned in this run
+ */
+export function checkRunSessionLimit(
+	maxSessionsPerRun: number,
+	currentRunAgentCount: number,
+): boolean {
+	if (maxSessionsPerRun <= 0) return false;
+	return currentRunAgentCount >= maxSessionsPerRun;
+}
+
+/**
  * Validate hierarchy constraints: the coordinator (no parent) may only spawn leads.
  *
  * When parentAgent is null, the caller is the coordinator or a human.
@@ -218,6 +248,7 @@ Options:
   --files <f1,f2,...>        Exclusive file scope (comma-separated)
   --parent <agent-name>      Parent agent for hierarchy tracking
   --depth <n>                Current hierarchy depth (default: 0)
+  --skip-scout                 Skip scout phase for lead agents (jump to build)
   --force-hierarchy            Bypass hierarchy validation (debugging only)
   --json                     Output result as JSON
   --help, -h                 Show this help`;
@@ -243,6 +274,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 	const depthStr = getFlag(args, "--depth");
 	const depth = depthStr !== undefined ? Number.parseInt(depthStr, 10) : 0;
 	const forceHierarchy = args.includes("--force-hierarchy");
+	const skipScout = args.includes("--skip-scout");
 
 	if (!name || name.trim().length === 0) {
 		throw new ValidationError("--name is required for sling", { field: "name" });
@@ -259,6 +291,13 @@ export async function slingCommand(args: string[]): Promise<void> {
 		throw new AgentError(
 			"Cannot spawn agents as root (UID 0). The claude CLI rejects --dangerously-skip-permissions when run as root, causing the tmux session to die immediately. Run overstory as a non-root user.",
 			{ agentName: name },
+		);
+	}
+
+	// Warn if --skip-scout is used for a non-lead capability (harmless but confusing)
+	if (skipScout && capability !== "lead") {
+		process.stderr.write(
+			`⚠️  Warning: --skip-scout is only meaningful for leads. Ignoring for "${capability}" agent "${name}".\n`,
 		);
 	}
 
@@ -340,6 +379,23 @@ export async function slingCommand(args: string[]): Promise<void> {
 		await Bun.write(currentRunPath, runId);
 	}
 
+	// 4b. Check per-run session limit
+	if (config.agents.maxSessionsPerRun > 0) {
+		const runCheckStore = createRunStore(join(overstoryDir, "sessions.db"));
+		try {
+			const run = runCheckStore.getRun(runId);
+			if (run && checkRunSessionLimit(config.agents.maxSessionsPerRun, run.agentCount)) {
+				throw new AgentError(
+					`Run session limit reached: ${run.agentCount}/${config.agents.maxSessionsPerRun} agents spawned in run "${runId}". ` +
+						`Increase agents.maxSessionsPerRun in config.yaml or start a new run.`,
+					{ agentName: name },
+				);
+			}
+		} finally {
+			runCheckStore.close();
+		}
+	}
+
 	// 5. Check name uniqueness and concurrency limit against active sessions
 	const { store } = openSessionStore(overstoryDir);
 	try {
@@ -356,6 +412,16 @@ export async function slingCommand(args: string[]): Promise<void> {
 			throw new AgentError(`Agent name "${name}" is already in use (state: ${existing.state})`, {
 				agentName: name,
 			});
+		}
+
+		// 5d. Bead-level locking: prevent concurrent agents on the same bead ID.
+		const lockHolder = checkBeadLock(activeSessions, taskId);
+		if (lockHolder !== null) {
+			throw new AgentError(
+				`Bead "${taskId}" is already being worked by agent "${lockHolder}". ` +
+					`Concurrent work on the same bead causes duplicate issues and wasted tokens.`,
+				{ agentName: name },
+			);
 		}
 
 		// 5b. Enforce stagger delay between agent spawns
@@ -442,6 +508,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 			capability,
 			baseDefinition,
 			mulchExpertise,
+			skipScout: skipScout && capability === "lead",
 		};
 
 		try {

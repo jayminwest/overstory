@@ -4,6 +4,8 @@ import {
 	type BeaconOptions,
 	buildBeacon,
 	calculateStaggerDelay,
+	checkBeadLock,
+	checkRunSessionLimit,
 	inferDomainsFromFiles,
 	isRunningAsRoot,
 	parentHasScouts,
@@ -544,5 +546,82 @@ describe("isRunningAsRoot", () => {
 
 	test("returns false when getuid is undefined (platform without getuid)", () => {
 		expect(isRunningAsRoot(undefined)).toBe(false);
+	});
+});
+
+/**
+ * Tests for checkBeadLock.
+ *
+ * checkBeadLock prevents concurrent agents from working the same bead ID.
+ * It checks the active session list and returns the agent name that holds
+ * the lock (i.e., is already working on the bead), or null if the bead is free.
+ */
+
+function makeBeadSession(agentName: string, beadId: string): { agentName: string; beadId: string } {
+	return { agentName, beadId };
+}
+
+describe("checkBeadLock", () => {
+	test("returns null when no sessions exist", () => {
+		expect(checkBeadLock([], "overstory-abc")).toBeNull();
+	});
+
+	test("returns null when no session matches the bead ID", () => {
+		const sessions = [
+			makeBeadSession("builder-1", "overstory-xyz"),
+			makeBeadSession("builder-2", "overstory-def"),
+		];
+
+		expect(checkBeadLock(sessions, "overstory-abc")).toBeNull();
+	});
+
+	test("returns the agent name when a session matches", () => {
+		const sessions = [
+			makeBeadSession("builder-1", "overstory-abc"),
+			makeBeadSession("builder-2", "overstory-xyz"),
+		];
+
+		expect(checkBeadLock(sessions, "overstory-abc")).toBe("builder-1");
+	});
+
+	test("returns the first matching agent when multiple sessions match", () => {
+		// Multiple sessions can have the same beadId (e.g., retried agent)
+		// checkBeadLock returns the first match
+		const sessions = [
+			makeBeadSession("builder-1", "overstory-abc"),
+			makeBeadSession("builder-2", "overstory-abc"),
+		];
+
+		expect(checkBeadLock(sessions, "overstory-abc")).toBe("builder-1");
+	});
+});
+
+/**
+ * Tests for checkRunSessionLimit.
+ *
+ * checkRunSessionLimit prevents spawning when the per-run agent cap is reached.
+ * A limit of 0 (or negative) means unlimited. Returns true if the limit
+ * is reached (spawn should be blocked), false otherwise.
+ */
+
+describe("checkRunSessionLimit", () => {
+	test("returns false when limit is 0 (unlimited)", () => {
+		expect(checkRunSessionLimit(0, 100)).toBe(false);
+	});
+
+	test("returns false when count is below limit", () => {
+		expect(checkRunSessionLimit(10, 5)).toBe(false);
+	});
+
+	test("returns true when count equals limit", () => {
+		expect(checkRunSessionLimit(10, 10)).toBe(true);
+	});
+
+	test("returns true when count exceeds limit", () => {
+		expect(checkRunSessionLimit(10, 15)).toBe(true);
+	});
+
+	test("returns false when limit is negative (treated as unlimited)", () => {
+		expect(checkRunSessionLimit(-1, 100)).toBe(false);
 	});
 });
