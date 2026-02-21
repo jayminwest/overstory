@@ -88,6 +88,16 @@ export const COMMANDS: readonly CommandDef[] = [
 		],
 	},
 	{
+		name: "stop",
+		desc: "Terminate a running agent",
+		flags: [
+			{ name: "--force", desc: "Force kill and force-delete branch" },
+			{ name: "--clean-worktree", desc: "Remove the agent's worktree after stopping" },
+			{ name: "--json", desc: "JSON output" },
+			{ name: "--help", desc: "Show help" },
+		],
+	},
+	{
 		name: "status",
 		desc: "Show all active agents and project state",
 		flags: [
@@ -605,7 +615,7 @@ export function generateBash(): string {
 		"  local cur prev words cword",
 		"  _init_completion || return",
 		"",
-		"  local commands='init sling prime status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run'",
+		"  local commands='init sling prime stop status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run'",
 		"",
 		"  # Top-level completion",
 		"  if [[ $cword -eq 1 ]]; then",

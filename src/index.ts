@@ -33,6 +33,7 @@ import { runCommand } from "./commands/run.ts";
 import { slingCommand } from "./commands/sling.ts";
 import { specCommand } from "./commands/spec.ts";
 import { statusCommand } from "./commands/status.ts";
+import { stopCommand } from "./commands/stop.ts";
 import { supervisorCommand } from "./commands/supervisor.ts";
 import { traceCommand } from "./commands/trace.ts";
 import { watchCommand } from "./commands/watch.ts";
@@ -52,6 +53,7 @@ Commands:
   sling <task-id>         Spawn a worker agent
   spec <sub>              Manage task specs (write)
   prime                   Load context for orchestrator/agent
+  stop <agent>            Terminate a running agent
   status                  Show all active agents and project state
   dashboard               Live TUI dashboard for agent monitoring
   inspect <agent>         Deep inspection of a single agent
@@ -91,6 +93,7 @@ const COMMANDS = [
 	"sling",
 	"spec",
 	"prime",
+	"stop",
 	"status",
 	"dashboard",
 	"inspect",
@@ -199,6 +202,9 @@ async function main(): Promise<void> {
 			break;
 		case "prime":
 			await primeCommand(commandArgs);
+			break;
+		case "stop":
+			await stopCommand(commandArgs);
 			break;
 		case "status":
 			await statusCommand(commandArgs);
