@@ -360,7 +360,7 @@ describe("deployHooks", () => {
 		expect(exists).toBe(true);
 	});
 
-	test("overwrites existing settings.local.json", async () => {
+	test("preserves non-hooks keys from existing settings.local.json", async () => {
 		const worktreePath = join(tempDir, "worktree");
 		const claudeDir = join(worktreePath, ".claude");
 		const { mkdir } = await import("node:fs/promises");
@@ -371,7 +371,7 @@ describe("deployHooks", () => {
 
 		const content = await Bun.file(join(claudeDir, "settings.local.json")).text();
 		expect(content).toContain("new-agent");
-		expect(content).not.toContain('"old"');
+		expect(content).toContain('"old"');
 	});
 
 	test("handles agent names with special characters", async () => {
@@ -399,6 +399,133 @@ describe("deployHooks", () => {
 		await deployHooks(worktreePath, "template-exists");
 		const exists = await Bun.file(join(worktreePath, ".claude", "settings.local.json")).exists();
 		expect(exists).toBe(true);
+	});
+
+	test("preserves existing non-overstory hooks when settings.local.json exists", async () => {
+		const worktreePath = join(tempDir, "merge-wt");
+		const claudeDir = join(worktreePath, ".claude");
+		const { mkdir } = await import("node:fs/promises");
+		await mkdir(claudeDir, { recursive: true });
+
+		// Write existing settings with a user hook
+		const existingSettings = {
+			hooks: {
+				PreToolUse: [
+					{
+						matcher: "",
+						hooks: [{ type: "command", command: "echo my-custom-pretool-hook" }],
+					},
+				],
+			},
+		};
+		await Bun.write(
+			join(claudeDir, "settings.local.json"),
+			JSON.stringify(existingSettings, null, "\t"),
+		);
+
+		await deployHooks(worktreePath, "merge-test-agent");
+
+		const content = await Bun.file(join(claudeDir, "settings.local.json")).text();
+		const parsed = JSON.parse(content);
+
+		// User hook should be preserved
+		expect(content).toContain("echo my-custom-pretool-hook");
+
+		// Overstory hooks should also be present
+		expect(content).toContain("merge-test-agent");
+		expect(parsed.hooks.PreToolUse).toBeDefined();
+
+		// User hook should come AFTER overstory hooks (guards first)
+		const preToolUse = parsed.hooks.PreToolUse;
+		const userHookIdx = preToolUse.findIndex(
+			(h: { hooks: Array<{ command: string }> }) =>
+				h.hooks?.[0]?.command === "echo my-custom-pretool-hook",
+		);
+		const overstoryHookIdx = preToolUse.findIndex(
+			(h: { hooks: Array<{ command: string }> }) =>
+				h.hooks?.[0]?.command?.includes("OVERSTORY_WORKTREE_PATH"),
+		);
+		expect(overstoryHookIdx).toBeLessThan(userHookIdx);
+	});
+
+	test("preserves non-hooks keys (permissions, env) when settings.local.json exists", async () => {
+		const worktreePath = join(tempDir, "preserve-keys-wt");
+		const claudeDir = join(worktreePath, ".claude");
+		const { mkdir } = await import("node:fs/promises");
+		await mkdir(claudeDir, { recursive: true });
+
+		const existingSettings = {
+			permissions: { allow: ["Read", "Glob"] },
+			env: { MY_VAR: "hello" },
+			hooks: {
+				SessionStart: [
+					{
+						matcher: "",
+						hooks: [{ type: "command", command: "echo user-session-start" }],
+					},
+				],
+			},
+		};
+		await Bun.write(
+			join(claudeDir, "settings.local.json"),
+			JSON.stringify(existingSettings, null, "\t"),
+		);
+
+		await deployHooks(worktreePath, "preserve-keys-agent");
+
+		const content = await Bun.file(join(claudeDir, "settings.local.json")).text();
+		const parsed = JSON.parse(content);
+
+		// Non-hooks keys preserved
+		expect(parsed.permissions).toEqual({ allow: ["Read", "Glob"] });
+		expect(parsed.env).toEqual({ MY_VAR: "hello" });
+
+		// User hook preserved
+		expect(content).toContain("echo user-session-start");
+
+		// Overstory hooks present
+		expect(content).toContain("preserve-keys-agent");
+	});
+
+	test("is idempotent (no duplicates on re-deploy)", async () => {
+		const worktreePath = join(tempDir, "idempotent-wt");
+
+		// First deploy
+		await deployHooks(worktreePath, "idempotent-agent");
+
+		const firstContent = await Bun.file(
+			join(worktreePath, ".claude", "settings.local.json"),
+		).text();
+		const firstParsed = JSON.parse(firstContent);
+		const firstPreToolUseCount = firstParsed.hooks.PreToolUse.length;
+		const firstSessionStartCount = firstParsed.hooks.SessionStart.length;
+
+		// Second deploy -- should produce identical output
+		await deployHooks(worktreePath, "idempotent-agent");
+
+		const secondContent = await Bun.file(
+			join(worktreePath, ".claude", "settings.local.json"),
+		).text();
+		const secondParsed = JSON.parse(secondContent);
+
+		expect(secondParsed.hooks.PreToolUse.length).toBe(firstPreToolUseCount);
+		expect(secondParsed.hooks.SessionStart.length).toBe(firstSessionStartCount);
+	});
+
+	test("handles invalid JSON in existing settings.local.json by overwriting", async () => {
+		const worktreePath = join(tempDir, "invalid-json-wt");
+		const claudeDir = join(worktreePath, ".claude");
+		const { mkdir } = await import("node:fs/promises");
+		await mkdir(claudeDir, { recursive: true });
+
+		await Bun.write(join(claudeDir, "settings.local.json"), "not valid json {{{");
+
+		await deployHooks(worktreePath, "invalid-json-agent");
+
+		const content = await Bun.file(join(claudeDir, "settings.local.json")).text();
+		const parsed = JSON.parse(content);
+		expect(parsed.hooks).toBeDefined();
+		expect(content).toContain("invalid-json-agent");
 	});
 
 	test("AgentError includes agent name in context", async () => {

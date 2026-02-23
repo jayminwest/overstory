@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { AgentError } from "../errors.ts";
+import { mergeEventHooks, stripOverstoryCommands } from "../hooks/merge-utils.ts";
 
 /**
  * Capabilities that must never modify project files.
@@ -516,7 +517,7 @@ export async function deployHooks(
 	}
 
 	// Parse the base config and merge guards into PreToolUse
-	const config = JSON.parse(content) as { hooks: Record<string, HookEntry[]> };
+	const config = JSON.parse(content) as { hooks: Record<string, unknown[]> };
 	const pathGuards = getPathBoundaryGuards();
 	const dangerGuards = getDangerGuards(agentName);
 	const capabilityGuards = getCapabilityGuards(capability);
@@ -527,7 +528,8 @@ export async function deployHooks(
 		config.hooks.PreToolUse = [...allGuards, ...preToolUse];
 	}
 
-	const finalContent = `${JSON.stringify(config, null, "\t")}\n`;
+	// The generated overstory hooks config (source)
+	const sourceHooks = config.hooks;
 
 	const claudeDir = join(worktreePath, ".claude");
 	const outputPath = join(claudeDir, "settings.local.json");
@@ -540,6 +542,66 @@ export async function deployHooks(
 			cause: err instanceof Error ? err : undefined,
 		});
 	}
+
+	// Read-then-merge: if settings.local.json already exists, merge overstory
+	// hooks into it rather than overwriting. This preserves user hooks.
+	let finalConfig: Record<string, unknown> = config;
+
+	const existingFile = Bun.file(outputPath);
+	if (await existingFile.exists()) {
+		try {
+			const existingContent = await existingFile.text();
+			const existing = JSON.parse(existingContent) as Record<string, unknown>;
+
+			// Separate hooks from other keys
+			const { hooks: existingHooksRaw, ...rest } = existing;
+
+			if (existingHooksRaw && typeof existingHooksRaw === "object") {
+				const existingHooks = existingHooksRaw as Record<string, unknown[]>;
+
+				// Step 1: Strip existing overstory commands to avoid stale entries
+				const cleaned: Record<string, unknown[]> = {};
+				for (const [eventKey, entries] of Object.entries(existingHooks)) {
+					if (!Array.isArray(entries)) continue;
+					const kept: unknown[] = [];
+					for (const entry of entries) {
+						const stripped = stripOverstoryCommands(entry);
+						if (stripped !== null) kept.push(stripped);
+					}
+					if (kept.length > 0) {
+						cleaned[eventKey] = kept;
+					}
+				}
+
+				// Step 2: Merge new overstory hooks BEFORE user hooks per event key
+				const merged: Record<string, unknown[]> = {};
+
+				// Process all event keys from both sources
+				const allKeys = new Set([...Object.keys(sourceHooks), ...Object.keys(cleaned)]);
+				for (const eventKey of allKeys) {
+					const sourceEntries = sourceHooks[eventKey] ?? [];
+					const userEntries = cleaned[eventKey] ?? [];
+					const sourceArray = Array.isArray(sourceEntries) ? sourceEntries : [];
+					const userArray = Array.isArray(userEntries) ? userEntries : [];
+
+					// Overstory hooks first (guards run before user hooks), then user hooks
+					// Deduplicate: only add user entries whose commands don't already exist in source
+					merged[eventKey] = mergeEventHooks(sourceArray, userArray);
+				}
+
+				// Preserve all non-hooks keys from existing file
+				finalConfig = { ...rest, hooks: merged };
+			} else {
+				// No existing hooks -- just preserve other keys and add new hooks
+				finalConfig = { ...rest, hooks: sourceHooks };
+			}
+		} catch (_err) {
+			// Invalid JSON in existing file -- fall back to overwrite
+			finalConfig = config;
+		}
+	}
+
+	const finalContent = `${JSON.stringify(finalConfig, null, "\t")}\n`;
 
 	try {
 		await Bun.write(outputPath, finalContent);
