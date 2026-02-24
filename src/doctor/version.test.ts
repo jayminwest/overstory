@@ -16,6 +16,8 @@ const mockConfig: OverstoryConfig = {
 		staggerDelayMs: 1000,
 		maxDepth: 2,
 		maxSessionsPerRun: 0,
+		userAgentDir: "",
+		capabilityAliases: {},
 	},
 	worktrees: {
 		baseDir: "/tmp/.overstory/worktrees",
@@ -49,6 +51,11 @@ const mockConfig: OverstoryConfig = {
 	logging: {
 		verbose: false,
 		redactSecrets: true,
+	},
+	slashCommands: [],
+	tracking: {
+		provider: "builtin" as const,
+		externalAgents: { trackManager: "", dependencyManager: "" },
 	},
 };
 

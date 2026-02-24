@@ -27,6 +27,8 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		staggerDelayMs: 2_000,
 		maxDepth: 2,
 		maxSessionsPerRun: 0,
+		userAgentDir: "",
+		capabilityAliases: {},
 	},
 	worktrees: {
 		baseDir: ".overstory/worktrees",
@@ -60,6 +62,14 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 	logging: {
 		verbose: false,
 		redactSecrets: true,
+	},
+	slashCommands: [],
+	tracking: {
+		provider: "builtin",
+		externalAgents: {
+			trackManager: "",
+			dependencyManager: "",
+		},
 	},
 };
 
@@ -499,6 +509,48 @@ function validateConfig(config: OverstoryConfig): void {
 		);
 	}
 
+	// agents.userAgentDir must be a string (empty string = disabled)
+	if (typeof config.agents.userAgentDir !== "string") {
+		throw new ValidationError("agents.userAgentDir must be a string (empty string to disable)", {
+			field: "agents.userAgentDir",
+			value: config.agents.userAgentDir,
+		});
+	}
+
+	// agents.capabilityAliases must be an object if present
+	if (
+		config.agents.capabilityAliases !== null &&
+		typeof config.agents.capabilityAliases === "object"
+	) {
+		for (const [cap, alias] of Object.entries(config.agents.capabilityAliases)) {
+			if (alias === null || typeof alias !== "object") {
+				throw new ValidationError(`agents.capabilityAliases.${cap} must be an object`, {
+					field: `agents.capabilityAliases.${cap}`,
+					value: alias,
+				});
+			}
+			const a = alias as unknown as Record<string, unknown>;
+			if (typeof a.userAgent !== "string" || a.userAgent.length === 0) {
+				throw new ValidationError(
+					`agents.capabilityAliases.${cap}.userAgent must be a non-empty string`,
+					{
+						field: `agents.capabilityAliases.${cap}.userAgent`,
+						value: a.userAgent,
+					},
+				);
+			}
+			if (a.tags !== undefined && !Array.isArray(a.tags)) {
+				throw new ValidationError(
+					`agents.capabilityAliases.${cap}.tags must be an array if present`,
+					{
+						field: `agents.capabilityAliases.${cap}.tags`,
+						value: a.tags,
+					},
+				);
+			}
+		}
+	}
+
 	// watchdog intervals must be positive if enabled
 	if (config.watchdog.tier0Enabled && config.watchdog.tier0IntervalMs <= 0) {
 		throw new ValidationError("watchdog.tier0IntervalMs must be positive when tier0 is enabled", {
@@ -646,6 +698,73 @@ function validateConfig(config: OverstoryConfig): void {
 					},
 				);
 			}
+		}
+	}
+
+	// slashCommands: validate each entry if present
+	if (config.slashCommands && Array.isArray(config.slashCommands)) {
+		for (let i = 0; i < config.slashCommands.length; i++) {
+			const cmd = config.slashCommands[i];
+			if (!cmd) continue;
+			if (!cmd.name || typeof cmd.name !== "string") {
+				throw new ValidationError(`slashCommands[${i}].name must be a non-empty string`, {
+					field: `slashCommands[${i}].name`,
+					value: cmd.name,
+				});
+			}
+			if (!cmd.description || typeof cmd.description !== "string") {
+				throw new ValidationError(`slashCommands[${i}].description must be a non-empty string`, {
+					field: `slashCommands[${i}].description`,
+					value: cmd.description,
+				});
+			}
+			if (!Array.isArray(cmd.availableTo) || cmd.availableTo.length === 0) {
+				throw new ValidationError(
+					`slashCommands[${i}].availableTo must be a non-empty array of capability names`,
+					{
+						field: `slashCommands[${i}].availableTo`,
+						value: cmd.availableTo,
+					},
+				);
+			}
+		}
+	}
+
+	// tracking: validate provider and externalAgents
+	const validTrackingProviders = ["builtin", "external"];
+	if (!validTrackingProviders.includes(config.tracking.provider)) {
+		throw new ValidationError(
+			`tracking.provider must be one of: ${validTrackingProviders.join(", ")}`,
+			{
+				field: "tracking.provider",
+				value: config.tracking.provider,
+			},
+		);
+	}
+	if (config.tracking.provider === "external") {
+		if (
+			!config.tracking.externalAgents.trackManager ||
+			typeof config.tracking.externalAgents.trackManager !== "string"
+		) {
+			throw new ValidationError(
+				"tracking.externalAgents.trackManager must be a non-empty string when provider is 'external'",
+				{
+					field: "tracking.externalAgents.trackManager",
+					value: config.tracking.externalAgents.trackManager,
+				},
+			);
+		}
+		if (
+			!config.tracking.externalAgents.dependencyManager ||
+			typeof config.tracking.externalAgents.dependencyManager !== "string"
+		) {
+			throw new ValidationError(
+				"tracking.externalAgents.dependencyManager must be a non-empty string when provider is 'external'",
+				{
+					field: "tracking.externalAgents.dependencyManager",
+					value: config.tracking.externalAgents.dependencyManager,
+				},
+			);
 		}
 	}
 }

@@ -18,6 +18,8 @@ export interface ManifestLoader {
 	getAgent(name: string): AgentDefinition | undefined;
 	/** Find all agent names whose capabilities include the given capability. */
 	findByCapability(capability: string): AgentDefinition[];
+	/** Find all agent definitions whose tags include the given tag. */
+	findByTag(tag: string): AgentDefinition[];
 	/** Validate the manifest. Returns a list of errors (empty = valid). */
 	validate(): string[];
 }
@@ -90,6 +92,19 @@ function validateAgentDefinition(name: string, raw: unknown): string[] {
 		}
 	}
 
+	// Tags are optional — validate only if present
+	if (def.tags !== undefined) {
+		if (!Array.isArray(def.tags)) {
+			errors.push(`Agent "${name}": "tags" must be an array if present`);
+		} else {
+			for (let i = 0; i < def.tags.length; i++) {
+				if (typeof def.tags[i] !== "string") {
+					errors.push(`Agent "${name}": "tags[${i}]" must be a string`);
+				}
+			}
+		}
+	}
+
 	return errors;
 }
 
@@ -107,6 +122,28 @@ function buildCapabilityIndex(agents: Record<string, AgentDefinition>): Record<s
 				existing.push(name);
 			} else {
 				index[cap] = [name];
+			}
+		}
+	}
+
+	return index;
+}
+
+/**
+ * Build a tag index: maps each tag string to the list of
+ * agent names that declare that tag.
+ */
+function buildTagIndex(agents: Record<string, AgentDefinition>): Record<string, string[]> {
+	const index: Record<string, string[]> = {};
+
+	for (const [name, def] of Object.entries(agents)) {
+		if (!def.tags) continue;
+		for (const tag of def.tags) {
+			const existing = index[tag];
+			if (existing) {
+				existing.push(name);
+			} else {
+				index[tag] = [name];
 			}
 		}
 	}
@@ -194,13 +231,15 @@ export function createManifestLoader(manifestPath: string, agentBaseDir: string)
 				}
 			}
 
-			// Build the capability index
+			// Build indexes
 			const capabilityIndex = buildCapabilityIndex(agents);
+			const tagIndex = buildTagIndex(agents);
 
 			manifest = {
 				version: raw.version,
 				agents,
 				capabilityIndex,
+				tagIndex,
 			};
 
 			return manifest;
@@ -219,6 +258,26 @@ export function createManifestLoader(manifestPath: string, agentBaseDir: string)
 			}
 
 			const agentNames = manifest.capabilityIndex[capability];
+			if (!agentNames) {
+				return [];
+			}
+
+			const results: AgentDefinition[] = [];
+			for (const name of agentNames) {
+				const def = manifest.agents[name];
+				if (def) {
+					results.push(def);
+				}
+			}
+			return results;
+		},
+
+		findByTag(tag: string): AgentDefinition[] {
+			if (!manifest) {
+				return [];
+			}
+
+			const agentNames = manifest.tagIndex?.[tag];
 			if (!agentNames) {
 				return [];
 			}
@@ -277,6 +336,118 @@ export function createManifestLoader(manifestPath: string, agentBaseDir: string)
 			return errors;
 		},
 	};
+}
+
+// === User Agent Resolution ===
+
+/** Parsed frontmatter from a user agent definition file (.md with YAML header). */
+export interface UserAgentFrontmatter {
+	name?: string;
+	description?: string;
+	model?: string;
+	color?: string;
+	tags?: string[];
+}
+
+/**
+ * Parse YAML frontmatter from a user agent definition file.
+ *
+ * User agent files use the format:
+ * ```
+ * ---
+ * name: unix-coder
+ * description: "..."
+ * model: sonnet
+ * color: red
+ * ---
+ * (agent prompt content)
+ * ```
+ *
+ * Returns the parsed frontmatter fields and the body content separately.
+ */
+export function parseAgentFrontmatter(content: string): {
+	frontmatter: UserAgentFrontmatter;
+	body: string;
+} {
+	const trimmed = content.trimStart();
+	if (!trimmed.startsWith("---")) {
+		return { frontmatter: {}, body: content };
+	}
+
+	const endIdx = trimmed.indexOf("---", 3);
+	if (endIdx === -1) {
+		return { frontmatter: {}, body: content };
+	}
+
+	const fmBlock = trimmed.substring(3, endIdx).trim();
+	const body = trimmed.substring(endIdx + 3).trimStart();
+
+	const frontmatter: UserAgentFrontmatter = {};
+
+	for (const line of fmBlock.split("\n")) {
+		const colonIdx = line.indexOf(":");
+		if (colonIdx === -1) continue;
+
+		const key = line.substring(0, colonIdx).trim();
+		let value = line.substring(colonIdx + 1).trim();
+
+		// Strip surrounding quotes
+		if (
+			(value.startsWith('"') && value.endsWith('"')) ||
+			(value.startsWith("'") && value.endsWith("'"))
+		) {
+			value = value.slice(1, -1);
+		}
+
+		switch (key) {
+			case "name":
+				frontmatter.name = value;
+				break;
+			case "model":
+				frontmatter.model = value;
+				break;
+			case "color":
+				frontmatter.color = value;
+				break;
+			case "description":
+				frontmatter.description = value;
+				break;
+		}
+	}
+
+	return { frontmatter, body };
+}
+
+/**
+ * Resolve a user agent file for a capability alias.
+ *
+ * Searches the user agent directory (and its .lazy/ subdirectory) for
+ * the specified agent file. Returns the full file content if found,
+ * or null if not found.
+ *
+ * @param userAgentDir - Absolute path to the user agent directory (e.g., ~/.claude/agents)
+ * @param agentFileName - The agent filename to look for (e.g., "unix-coder.md")
+ * @returns The file content if found, or null
+ */
+export async function resolveUserAgent(
+	userAgentDir: string,
+	agentFileName: string,
+): Promise<string | null> {
+	// Check directly in the user agent directory
+	const directPath = join(userAgentDir, agentFileName);
+	const directFile = Bun.file(directPath);
+	if (await directFile.exists()) {
+		return directFile.text();
+	}
+
+	// Check in the .lazy/ subdirectory (Claude Code lazy-loaded agents)
+	const lazyPath = join(userAgentDir, ".lazy", agentFileName);
+	const lazyFile = Bun.file(lazyPath);
+	if (await lazyFile.exists()) {
+		return lazyFile.text();
+	}
+
+	return null;
 }
 
 const DEFAULT_GATEWAY_ALIAS = "sonnet";

@@ -35,6 +35,8 @@ describe("checkAgents", () => {
 				staggerDelayMs: 1000,
 				maxDepth: 2,
 				maxSessionsPerRun: 0,
+				userAgentDir: "",
+				capabilityAliases: {},
 			},
 			worktrees: {
 				baseDir: ".overstory/worktrees",
@@ -68,6 +70,11 @@ describe("checkAgents", () => {
 			logging: {
 				verbose: false,
 				redactSecrets: true,
+			},
+			slashCommands: [],
+			tracking: {
+				provider: "builtin" as const,
+				externalAgents: { trackManager: "", dependencyManager: "" },
 			},
 		};
 	});

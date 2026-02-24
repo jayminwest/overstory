@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { ValidationError } from "../errors.ts";
 
 /** Boolean flags that do NOT consume the next arg. */
-const BOOLEAN_FLAGS = new Set(["--help", "-h"]);
+const BOOLEAN_FLAGS = new Set(["--help", "-h", "--template"]);
 
 /**
  * Parse a named flag value from args.
@@ -51,6 +51,53 @@ function getPositionalArgs(args: string[]): string[] {
 }
 
 /**
+ * The 14-section spec template structure based on the user's spec-builder agent.
+ * Each section is a heading that scaffolds a comprehensive task specification.
+ * Execution sections (Agent Assignments, Execution Order, etc.) follow the core 14.
+ */
+const SPEC_TEMPLATE_SECTIONS = [
+	"## Why",
+	"## Design Principles",
+	"## On-Disk Format",
+	"## Data Model",
+	"## CLI",
+	"## JSON Output Format",
+	"## Concurrency Model",
+	"## Migration",
+	"## Integration",
+	"## What It Does NOT Do",
+	"## Tech Stack",
+	"## Project Infrastructure",
+	"## Estimated Size",
+	"## Agent Assignments",
+	"## Execution Order",
+	"## Failure Modes",
+	"## Success Criteria",
+] as const;
+
+/**
+ * Generate a spec scaffold from the 14-section template.
+ * If body content is provided, it is placed under the title heading.
+ * Otherwise, each section gets a placeholder comment.
+ */
+export function generateSpecTemplate(beadId: string, body?: string): string {
+	const lines: string[] = [];
+	lines.push(`# ${beadId}`);
+	lines.push("");
+	if (body && body.trim().length > 0) {
+		lines.push(body.trim());
+		lines.push("");
+	}
+	for (const section of SPEC_TEMPLATE_SECTIONS) {
+		lines.push(section);
+		lines.push("");
+		lines.push("<!-- TODO: fill in this section -->");
+		lines.push("");
+	}
+	return lines.join("\n");
+}
+
+/**
  * Read all of stdin as a string. Returns empty string if stdin is a TTY
  * (no piped input).
  */
@@ -72,12 +119,15 @@ Subcommands:
 Options for 'write':
   --body <content>         Spec content (or pipe via stdin)
   --agent <name>           Agent writing the spec (for attribution)
+  --template               Scaffold with 14-section spec-builder template
   --help, -h               Show this help
 
 Examples:
   overstory spec write task-abc --body "# Spec\\nDetails here..."
   echo "# Spec" | overstory spec write task-abc
-  overstory spec write task-abc --body "..." --agent scout-1`;
+  overstory spec write task-abc --body "..." --agent scout-1
+  overstory spec write task-abc --template
+  overstory spec write task-abc --template --body "Context for this task"`;
 
 /**
  * Write a spec file to .overstory/specs/<bead-id>.md.
@@ -135,17 +185,21 @@ export async function specCommand(args: string[]): Promise<void> {
 			}
 
 			const agent = getFlag(subArgs, "--agent");
+			const useTemplate = subArgs.includes("--template");
 			let body = getFlag(subArgs, "--body");
 
-			// If no --body flag, try reading from stdin
-			if (body === undefined) {
+			// If no --body flag and not in template mode, try reading from stdin
+			if (body === undefined && !useTemplate) {
 				const stdinContent = await readStdin();
 				if (stdinContent.trim().length > 0) {
 					body = stdinContent;
 				}
 			}
 
-			if (body === undefined || body.trim().length === 0) {
+			// --template mode: generate scaffold (body is optional context)
+			if (useTemplate) {
+				body = generateSpecTemplate(beadId, body ?? undefined);
+			} else if (body === undefined || body.trim().length === 0) {
 				throw new ValidationError("Spec body is required: use --body <content> or pipe via stdin", {
 					field: "body",
 				});
@@ -154,7 +208,7 @@ export async function specCommand(args: string[]): Promise<void> {
 			const { resolveProjectRoot } = await import("../config.ts");
 			const projectRoot = await resolveProjectRoot(process.cwd());
 
-			const specPath = await writeSpec(projectRoot, beadId, body, agent);
+			const specPath = await writeSpec(projectRoot, beadId, body as string, agent);
 			process.stdout.write(`${specPath}\n`);
 			break;
 		}

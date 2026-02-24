@@ -3,7 +3,7 @@
 
 project:
   name: overstory
-  root: /Users/jayminwest/Projects/overstory
+  root: /home/n0ko/Programs/ai/overstory
   canonicalBranch: main
 agents:
   manifestPath: .overstory/agent-manifest.json

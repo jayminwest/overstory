@@ -17,6 +17,10 @@
 			"canSpawn": false,
 			"constraints": [
 				"read-only"
+			],
+			"tags": [
+				"exploration",
+				"research"
 			]
 		},
 		"builder": {
@@ -36,7 +40,10 @@
 				"fix"
 			],
 			"canSpawn": false,
-			"constraints": []
+			"constraints": [],
+			"tags": [
+				"implementation"
+			]
 		},
 		"reviewer": {
 			"file": "reviewer.md",
@@ -54,6 +61,10 @@
 			"canSpawn": false,
 			"constraints": [
 				"read-only"
+			],
+			"tags": [
+				"code-quality",
+				"validation"
 			]
 		},
 		"lead": {
@@ -74,7 +85,11 @@
 				"review"
 			],
 			"canSpawn": true,
-			"constraints": []
+			"constraints": [],
+			"tags": [
+				"coordination",
+				"planning"
+			]
 		},
 		"merger": {
 			"file": "merger.md",
@@ -92,7 +107,11 @@
 				"resolve-conflicts"
 			],
 			"canSpawn": false,
-			"constraints": []
+			"constraints": [],
+			"tags": [
+				"merge",
+				"conflict-resolution"
+			]
 		},
 		"coordinator": {
 			"file": "coordinator.md",
@@ -112,6 +131,10 @@
 			"constraints": [
 				"read-only",
 				"no-worktree"
+			],
+			"tags": [
+				"dispatch",
+				"orchestration"
 			]
 		},
 		"supervisor": {
@@ -131,7 +154,11 @@
 				"supervise"
 			],
 			"canSpawn": true,
-			"constraints": []
+			"constraints": [],
+			"tags": [
+				"supervision",
+				"coordination"
+			]
 		},
 		"monitor": {
 			"file": "monitor.md",
@@ -150,6 +177,10 @@
 			"constraints": [
 				"read-only",
 				"no-worktree"
+			],
+			"tags": [
+				"monitoring",
+				"patrol"
 			]
 		}
 	},
@@ -198,6 +229,51 @@
 			"supervisor"
 		],
 		"monitor": [
+			"monitor"
+		],
+		"patrol": [
+			"monitor"
+		]
+	},
+	"tagIndex": {
+		"exploration": [
+			"scout"
+		],
+		"research": [
+			"scout"
+		],
+		"implementation": [
+			"builder"
+		],
+		"code-quality": [
+			"reviewer"
+		],
+		"validation": [
+			"reviewer"
+		],
+		"coordination": [
+			"lead",
+			"supervisor"
+		],
+		"planning": [
+			"lead"
+		],
+		"merge": [
+			"merger"
+		],
+		"conflict-resolution": [
+			"merger"
+		],
+		"dispatch": [
+			"coordinator"
+		],
+		"orchestration": [
+			"coordinator"
+		],
+		"supervision": [
+			"supervisor"
+		],
+		"monitoring": [
 			"monitor"
 		],
 		"patrol": [

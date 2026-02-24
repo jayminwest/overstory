@@ -199,6 +199,7 @@ function buildAgentManifest(): AgentManifest {
 			capabilities: ["explore", "research"],
 			canSpawn: false,
 			constraints: ["read-only"],
+			tags: ["exploration", "research"],
 		},
 		builder: {
 			file: "builder.md",
@@ -207,6 +208,7 @@ function buildAgentManifest(): AgentManifest {
 			capabilities: ["implement", "refactor", "fix"],
 			canSpawn: false,
 			constraints: [],
+			tags: ["implementation"],
 		},
 		reviewer: {
 			file: "reviewer.md",
@@ -215,6 +217,7 @@ function buildAgentManifest(): AgentManifest {
 			capabilities: ["review", "validate"],
 			canSpawn: false,
 			constraints: ["read-only"],
+			tags: ["code-quality", "validation"],
 		},
 		lead: {
 			file: "lead.md",
@@ -223,6 +226,7 @@ function buildAgentManifest(): AgentManifest {
 			capabilities: ["coordinate", "implement", "review"],
 			canSpawn: true,
 			constraints: [],
+			tags: ["coordination", "planning"],
 		},
 		merger: {
 			file: "merger.md",
@@ -231,6 +235,7 @@ function buildAgentManifest(): AgentManifest {
 			capabilities: ["merge", "resolve-conflicts"],
 			canSpawn: false,
 			constraints: [],
+			tags: ["merge", "conflict-resolution"],
 		},
 		coordinator: {
 			file: "coordinator.md",
@@ -239,6 +244,7 @@ function buildAgentManifest(): AgentManifest {
 			capabilities: ["coordinate", "dispatch", "escalate"],
 			canSpawn: true,
 			constraints: ["read-only", "no-worktree"],
+			tags: ["dispatch", "orchestration"],
 		},
 		supervisor: {
 			file: "supervisor.md",
@@ -247,6 +253,7 @@ function buildAgentManifest(): AgentManifest {
 			capabilities: ["coordinate", "supervise"],
 			canSpawn: true,
 			constraints: [],
+			tags: ["supervision", "coordination"],
 		},
 		monitor: {
 			file: "monitor.md",
@@ -255,6 +262,7 @@ function buildAgentManifest(): AgentManifest {
 			capabilities: ["monitor", "patrol"],
 			canSpawn: false,
 			constraints: ["read-only", "no-worktree"],
+			tags: ["monitoring", "patrol"],
 		},
 	};
 
@@ -271,7 +279,21 @@ function buildAgentManifest(): AgentManifest {
 		}
 	}
 
-	return { version: "1.0", agents, capabilityIndex };
+	// Build tag index: map each tag to agent names that declare it
+	const tagIndex: Record<string, string[]> = {};
+	for (const [name, def] of Object.entries(agents)) {
+		if (!def.tags) continue;
+		for (const tag of def.tags) {
+			const existing = tagIndex[tag];
+			if (existing) {
+				existing.push(name);
+			} else {
+				tagIndex[tag] = [name];
+			}
+		}
+	}
+
+	return { version: "1.0", agents, capabilityIndex, tagIndex };
 }
 
 /**

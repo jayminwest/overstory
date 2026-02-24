@@ -53,6 +53,85 @@ function formatMulchExpertise(expertise: string | undefined): string {
 	].join("\n");
 }
 
+/**
+ * Format tags for embedding in the overlay.
+ * Returns empty string if no tags are provided (omits the section entirely).
+ * When tags ARE provided, renders them as a specialization section.
+ */
+function formatTags(tags: readonly string[] | undefined): string {
+	if (!tags || tags.length === 0) {
+		return "";
+	}
+	return [
+		"## Specialization",
+		"",
+		`Tags: ${tags.join(", ")}`,
+		"Your work should reflect expertise in these areas.",
+		"",
+	].join("\n");
+}
+
+/**
+ * Format slash commands section for embedding in the overlay.
+ * Returns empty string if no slash commands are configured for this agent's capability.
+ * When commands ARE available, renders them as a reference section.
+ */
+function formatSlashCommands(config: OverlayConfig): string {
+	if (!config.slashCommands || config.slashCommands.length === 0) {
+		return "";
+	}
+	const available = config.slashCommands.filter((cmd) =>
+		cmd.availableTo.includes(config.capability),
+	);
+	if (available.length === 0) {
+		return "";
+	}
+	const lines: string[] = [
+		"## Available Slash Commands",
+		"",
+		"These user slash commands are available for your capability:",
+		"",
+		"| Command | Description |",
+		"|---------|-------------|",
+	];
+	for (const cmd of available) {
+		lines.push(`| \`/${cmd.name}\` | ${cmd.description} |`);
+	}
+	lines.push("");
+	return lines.join("\n");
+}
+
+/**
+ * Format tracking section for embedding in the overlay.
+ * Returns empty string for leaf agents (builder, scout, reviewer, merger).
+ * For coordination-capable agents (coordinator, supervisor, lead), shows
+ * which tracking system to use for batch coordination.
+ */
+function formatTracking(config: OverlayConfig): string {
+	// Only coordination-capable agents need tracking instructions
+	const coordinationCapabilities = new Set(["coordinator", "supervisor", "lead"]);
+	if (!coordinationCapabilities.has(config.capability)) {
+		return "";
+	}
+	if (!config.trackingProvider || config.trackingProvider === "builtin") {
+		return "";
+	}
+	if (config.trackingProvider === "external" && config.trackingAgents) {
+		return [
+			"## Task Tracking (External)",
+			"",
+			"This project uses external agents for task tracking instead of `overstory group`:",
+			"",
+			`- **Track Manager:** \`${config.trackingAgents.trackManager}\` — creates/manages parallel work tracks, assigns agents, updates status`,
+			`- **Dependency Manager:** \`${config.trackingAgents.dependencyManager}\` — analyzes dependencies, detects cycles, checks readiness`,
+			"",
+			"Use these agents (via slash commands or direct delegation) instead of `overstory group create/status/add/remove`.",
+			"",
+		].join("\n");
+	}
+	return "";
+}
+
 /** Capabilities that are read-only and should not get quality gates for commits/tests/lint. */
 const READ_ONLY_CAPABILITIES = new Set(["scout", "reviewer"]);
 
@@ -219,6 +298,9 @@ export async function generateOverlay(config: OverlayConfig): Promise<string> {
 		"{{CONSTRAINTS}}": formatConstraints(config),
 		"{{SPEC_INSTRUCTION}}": specInstruction,
 		"{{SKIP_SCOUT}}": config.skipScout ? SKIP_SCOUT_SECTION : "",
+		"{{TAGS}}": formatTags(config.tags),
+		"{{SLASH_COMMANDS}}": formatSlashCommands(config),
+		"{{TRACKING}}": formatTracking(config),
 		"{{BASE_DEFINITION}}": config.baseDefinition,
 		"{{TRACKER_CLI}}": config.trackerCli ?? "bd",
 		"{{TRACKER_NAME}}": config.trackerName ?? "beads",

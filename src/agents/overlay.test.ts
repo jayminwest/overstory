@@ -651,6 +651,115 @@ describe("writeOverlay", () => {
 	});
 });
 
+describe("slash commands rendering", () => {
+	test("omits slash commands section when none configured", async () => {
+		const config = makeConfig({ slashCommands: undefined });
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("Available Slash Commands");
+	});
+
+	test("omits slash commands section when empty array", async () => {
+		const config = makeConfig({ slashCommands: [] });
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("Available Slash Commands");
+	});
+
+	test("omits slash commands section when none match capability", async () => {
+		const config = makeConfig({
+			capability: "builder",
+			slashCommands: [{ name: "pai", description: "Plan pipeline", availableTo: ["coordinator"] }],
+		});
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("Available Slash Commands");
+	});
+
+	test("renders slash commands matching agent capability", async () => {
+		const config = makeConfig({
+			capability: "lead",
+			slashCommands: [
+				{
+					name: "pai",
+					description: "Plan-then-implement pipeline",
+					availableTo: ["coordinator", "lead"],
+				},
+				{ name: "loop", description: "Parallel fan-out", availableTo: ["coordinator", "lead"] },
+				{ name: "colony", description: "Hive-mind orchestration", availableTo: ["coordinator"] },
+			],
+		});
+		const output = await generateOverlay(config);
+		expect(output).toContain("Available Slash Commands");
+		expect(output).toContain("`/pai`");
+		expect(output).toContain("`/loop`");
+		// colony is coordinator-only, should not appear for lead
+		expect(output).not.toContain("`/colony`");
+	});
+});
+
+describe("tracking rendering", () => {
+	test("omits tracking section for leaf agents", async () => {
+		const config = makeConfig({
+			capability: "builder",
+			trackingProvider: "external",
+			trackingAgents: {
+				trackManager: "track-manager.md",
+				dependencyManager: "dependency-manager.md",
+			},
+		});
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("Task Tracking (External)");
+	});
+
+	test("omits tracking section when provider is builtin", async () => {
+		const config = makeConfig({
+			capability: "coordinator",
+			trackingProvider: "builtin",
+		});
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("Task Tracking (External)");
+	});
+
+	test("renders external tracking section for coordinator", async () => {
+		const config = makeConfig({
+			capability: "coordinator",
+			trackingProvider: "external",
+			trackingAgents: {
+				trackManager: "track-manager.md",
+				dependencyManager: "dependency-manager.md",
+			},
+		});
+		const output = await generateOverlay(config);
+		expect(output).toContain("Task Tracking (External)");
+		expect(output).toContain("track-manager.md");
+		expect(output).toContain("dependency-manager.md");
+	});
+
+	test("renders external tracking section for supervisor", async () => {
+		const config = makeConfig({
+			capability: "supervisor",
+			trackingProvider: "external",
+			trackingAgents: {
+				trackManager: "track-manager.md",
+				dependencyManager: "dependency-manager.md",
+			},
+		});
+		const output = await generateOverlay(config);
+		expect(output).toContain("Task Tracking (External)");
+	});
+
+	test("renders external tracking section for lead", async () => {
+		const config = makeConfig({
+			capability: "lead",
+			trackingProvider: "external",
+			trackingAgents: {
+				trackManager: "track-manager.md",
+				dependencyManager: "dependency-manager.md",
+			},
+		});
+		const output = await generateOverlay(config);
+		expect(output).toContain("Task Tracking (External)");
+	});
+});
+
 describe("isCanonicalRoot", () => {
 	test("returns true when dir matches canonicalRoot", () => {
 		expect(isCanonicalRoot("/projects/my-app", "/projects/my-app")).toBe(true);

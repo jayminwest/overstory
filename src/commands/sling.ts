@@ -22,7 +22,12 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
-import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import {
+	createManifestLoader,
+	parseAgentFrontmatter,
+	resolveModel,
+	resolveUserAgent,
+} from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
@@ -478,10 +483,41 @@ export async function slingCommand(args: string[]): Promise<void> {
 		});
 
 		// 8. Generate + write overlay CLAUDE.md
-		const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
-		const baseDefinition = await Bun.file(agentDefPath).text();
+		// 8a. Resolve base definition: check for capability alias to user agent first
+		let baseDefinition: string;
+		let overlayTags: string[] | undefined;
+		const alias = config.agents.capabilityAliases[capability];
 
-		// 8a. Fetch file-scoped mulch expertise if mulch is enabled and files are provided
+		if (alias && config.agents.userAgentDir) {
+			// Try to resolve user agent file as Layer 1 base
+			const userContent = await resolveUserAgent(
+				config.agents.userAgentDir,
+				alias.userAgent,
+			);
+			if (userContent) {
+				// Use the user agent body (strip frontmatter) as the base definition
+				const { body } = parseAgentFrontmatter(userContent);
+				baseDefinition = body;
+				overlayTags = alias.tags;
+			} else {
+				// Fallback to default overstory agent definition
+				const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
+				baseDefinition = await Bun.file(agentDefPath).text();
+				process.stderr.write(
+					`[overstory] Warning: user agent "${alias.userAgent}" not found in "${config.agents.userAgentDir}". Falling back to default ${capability} definition.\n`,
+				);
+			}
+		} else {
+			const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
+			baseDefinition = await Bun.file(agentDefPath).text();
+		}
+
+		// Also pick up tags from the manifest agent definition if no alias tags
+		if (!overlayTags && agentDef.tags) {
+			overlayTags = agentDef.tags;
+		}
+
+		// 8b. Fetch file-scoped mulch expertise if mulch is enabled and files are provided
 		let mulchExpertise: string | undefined;
 		if (config.mulch.enabled && fileScope.length > 0) {
 			try {
@@ -513,6 +549,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 			qualityGates: config.project.qualityGates,
 			trackerCli: trackerCliName(resolvedBackend),
 			trackerName: resolvedBackend,
+			tags: overlayTags,
 		};
 
 		try {

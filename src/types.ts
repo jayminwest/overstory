@@ -27,6 +27,37 @@ export interface ResolvedModel {
 /** Backend for the task tracker. Defined here for use in OverstoryConfig. */
 export type TaskTrackerBackend = "auto" | "seeds" | "beads";
 
+// === Capability Aliases ===
+
+/** Maps an overstory capability to a user agent file for Layer 1 base override. */
+export interface CapabilityAlias {
+	userAgent: string; // Filename of user agent definition (e.g., "unix-coder.md")
+	tags?: string[]; // Optional tags for specialization (e.g., ["security", "code-quality"])
+}
+
+// === Slash Command Integration ===
+
+/** A user slash command exposed to overstory agents via the overlay. */
+export interface SlashCommandConfig {
+	name: string; // Command name without leading slash (e.g., "pai")
+	description: string; // What the command does (one line)
+	availableTo: string[]; // Capabilities that can use this command (e.g., ["coordinator", "lead"])
+}
+
+// === Tracking Provider ===
+
+/** Whether to use overstory's built-in group+beads or external track-manager agents. */
+export type TrackingProvider = "builtin" | "external";
+
+/** Configuration for the tracking/coordination subsystem. */
+export interface TrackingConfig {
+	provider: TrackingProvider; // "builtin" = overstory group+beads, "external" = user agents
+	externalAgents: {
+		trackManager: string; // Path or filename of track-manager agent (e.g., "track-manager.md")
+		dependencyManager: string; // Path or filename of dependency-manager agent
+	};
+}
+
 // === Project Configuration ===
 
 /** A single quality gate command that agents must pass before reporting completion. */
@@ -53,6 +84,8 @@ export interface OverstoryConfig {
 		staggerDelayMs: number; // Delay between spawns
 		maxDepth: number; // Hierarchy depth limit (default 2)
 		maxSessionsPerRun: number; // Max total sessions per run (0 = unlimited)
+		userAgentDir: string; // Path to user agent definitions (e.g., ~/.claude/agents), empty = disabled
+		capabilityAliases: Record<string, CapabilityAlias>; // Maps capabilities to user agent files
 	};
 	worktrees: {
 		baseDir: string; // Where worktrees live
@@ -85,6 +118,8 @@ export interface OverstoryConfig {
 		verbose: boolean;
 		redactSecrets: boolean;
 	};
+	slashCommands: SlashCommandConfig[]; // User slash commands available to agents
+	tracking: TrackingConfig; // Coordination subsystem provider
 }
 
 // === Agent Manifest ===
@@ -93,6 +128,7 @@ export interface AgentManifest {
 	version: string;
 	agents: Record<string, AgentDefinition>;
 	capabilityIndex: Record<string, string[]>;
+	tagIndex?: Record<string, string[]>; // Maps tags to agent names
 }
 
 export interface AgentDefinition {
@@ -102,6 +138,7 @@ export interface AgentDefinition {
 	capabilities: string[]; // What this agent can do
 	canSpawn: boolean; // Can this agent spawn sub-workers?
 	constraints: string[]; // Machine-readable restrictions
+	tags?: string[]; // Optional tags for specialization (e.g., "security", "code-quality")
 }
 
 /** All valid agent capability types. Used for compile-time validation. */
@@ -304,6 +341,14 @@ export interface OverlayConfig {
 	trackerName?: string; // "seeds" or "beads"
 	/** Quality gate commands for the agent overlay. Falls back to defaults if undefined. */
 	qualityGates?: QualityGate[];
+	/** Optional tags for agent specialization (e.g., "security", "code-quality"). */
+	tags?: string[];
+	/** Slash commands available to this agent based on its capability. */
+	slashCommands?: SlashCommandConfig[];
+	/** Tracking provider configuration for coordination-capable agents. */
+	trackingProvider?: TrackingProvider;
+	/** External tracking agent names (when tracking.provider is "external"). */
+	trackingAgents?: { trackManager: string; dependencyManager: string };
 }
 
 // === Merge Queue ===

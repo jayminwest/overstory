@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
-import { specCommand, writeSpec } from "./spec.ts";
+import { generateSpecTemplate, specCommand, writeSpec } from "./spec.ts";
 
 let tempDir: string;
 let overstoryDir: string;
@@ -199,5 +199,97 @@ describe("specCommand write", () => {
 		const content = await Bun.file(specPath).text();
 		expect(content).toContain("<!-- written-by: scout-3 -->");
 		expect(content).toContain("# Content");
+	});
+});
+
+// === generateSpecTemplate ===
+
+describe("generateSpecTemplate", () => {
+	test("generates scaffold with all 14+4 sections", () => {
+		const template = generateSpecTemplate("task-tmpl");
+		expect(template).toContain("# task-tmpl");
+		expect(template).toContain("## Why");
+		expect(template).toContain("## Design Principles");
+		expect(template).toContain("## On-Disk Format");
+		expect(template).toContain("## Data Model");
+		expect(template).toContain("## CLI");
+		expect(template).toContain("## JSON Output Format");
+		expect(template).toContain("## Concurrency Model");
+		expect(template).toContain("## Migration");
+		expect(template).toContain("## Integration");
+		expect(template).toContain("## What It Does NOT Do");
+		expect(template).toContain("## Tech Stack");
+		expect(template).toContain("## Project Infrastructure");
+		expect(template).toContain("## Estimated Size");
+		expect(template).toContain("## Agent Assignments");
+		expect(template).toContain("## Execution Order");
+		expect(template).toContain("## Failure Modes");
+		expect(template).toContain("## Success Criteria");
+	});
+
+	test("includes TODO placeholders", () => {
+		const template = generateSpecTemplate("task-tmpl");
+		expect(template).toContain("<!-- TODO: fill in this section -->");
+	});
+
+	test("includes body content under title when provided", () => {
+		const template = generateSpecTemplate("task-ctx", "This is context for the task");
+		expect(template).toContain("# task-ctx");
+		expect(template).toContain("This is context for the task");
+		// Body should appear before the first section heading
+		const bodyIdx = template.indexOf("This is context");
+		const whyIdx = template.indexOf("## Why");
+		expect(bodyIdx).toBeLessThan(whyIdx);
+	});
+
+	test("omits body section when not provided", () => {
+		const template = generateSpecTemplate("task-nobody");
+		// Title line followed by empty line then first section
+		const lines = template.split("\n");
+		expect(lines[0]).toBe("# task-nobody");
+		expect(lines[1]).toBe("");
+		expect(lines[2]).toBe("## Why");
+	});
+});
+
+// === specCommand write --template ===
+
+describe("specCommand write --template", () => {
+	test("--template generates scaffold without --body", async () => {
+		await specCommand(["write", "task-scaffold", "--template"]);
+
+		expect(stdoutOutput.trim()).toContain(".overstory/specs/task-scaffold.md");
+
+		const specPath = stdoutOutput.trim();
+		const content = await Bun.file(specPath).text();
+		expect(content).toContain("# task-scaffold");
+		expect(content).toContain("## Why");
+		expect(content).toContain("## Success Criteria");
+		expect(content).toContain("<!-- TODO: fill in this section -->");
+	});
+
+	test("--template with --body includes body as context", async () => {
+		await specCommand([
+			"write",
+			"task-ctx",
+			"--template",
+			"--body",
+			"Migrate auth from sessions to JWT",
+		]);
+
+		const specPath = stdoutOutput.trim();
+		const content = await Bun.file(specPath).text();
+		expect(content).toContain("# task-ctx");
+		expect(content).toContain("Migrate auth from sessions to JWT");
+		expect(content).toContain("## Why");
+	});
+
+	test("--template with --agent adds attribution", async () => {
+		await specCommand(["write", "task-tmpl-agent", "--template", "--agent", "scout-5"]);
+
+		const specPath = stdoutOutput.trim();
+		const content = await Bun.file(specPath).text();
+		expect(content).toContain("<!-- written-by: scout-5 -->");
+		expect(content).toContain("## Why");
 	});
 });

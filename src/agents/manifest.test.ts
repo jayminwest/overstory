@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
 import type { AgentManifest, OverstoryConfig } from "../types.ts";
-import { createManifestLoader, resolveModel, resolveProviderEnv } from "./manifest.ts";
+import {
+	createManifestLoader,
+	parseAgentFrontmatter,
+	resolveModel,
+	resolveProviderEnv,
+	resolveUserAgent,
+} from "./manifest.ts";
 
 const VALID_MANIFEST = {
 	version: "1.0",
@@ -209,6 +215,168 @@ describe("createManifestLoader", () => {
 
 			const reviewers = loader.findByCapability("review");
 			expect(reviewers).toHaveLength(2);
+		});
+	});
+
+	describe("findByTag", () => {
+		test("returns empty array before load is called", async () => {
+			await writeManifest(VALID_MANIFEST);
+			const loader = createManifestLoader(manifestPath, agentBaseDir);
+
+			expect(loader.findByTag("security")).toEqual([]);
+		});
+
+		test("returns matching agents by tag after load", async () => {
+			const data = {
+				version: "1.0",
+				agents: {
+					scout: {
+						file: "scout.md",
+						model: "sonnet",
+						tools: ["Read"],
+						capabilities: ["explore"],
+						canSpawn: false,
+						constraints: [],
+						tags: ["security", "exploration"],
+					},
+					builder: {
+						file: "builder.md",
+						model: "sonnet",
+						tools: ["Read", "Write"],
+						capabilities: ["implement"],
+						canSpawn: false,
+						constraints: [],
+						tags: ["unix-coder"],
+					},
+				},
+			};
+			await writeManifest(data);
+			const loader = createManifestLoader(manifestPath, agentBaseDir);
+			await loader.load();
+
+			const securityAgents = loader.findByTag("security");
+			expect(securityAgents).toHaveLength(1);
+			expect(securityAgents[0]?.file).toBe("scout.md");
+
+			const coderAgents = loader.findByTag("unix-coder");
+			expect(coderAgents).toHaveLength(1);
+			expect(coderAgents[0]?.file).toBe("builder.md");
+		});
+
+		test("returns empty array for non-existent tag", async () => {
+			await writeManifest(VALID_MANIFEST);
+			const loader = createManifestLoader(manifestPath, agentBaseDir);
+			await loader.load();
+
+			expect(loader.findByTag("nonexistent")).toEqual([]);
+		});
+
+		test("returns multiple agents sharing a tag", async () => {
+			const data = {
+				version: "1.0",
+				agents: {
+					scout: {
+						file: "scout.md",
+						model: "sonnet",
+						tools: ["Read"],
+						capabilities: ["explore"],
+						canSpawn: false,
+						constraints: [],
+						tags: ["code-quality"],
+					},
+					reviewer: {
+						file: "reviewer.md",
+						model: "sonnet",
+						tools: ["Read"],
+						capabilities: ["review"],
+						canSpawn: false,
+						constraints: [],
+						tags: ["code-quality"],
+					},
+				},
+			};
+			await writeManifest(data);
+			const loader = createManifestLoader(manifestPath, agentBaseDir);
+			await loader.load();
+
+			const cqAgents = loader.findByTag("code-quality");
+			expect(cqAgents).toHaveLength(2);
+		});
+
+		test("agents without tags are not indexed", async () => {
+			const data = {
+				version: "1.0",
+				agents: {
+					scout: {
+						file: "scout.md",
+						model: "sonnet",
+						tools: ["Read"],
+						capabilities: ["explore"],
+						canSpawn: false,
+						constraints: [],
+						// No tags
+					},
+				},
+			};
+			await writeManifest(data);
+			const loader = createManifestLoader(manifestPath, agentBaseDir);
+			const manifest = await loader.load();
+
+			expect(manifest.tagIndex).toEqual({});
+		});
+	});
+
+	describe("tag validation", () => {
+		test("accepts agents without tags", async () => {
+			await writeManifest(VALID_MANIFEST);
+			const loader = createManifestLoader(manifestPath, agentBaseDir);
+			const manifest = await loader.load();
+
+			expect(manifest.agents.scout).toBeDefined();
+		});
+
+		test("accepts agents with valid tags array", async () => {
+			const data = {
+				version: "1.0",
+				agents: {
+					scout: {
+						file: "scout.md",
+						model: "sonnet",
+						tools: ["Read"],
+						capabilities: ["explore"],
+						canSpawn: false,
+						constraints: [],
+						tags: ["security", "code-quality"],
+					},
+				},
+			};
+			await writeManifest(data);
+			const loader = createManifestLoader(manifestPath, agentBaseDir);
+			const manifest = await loader.load();
+
+			expect(manifest.agents.scout?.tags).toEqual(["security", "code-quality"]);
+		});
+
+		test("throws when tags is not an array", async () => {
+			const data = {
+				version: "1.0",
+				agents: {
+					bad: {
+						file: "bad.md",
+						model: "sonnet",
+						tools: ["Read"],
+						capabilities: ["test"],
+						canSpawn: false,
+						constraints: [],
+						tags: "not-an-array",
+					},
+				},
+			};
+			await writeManifest(data);
+			const loader = createManifestLoader(manifestPath, agentBaseDir);
+
+			await expect(loader.load()).rejects.toThrow(AgentError);
+			await expect(loader.load()).rejects.toThrow("tags");
 		});
 	});
 
@@ -522,6 +690,8 @@ describe("resolveModel", () => {
 				staggerDelayMs: 1000,
 				maxDepth: 2,
 				maxSessionsPerRun: 0,
+				userAgentDir: "",
+				capabilityAliases: {},
 			},
 			worktrees: { baseDir: ".overstory/worktrees" },
 			taskTracker: { backend: "auto", enabled: false },
@@ -539,6 +709,11 @@ describe("resolveModel", () => {
 			},
 			models,
 			logging: { verbose: false, redactSecrets: true },
+			slashCommands: [],
+			tracking: {
+				provider: "builtin" as const,
+				externalAgents: { trackManager: "", dependencyManager: "" },
+			},
 		};
 	}
 
@@ -742,5 +917,121 @@ describe("manifest validation accepts arbitrary model strings", () => {
 
 		const manifest = await loader.load();
 		expect(manifest.agents.agent?.model).toBe("openrouter/openai/gpt-5.3");
+	});
+});
+
+describe("parseAgentFrontmatter", () => {
+	test("parses standard YAML frontmatter", () => {
+		const content = `---
+name: unix-coder
+description: "A coding agent"
+model: sonnet
+color: red
+---
+
+You are an expert programmer.`;
+
+		const { frontmatter, body } = parseAgentFrontmatter(content);
+
+		expect(frontmatter.name).toBe("unix-coder");
+		expect(frontmatter.description).toBe("A coding agent");
+		expect(frontmatter.model).toBe("sonnet");
+		expect(frontmatter.color).toBe("red");
+		expect(body).toContain("You are an expert programmer.");
+	});
+
+	test("returns empty frontmatter for content without frontmatter", () => {
+		const content = "# Just a heading\n\nSome content.";
+
+		const { frontmatter, body } = parseAgentFrontmatter(content);
+
+		expect(frontmatter).toEqual({});
+		expect(body).toBe(content);
+	});
+
+	test("returns empty frontmatter for content with unclosed frontmatter", () => {
+		const content = "---\nname: test\nSome content without a closing delimiter";
+
+		const { frontmatter, body } = parseAgentFrontmatter(content);
+
+		expect(frontmatter).toEqual({});
+		expect(body).toBe(content);
+	});
+
+	test("handles single-quoted values", () => {
+		const content = `---
+name: 'unix-coder'
+---
+
+Content.`;
+
+		const { frontmatter } = parseAgentFrontmatter(content);
+		expect(frontmatter.name).toBe("unix-coder");
+	});
+
+	test("handles double-quoted values", () => {
+		const content = `---
+name: "unix-coder"
+---
+
+Content.`;
+
+		const { frontmatter } = parseAgentFrontmatter(content);
+		expect(frontmatter.name).toBe("unix-coder");
+	});
+
+	test("handles unquoted values", () => {
+		const content = `---
+model: opus
+---
+
+Content.`;
+
+		const { frontmatter } = parseAgentFrontmatter(content);
+		expect(frontmatter.model).toBe("opus");
+	});
+});
+
+describe("resolveUserAgent", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-user-agent-test-"));
+		await mkdir(join(tempDir, ".lazy"), { recursive: true });
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { recursive: true, force: true });
+	});
+
+	test("resolves agent from direct directory", async () => {
+		await Bun.write(join(tempDir, "unix-coder.md"), "# Unix Coder\n");
+
+		const content = await resolveUserAgent(tempDir, "unix-coder.md");
+
+		expect(content).toBe("# Unix Coder\n");
+	});
+
+	test("resolves agent from .lazy/ subdirectory", async () => {
+		await Bun.write(join(tempDir, ".lazy", "code-review.md"), "# Code Review\n");
+
+		const content = await resolveUserAgent(tempDir, "code-review.md");
+
+		expect(content).toBe("# Code Review\n");
+	});
+
+	test("prefers direct directory over .lazy/", async () => {
+		await Bun.write(join(tempDir, "agent.md"), "# Direct\n");
+		await Bun.write(join(tempDir, ".lazy", "agent.md"), "# Lazy\n");
+
+		const content = await resolveUserAgent(tempDir, "agent.md");
+
+		expect(content).toBe("# Direct\n");
+	});
+
+	test("returns null for non-existent agent", async () => {
+		const content = await resolveUserAgent(tempDir, "nonexistent.md");
+
+		expect(content).toBeNull();
 	});
 });

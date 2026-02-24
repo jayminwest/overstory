@@ -76,6 +76,8 @@ describe("checkConsistency", () => {
 				staggerDelayMs: 100,
 				maxDepth: 2,
 				maxSessionsPerRun: 0,
+				userAgentDir: "",
+				capabilityAliases: {},
 			},
 			worktrees: {
 				baseDir: join(overstoryDir, "worktrees"),
@@ -109,6 +111,11 @@ describe("checkConsistency", () => {
 			logging: {
 				verbose: false,
 				redactSecrets: true,
+			},
+			slashCommands: [],
+			tracking: {
+				provider: "builtin" as const,
+				externalAgents: { trackManager: "", dependencyManager: "" },
 			},
 		};
 

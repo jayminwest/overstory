@@ -819,4 +819,14 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_QUALITY_GATES[1]?.name).toBe("Lint");
 		expect(DEFAULT_QUALITY_GATES[2]?.name).toBe("Typecheck");
 	});
+
+	test("has default slashCommands as empty array", () => {
+		expect(DEFAULT_CONFIG.slashCommands).toEqual([]);
+	});
+
+	test("has default tracking config with builtin provider", () => {
+		expect(DEFAULT_CONFIG.tracking.provider).toBe("builtin");
+		expect(DEFAULT_CONFIG.tracking.externalAgents.trackManager).toBe("");
+		expect(DEFAULT_CONFIG.tracking.externalAgents.dependencyManager).toBe("");
+	});
 });
