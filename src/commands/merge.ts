@@ -20,6 +20,7 @@ import { createMergeQueue } from "../merge/queue.ts";
 import { createMergeResolver } from "../merge/resolver.ts";
 import { createMulchClient } from "../mulch/client.ts";
 import type { MergeEntry, MergeResult } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 export interface MergeOptions {
 	branch?: string;
@@ -27,6 +28,24 @@ export interface MergeOptions {
 	into?: string;
 	dryRun?: boolean;
 	json?: boolean;
+	project?: string;
+}
+
+/**
+ * Extract --project / -p flag from process.argv (global option parsed by parent Commander).
+ */
+function extractProjectFlag(): string | undefined {
+	const args = process.argv;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--project" || arg === "-p") {
+			return args[i + 1];
+		}
+		if (arg?.startsWith("--project=")) {
+			return arg.slice("--project=".length);
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -145,11 +164,14 @@ export async function mergeCommand(opts: MergeOptions): Promise<void> {
 
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const project = opts.project ?? extractProjectFlag();
+	const ctx = await resolveContext({ project, requireProject: true });
+	const repoRoot = ctx.projectRoot;
 
 	// Resolution chain: --into flag > session-start branch > config canonicalBranch
 	let sessionBranch: string | null = null;
 	if (into === undefined) {
-		const sessionBranchPath = join(config.project.root, ".overstory", "session-branch.txt");
+		const sessionBranchPath = join(ctx.overstoryDir, "session-branch.txt");
 		const sessionBranchFile = Bun.file(sessionBranchPath);
 		if (await sessionBranchFile.exists()) {
 			const content = (await sessionBranchFile.text()).trim();
@@ -159,9 +181,9 @@ export async function mergeCommand(opts: MergeOptions): Promise<void> {
 		}
 	}
 	const targetBranch = into ?? sessionBranch ?? config.project.canonicalBranch;
-	const queuePath = join(config.project.root, ".overstory", "merge-queue.db");
+	const queuePath = join(ctx.overstoryDir, "merge-queue.db");
 	const queue = createMergeQueue(queuePath);
-	const mulchClient = createMulchClient(config.project.root);
+	const mulchClient = createMulchClient(repoRoot);
 	const resolver = createMergeResolver({
 		aiResolveEnabled: config.merge.aiResolveEnabled,
 		reimagineEnabled: config.merge.reimagineEnabled,
@@ -169,9 +191,9 @@ export async function mergeCommand(opts: MergeOptions): Promise<void> {
 	});
 
 	if (branchName) {
-		await handleBranch(branchName, queue, resolver, config, targetBranch, dryRun, json);
+		await handleBranch(branchName, queue, resolver, repoRoot, targetBranch, dryRun, json);
 	} else {
-		await handleAll(queue, resolver, config, targetBranch, dryRun, json);
+		await handleAll(queue, resolver, repoRoot, targetBranch, dryRun, json);
 	}
 }
 
@@ -184,13 +206,12 @@ async function handleBranch(
 	branchName: string,
 	queue: ReturnType<typeof createMergeQueue>,
 	resolver: ReturnType<typeof createMergeResolver>,
-	config: Awaited<ReturnType<typeof loadConfig>>,
+	repoRoot: string,
 	targetBranch: string,
 	dryRun: boolean,
 	json: boolean,
 ): Promise<void> {
 	const canonicalBranch = targetBranch;
-	const repoRoot = config.project.root;
 
 	// Look for existing entry in the queue
 	const allEntries = queue.list();
@@ -260,13 +281,12 @@ async function handleBranch(
 async function handleAll(
 	queue: ReturnType<typeof createMergeQueue>,
 	resolver: ReturnType<typeof createMergeResolver>,
-	config: Awaited<ReturnType<typeof loadConfig>>,
+	repoRoot: string,
 	targetBranch: string,
 	dryRun: boolean,
 	json: boolean,
 ): Promise<void> {
 	const canonicalBranch = targetBranch;
-	const repoRoot = config.project.root;
 
 	const pendingEntries = queue.list("pending");
 
