@@ -6,10 +6,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { EventStore, InsertEvent, StoredEvent, ToolStats } from "../types.ts";
-import { createEventStore } from "./store.ts";
+import { Database } from "bun:sqlite";
+import type { InsertEvent, StoredEvent, ToolStats } from "../types.ts";
+import {
+	createEventStore,
+	type EventStoreWithProject,
+	type InsertEventWithProject,
+} from "./store.ts";
 
-let store: EventStore;
+let store: EventStoreWithProject;
 
 beforeEach(() => {
 	store = createEventStore(":memory:");
@@ -20,7 +25,7 @@ afterEach(() => {
 });
 
 /** Helper to create an InsertEvent with sensible defaults. */
-function makeEvent(overrides: Partial<InsertEvent> = {}): InsertEvent {
+function makeEvent(overrides: Partial<InsertEventWithProject> = {}): InsertEventWithProject {
 	return {
 		runId: "run-001",
 		agentName: "builder-1",
@@ -631,15 +636,119 @@ describe("CHECK constraints", () => {
 	});
 });
 
+// === project_id support ===
+
+describe("project_id support", () => {
+	test("insert defaults project_id to '_default'", () => {
+		const id = store.insert(makeEvent());
+		const events = store.getByAgent("builder-1");
+		expect(events).toHaveLength(1);
+		const stored = events[0];
+		expect(stored?.projectId).toBe("_default");
+		expect(id).toBeGreaterThan(0);
+	});
+
+	test("insert with explicit project_id stores it correctly", () => {
+		store.insert(makeEvent({ projectId: "project-alpha" }));
+		const events = store.getByAgent("builder-1");
+		expect(events).toHaveLength(1);
+		expect(events[0]?.projectId).toBe("project-alpha");
+	});
+
+	test("getByAgent filters by project_id when provided", () => {
+		store.insert(makeEvent({ agentName: "builder-1", projectId: "proj-a" }));
+		store.insert(makeEvent({ agentName: "builder-1", projectId: "proj-b" }));
+		store.insert(makeEvent({ agentName: "builder-1", projectId: "proj-a" }));
+
+		const projAEvents = store.getByAgent("builder-1", { projectId: "proj-a" });
+		expect(projAEvents).toHaveLength(2);
+		for (const e of projAEvents) {
+			expect(e.projectId).toBe("proj-a");
+		}
+
+		const projBEvents = store.getByAgent("builder-1", { projectId: "proj-b" });
+		expect(projBEvents).toHaveLength(1);
+		expect(projBEvents[0]?.projectId).toBe("proj-b");
+	});
+
+	test("getByRun filters by project_id when provided", () => {
+		store.insert(makeEvent({ runId: "run-001", projectId: "proj-a" }));
+		store.insert(makeEvent({ runId: "run-001", projectId: "proj-b" }));
+
+		const projAEvents = store.getByRun("run-001", { projectId: "proj-a" });
+		expect(projAEvents).toHaveLength(1);
+		expect(projAEvents[0]?.projectId).toBe("proj-a");
+	});
+
+	test("getErrors filters by project_id when provided", () => {
+		store.insert(makeEvent({ level: "error", eventType: "error", projectId: "proj-a" }));
+		store.insert(makeEvent({ level: "error", eventType: "error", projectId: "proj-b" }));
+
+		const projAErrors = store.getErrors({ projectId: "proj-a" });
+		expect(projAErrors).toHaveLength(1);
+		expect(projAErrors[0]?.projectId).toBe("proj-a");
+	});
+
+	test("migration: create old DB without project_id column, reopen, verify migration adds it", () => {
+		const { mkdtempSync, rmSync } = require("node:fs");
+		const { tmpdir: osTmpdir } = require("node:os");
+		const { join: pathJoin } = require("node:path");
+
+		const tempDir = mkdtempSync(pathJoin(osTmpdir(), "overstory-events-migrate-"));
+		const dbPath = pathJoin(tempDir, "events.db");
+
+		try {
+			// Create an old-style DB without project_id
+			const rawDb = new Database(dbPath);
+			rawDb.exec("PRAGMA journal_mode = WAL");
+			rawDb.exec(`
+CREATE TABLE events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT,
+  agent_name TEXT NOT NULL,
+  session_id TEXT,
+  event_type TEXT NOT NULL,
+  tool_name TEXT,
+  tool_args TEXT,
+  tool_duration_ms INTEGER,
+  level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug','info','warn','error')),
+  data TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now'))
+)`);
+			rawDb.exec(
+				`INSERT INTO events (agent_name, event_type, level) VALUES ('old-agent', 'session_start', 'info')`,
+			);
+			rawDb.close();
+
+			// Reopen via createEventStore — should trigger migration
+			const migratedStore = createEventStore(dbPath);
+
+			// Old event should have '_default' project_id
+			const events = migratedStore.getByAgent("old-agent");
+			expect(events).toHaveLength(1);
+			expect(events[0]?.projectId).toBe("_default");
+
+			// New inserts should work with project_id
+			migratedStore.insert(makeEvent({ agentName: "new-agent", projectId: "proj-x" }));
+			const newEvents = migratedStore.getByAgent("new-agent");
+			expect(newEvents).toHaveLength(1);
+			expect(newEvents[0]?.projectId).toBe("proj-x");
+
+			migratedStore.close();
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+});
+
 // === concurrent access ===
 
 describe("concurrent access", () => {
 	test("second store instance can read events written by first", () => {
 		// Use a temp file for this test since :memory: databases are isolated
-		const { mkdtempSync } = require("node:fs");
+		const { mkdtempSync, rmSync } = require("node:fs");
 		const { tmpdir } = require("node:os");
 		const { join } = require("node:path");
-		const { rmSync } = require("node:fs");
 
 		const tempDir = mkdtempSync(join(tmpdir(), "overstory-events-test-"));
 		const dbPath = join(tempDir, "events.db");

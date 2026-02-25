@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { MailError } from "../errors.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
 import type { MailMessage } from "../types.ts";
@@ -617,6 +618,203 @@ describe("createMailStore", () => {
 			).toThrow();
 
 			store2.close();
+		});
+	});
+
+	describe("project_id support", () => {
+		test("insert defaults project_id to '_default'", () => {
+			const msg = store.insert({
+				id: "msg-default-proj",
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "test",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+			});
+
+			expect(msg.projectId).toBe("_default");
+
+			const fetched = store.getById(msg.id);
+			expect(fetched?.projectId).toBe("_default");
+		});
+
+		test("insert with explicit project_id stores it correctly", () => {
+			const msg = store.insert({
+				id: "msg-proj-a",
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "test",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+				projectId: "project-alpha",
+			});
+
+			expect(msg.projectId).toBe("project-alpha");
+
+			const fetched = store.getById(msg.id);
+			expect(fetched?.projectId).toBe("project-alpha");
+		});
+
+		test("getUnread filters by project_id when provided", () => {
+			store.insert({
+				id: "msg-proj-1",
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "alpha msg",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+				projectId: "project-alpha",
+			});
+			store.insert({
+				id: "msg-proj-2",
+				from: "agent-b",
+				to: "orchestrator",
+				subject: "beta msg",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+				projectId: "project-beta",
+			});
+
+			const alphaUnread = store.getUnread("orchestrator", "project-alpha");
+			expect(alphaUnread).toHaveLength(1);
+			expect(alphaUnread[0]?.subject).toBe("alpha msg");
+
+			const betaUnread = store.getUnread("orchestrator", "project-beta");
+			expect(betaUnread).toHaveLength(1);
+			expect(betaUnread[0]?.subject).toBe("beta msg");
+		});
+
+		test("getUnread returns all projects when projectId omitted (backward compat)", () => {
+			store.insert({
+				id: "msg-all-1",
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "alpha msg",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+				projectId: "project-alpha",
+			});
+			store.insert({
+				id: "msg-all-2",
+				from: "agent-b",
+				to: "orchestrator",
+				subject: "beta msg",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+				projectId: "project-beta",
+			});
+
+			const allUnread = store.getUnread("orchestrator");
+			expect(allUnread).toHaveLength(2);
+		});
+
+		test("getAll filters by project_id when provided", () => {
+			store.insert({
+				id: "msg-filter-1",
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "alpha",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+				projectId: "project-alpha",
+			});
+			store.insert({
+				id: "msg-filter-2",
+				from: "agent-b",
+				to: "orchestrator",
+				subject: "beta",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+				projectId: "project-beta",
+			});
+			store.insert({
+				id: "msg-filter-3",
+				from: "agent-c",
+				to: "orchestrator",
+				subject: "also alpha",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+				projectId: "project-alpha",
+			});
+
+			const alphaAll = store.getAll({ projectId: "project-alpha" });
+			expect(alphaAll).toHaveLength(2);
+			for (const m of alphaAll) {
+				expect(m.projectId).toBe("project-alpha");
+			}
+		});
+
+		test("migration: create old DB without project_id column, reopen, verify migration adds it", async () => {
+			const oldDbDir = await mkdtemp(join(tmpdir(), "overstory-mail-migrate-"));
+			const oldDbPath = join(oldDbDir, "mail.db");
+
+			try {
+				// Create an old-style DB manually (without project_id)
+				const rawDb = new Database(oldDbPath);
+				rawDb.exec("PRAGMA journal_mode = WAL");
+				rawDb.exec(`
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  from_agent TEXT NOT NULL,
+  to_agent TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'status' CHECK(type IN ('status','question','result','error','worker_done','merge_ready','merged','merge_failed','escalation','health_check','dispatch','assign')),
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high','urgent')),
+  thread_id TEXT,
+  payload TEXT,
+  read INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+				rawDb.exec(
+					`INSERT INTO messages (id, from_agent, to_agent, subject, body) VALUES ('old-msg-1', 'a', 'b', 'sub', 'bod')`,
+				);
+				rawDb.close();
+
+				// Reopen via createMailStore — should trigger migration
+				const migratedStore = createMailStore(oldDbPath);
+
+				// Existing message should have '_default' project_id after migration
+				const msg = migratedStore.getById("old-msg-1");
+				expect(msg).not.toBeNull();
+				expect(msg?.projectId).toBe("_default");
+
+				// New inserts should work with project_id
+				const newMsg = migratedStore.insert({
+					id: "new-after-migrate",
+					from: "agent-a",
+					to: "orchestrator",
+					subject: "new",
+					body: "body",
+					type: "status",
+					priority: "normal",
+					threadId: null,
+					projectId: "project-x",
+				});
+				expect(newMsg.projectId).toBe("project-x");
+
+				migratedStore.close();
+			} finally {
+				await rm(oldDbDir, { recursive: true, force: true });
+			}
 		});
 	});
 

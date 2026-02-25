@@ -16,6 +16,17 @@ import type {
 	ToolStats,
 } from "../types.ts";
 
+/** StoredEvent extended with project_id support (store-level only, types.ts not modified). */
+export type StoredEventWithProject = StoredEvent & { projectId: string };
+
+/** InsertEvent extended with optional project_id. */
+export type InsertEventWithProject = InsertEvent & { projectId?: string };
+
+/** EventQueryOptions extended with optional project_id filter. */
+export interface EventQueryOptionsWithProject extends EventQueryOptions {
+	projectId?: string;
+}
+
 /** Row shape as stored in SQLite (snake_case columns). */
 interface EventRow {
 	id: number;
@@ -29,6 +40,7 @@ interface EventRow {
 	level: string;
 	data: string | null;
 	created_at: string;
+	project_id: string;
 }
 
 const CREATE_TABLE = `
@@ -43,7 +55,8 @@ CREATE TABLE IF NOT EXISTS events (
   tool_duration_ms INTEGER,
   level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug','info','warn','error')),
   data TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now'))
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+  project_id TEXT NOT NULL DEFAULT '_default'
 )`;
 
 const CREATE_INDEXES = `
@@ -51,10 +64,31 @@ CREATE INDEX IF NOT EXISTS idx_events_agent_time ON events(agent_name, created_a
 CREATE INDEX IF NOT EXISTS idx_events_run_time ON events(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_type_time ON events(event_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_tool_agent ON events(tool_name, agent_name);
-CREATE INDEX IF NOT EXISTS idx_events_level_error ON events(level) WHERE level = 'error'`;
+CREATE INDEX IF NOT EXISTS idx_events_level_error ON events(level) WHERE level = 'error';
+CREATE INDEX IF NOT EXISTS idx_events_project_time ON events(project_id, created_at)`;
 
-/** Convert a database row (snake_case) to a StoredEvent object (camelCase). */
-function rowToEvent(row: EventRow): StoredEvent {
+/**
+ * Migrate an existing events table to the current schema.
+ *
+ * Uses PRAGMA table_info to check for missing columns and adds them
+ * via ALTER TABLE. This is idempotent — safe to run on an already-migrated DB.
+ */
+function migrateSchema(db: Database): void {
+	const tableInfo = db
+		.prepare<{ name: string }, []>("PRAGMA table_info(events)")
+		.all();
+	if (tableInfo.length === 0) {
+		// Table doesn't exist yet; CREATE TABLE IF NOT EXISTS will handle it
+		return;
+	}
+	const hasProjectId = tableInfo.some((col: { name: string }) => col.name === "project_id");
+	if (!hasProjectId) {
+		db.exec("ALTER TABLE events ADD COLUMN project_id TEXT NOT NULL DEFAULT '_default'");
+	}
+}
+
+/** Convert a database row (snake_case) to a StoredEventWithProject object (camelCase). */
+function rowToEvent(row: EventRow): StoredEventWithProject {
 	return {
 		id: row.id,
 		runId: row.run_id,
@@ -67,12 +101,13 @@ function rowToEvent(row: EventRow): StoredEvent {
 		level: row.level as EventLevel,
 		data: row.data,
 		createdAt: row.created_at,
+		projectId: row.project_id,
 	};
 }
 
-/** Build WHERE clause fragments and params from EventQueryOptions. */
+/** Build WHERE clause fragments and params from EventQueryOptionsWithProject. */
 function buildFilterClauses(
-	opts: EventQueryOptions | undefined,
+	opts: EventQueryOptionsWithProject | undefined,
 	existingConditions: string[] = [],
 	existingParams: Record<string, string | number> = {},
 ): { whereClause: string; params: Record<string, string | number>; limitClause: string } {
@@ -91,11 +126,26 @@ function buildFilterClauses(
 		conditions.push("level = $level");
 		params.$level = opts.level;
 	}
+	if (opts?.projectId !== undefined) {
+		conditions.push("project_id = $project_id");
+		params.$project_id = opts.projectId;
+	}
 
 	const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 	const limitClause = opts?.limit !== undefined ? `LIMIT ${opts.limit}` : "";
 
 	return { whereClause, params, limitClause };
+}
+
+/** EventStore interface extended with project_id support at the store level. */
+export interface EventStoreWithProject extends EventStore {
+	insert(event: InsertEventWithProject): number;
+	getByAgent(agentName: string, opts?: EventQueryOptionsWithProject): StoredEventWithProject[];
+	getByRun(runId: string, opts?: EventQueryOptionsWithProject): StoredEventWithProject[];
+	getErrors(opts?: EventQueryOptionsWithProject): StoredEventWithProject[];
+	getTimeline(
+		opts: EventQueryOptionsWithProject & { since: string },
+	): StoredEventWithProject[];
 }
 
 /**
@@ -104,13 +154,16 @@ function buildFilterClauses(
  * Initializes the database with WAL mode and a 5-second busy timeout.
  * Creates the events table and indexes if they do not already exist.
  */
-export function createEventStore(dbPath: string): EventStore {
+export function createEventStore(dbPath: string): EventStoreWithProject {
 	const db = new Database(dbPath);
 
 	// Configure for concurrent access from multiple agent processes.
 	db.exec("PRAGMA journal_mode = WAL");
 	db.exec("PRAGMA synchronous = NORMAL");
 	db.exec("PRAGMA busy_timeout = 5000");
+
+	// Migrate existing tables to current schema (no-op if already up to date)
+	migrateSchema(db);
 
 	// Create schema
 	db.exec(CREATE_TABLE);
@@ -129,12 +182,13 @@ export function createEventStore(dbPath: string): EventStore {
 			$tool_duration_ms: number | null;
 			$level: string;
 			$data: string | null;
+			$project_id: string;
 		}
 	>(`
 		INSERT INTO events
-			(run_id, agent_name, session_id, event_type, tool_name, tool_args, tool_duration_ms, level, data)
+			(run_id, agent_name, session_id, event_type, tool_name, tool_args, tool_duration_ms, level, data, project_id)
 		VALUES
-			($run_id, $agent_name, $session_id, $event_type, $tool_name, $tool_args, $tool_duration_ms, $level, $data)
+			($run_id, $agent_name, $session_id, $event_type, $tool_name, $tool_args, $tool_duration_ms, $level, $data, $project_id)
 		RETURNING id
 	`);
 
@@ -168,7 +222,7 @@ export function createEventStore(dbPath: string): EventStore {
 	`);
 
 	return {
-		insert(event: InsertEvent): number {
+		insert(event: InsertEventWithProject): number {
 			const row = insertStmt.get({
 				$run_id: event.runId,
 				$agent_name: event.agentName,
@@ -179,6 +233,7 @@ export function createEventStore(dbPath: string): EventStore {
 				$tool_duration_ms: event.toolDurationMs,
 				$level: event.level,
 				$data: event.data,
+				$project_id: event.projectId ?? "_default",
 			});
 			// RETURNING id always returns a row for INSERT; if somehow null, fallback to 0
 			if (!row) {
@@ -212,13 +267,14 @@ export function createEventStore(dbPath: string): EventStore {
 			return { startId: startRow.id, durationMs };
 		},
 
-		getByAgent(agentName: string, opts?: EventQueryOptions): StoredEvent[] {
+		getByAgent(agentName: string, opts?: EventQueryOptionsWithProject): StoredEventWithProject[] {
 			if (
 				opts !== undefined &&
 				(opts.since !== undefined ||
 					opts.until !== undefined ||
 					opts.level !== undefined ||
-					opts.limit !== undefined)
+					opts.limit !== undefined ||
+					opts.projectId !== undefined)
 			) {
 				// Use dynamic query with filters
 				const { whereClause, params, limitClause } = buildFilterClauses(
@@ -234,13 +290,14 @@ export function createEventStore(dbPath: string): EventStore {
 			return rows.map(rowToEvent);
 		},
 
-		getByRun(runId: string, opts?: EventQueryOptions): StoredEvent[] {
+		getByRun(runId: string, opts?: EventQueryOptionsWithProject): StoredEventWithProject[] {
 			if (
 				opts !== undefined &&
 				(opts.since !== undefined ||
 					opts.until !== undefined ||
 					opts.level !== undefined ||
-					opts.limit !== undefined)
+					opts.limit !== undefined ||
+					opts.projectId !== undefined)
 			) {
 				const { whereClause, params, limitClause } = buildFilterClauses(
 					opts,
@@ -255,14 +312,16 @@ export function createEventStore(dbPath: string): EventStore {
 			return rows.map(rowToEvent);
 		},
 
-		getErrors(opts?: EventQueryOptions): StoredEvent[] {
+		getErrors(opts?: EventQueryOptionsWithProject): StoredEventWithProject[] {
 			const { whereClause, params, limitClause } = buildFilterClauses(opts, ["level = 'error'"]);
 			const query = `SELECT * FROM events ${whereClause} ORDER BY created_at DESC ${limitClause}`;
 			const rows = db.prepare<EventRow, Record<string, string | number>>(query).all(params);
 			return rows.map(rowToEvent);
 		},
 
-		getTimeline(opts: EventQueryOptions & { since: string }): StoredEvent[] {
+		getTimeline(
+			opts: EventQueryOptionsWithProject & { since: string },
+		): StoredEventWithProject[] {
 			const { whereClause, params, limitClause } = buildFilterClauses(opts);
 			const query = `SELECT * FROM events ${whereClause} ORDER BY created_at ASC ${limitClause}`;
 			const rows = db.prepare<EventRow, Record<string, string | number>>(query).all(params);

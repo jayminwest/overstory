@@ -11,14 +11,26 @@ import { MailError } from "../errors.ts";
 import type { MailMessage } from "../types.ts";
 import { MAIL_MESSAGE_TYPES } from "../types.ts";
 
+/** MailMessage extended with project_id support (store-level only, types.ts not modified). */
+export type MailMessageWithProject = MailMessage & { projectId: string };
+
 export interface MailStore {
 	insert(
-		message: Omit<MailMessage, "read" | "createdAt" | "payload"> & { payload?: string | null },
-	): MailMessage;
-	getUnread(agentName: string): MailMessage[];
-	getAll(filters?: { from?: string; to?: string; unread?: boolean; limit?: number }): MailMessage[];
-	getById(id: string): MailMessage | null;
-	getByThread(threadId: string): MailMessage[];
+		message: Omit<MailMessage, "read" | "createdAt" | "payload"> & {
+			payload?: string | null;
+			projectId?: string;
+		},
+	): MailMessageWithProject;
+	getUnread(agentName: string, projectId?: string): MailMessageWithProject[];
+	getAll(filters?: {
+		from?: string;
+		to?: string;
+		unread?: boolean;
+		limit?: number;
+		projectId?: string;
+	}): MailMessageWithProject[];
+	getById(id: string): MailMessageWithProject | null;
+	getByThread(threadId: string): MailMessageWithProject[];
 	markRead(id: string): void;
 	/** Delete messages matching the given criteria. Returns the number of messages deleted. */
 	purge(options: { all?: boolean; olderThanMs?: number; agent?: string }): number;
@@ -38,6 +50,7 @@ interface MessageRow {
 	payload: string | null;
 	read: number;
 	created_at: string;
+	project_id: string;
 }
 
 /** Build the CHECK constraint for message types from the runtime constant. */
@@ -55,16 +68,18 @@ CREATE TABLE IF NOT EXISTS messages (
   thread_id TEXT,
   payload TEXT,
   read INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  project_id TEXT NOT NULL DEFAULT '_default'
 )`;
 
 /**
  * Migrate an existing messages table to the current schema.
  *
- * Handles two migration paths:
+ * Handles these migration paths:
  * 1. Tables without CHECK constraints → recreate with constraints
  * 2. Tables without payload column → add payload column
  * 3. Tables with old CHECK constraints (missing protocol types) → recreate with new types
+ * 4. Tables without project_id column → add project_id column
  *
  * SQLite does not support ALTER TABLE ADD CONSTRAINT, so constraint changes
  * require recreating the table.
@@ -83,19 +98,27 @@ function migrateSchema(db: Database): void {
 	const hasCheckConstraints = row.sql.includes("CHECK");
 	const hasPayloadColumn = row.sql.includes("payload");
 	const hasProtocolTypes = row.sql.includes("worker_done");
+	const hasProjectId = row.sql.includes("project_id");
 
 	// If schema is fully up to date, nothing to do
-	if (hasCheckConstraints && hasPayloadColumn && hasProtocolTypes) {
+	if (hasCheckConstraints && hasPayloadColumn && hasProtocolTypes && hasProjectId) {
 		return;
 	}
 
-	// If only missing the payload column (has correct CHECK constraints), use ALTER TABLE
-	if (hasCheckConstraints && hasProtocolTypes && !hasPayloadColumn) {
-		db.exec("ALTER TABLE messages ADD COLUMN payload TEXT");
+	// If constraints and types are correct, use ALTER TABLE for missing columns
+	if (hasCheckConstraints && hasProtocolTypes) {
+		if (!hasPayloadColumn) {
+			db.exec("ALTER TABLE messages ADD COLUMN payload TEXT");
+		}
+		if (!hasProjectId) {
+			db.exec(
+				"ALTER TABLE messages ADD COLUMN project_id TEXT NOT NULL DEFAULT '_default'",
+			);
+		}
 		return;
 	}
 
-	// Need to recreate the table (missing CHECK constraints or needs type update)
+	// Need to recreate the table (missing CHECK constraints or protocol types)
 	const validTypes = MAIL_MESSAGE_TYPES.map((t) => `'${t}'`).join(",");
 	db.exec("BEGIN TRANSACTION");
 	try {
@@ -112,17 +135,19 @@ CREATE TABLE messages (
   thread_id TEXT,
   payload TEXT,
   read INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  project_id TEXT NOT NULL DEFAULT '_default'
 )`);
-		// Copy data, mapping invalid types to 'status'. Old tables may not have payload column.
+		// Copy data, mapping invalid types to 'status'. Old tables may not have payload/project_id.
 		const oldHasPayload = row.sql.includes("payload");
 		const payloadSelect = oldHasPayload ? "payload" : "NULL";
+		const projectIdSelect = hasProjectId ? "project_id" : "'_default'";
 		db.exec(`
-INSERT INTO messages (id, from_agent, to_agent, subject, body, type, priority, thread_id, payload, read, created_at)
+INSERT INTO messages (id, from_agent, to_agent, subject, body, type, priority, thread_id, payload, read, created_at, project_id)
 SELECT id, from_agent, to_agent, subject, body,
   CASE WHEN type IN (${validTypes}) THEN type ELSE 'status' END,
   CASE WHEN priority IN ('low','normal','high','urgent') THEN priority ELSE 'normal' END,
-  thread_id, ${payloadSelect}, read, created_at
+  thread_id, ${payloadSelect}, read, created_at, ${projectIdSelect}
 FROM messages_old`);
 		db.exec("DROP TABLE messages_old");
 		db.exec("COMMIT");
@@ -133,7 +158,7 @@ FROM messages_old`);
 }
 
 const CREATE_INDEXES = `
-CREATE INDEX IF NOT EXISTS idx_inbox ON messages(to_agent, read);
+CREATE INDEX IF NOT EXISTS idx_inbox ON messages(to_agent, read, project_id);
 CREATE INDEX IF NOT EXISTS idx_thread ON messages(thread_id)`;
 
 /** Generate a random 12-character alphanumeric ID. */
@@ -151,8 +176,8 @@ function randomId(): string {
 	return result;
 }
 
-/** Convert a database row (snake_case) to a MailMessage object (camelCase). */
-function rowToMessage(row: MessageRow): MailMessage {
+/** Convert a database row (snake_case) to a MailMessageWithProject object (camelCase). */
+function rowToMessage(row: MessageRow): MailMessageWithProject {
 	return {
 		id: row.id,
 		from: row.from_agent,
@@ -165,6 +190,7 @@ function rowToMessage(row: MessageRow): MailMessage {
 		payload: row.payload,
 		read: row.read === 1,
 		createdAt: row.created_at,
+		projectId: row.project_id,
 	};
 }
 
@@ -207,20 +233,30 @@ export function createMailStore(dbPath: string): MailStore {
 			$payload: string | null;
 			$read: number;
 			$created_at: string;
+			$project_id: string;
 		}
 	>(`
 		INSERT INTO messages
-			(id, from_agent, to_agent, subject, body, type, priority, thread_id, payload, read, created_at)
+			(id, from_agent, to_agent, subject, body, type, priority, thread_id, payload, read, created_at, project_id)
 		VALUES
-			($id, $from_agent, $to_agent, $subject, $body, $type, $priority, $thread_id, $payload, $read, $created_at)
+			($id, $from_agent, $to_agent, $subject, $body, $type, $priority, $thread_id, $payload, $read, $created_at, $project_id)
 	`);
 
 	const getByIdStmt = db.prepare<MessageRow, { $id: string }>(`
 		SELECT * FROM messages WHERE id = $id
 	`);
 
+	// Base unread query — used when no projectId filter is needed (backward compat)
 	const getUnreadStmt = db.prepare<MessageRow, { $to_agent: string }>(`
 		SELECT * FROM messages WHERE to_agent = $to_agent AND read = 0 ORDER BY created_at ASC
+	`);
+
+	// Filtered unread query — used when projectId is provided
+	const getUnreadByProjectStmt = db.prepare<
+		MessageRow,
+		{ $to_agent: string; $project_id: string }
+	>(`
+		SELECT * FROM messages WHERE to_agent = $to_agent AND read = 0 AND project_id = $project_id ORDER BY created_at ASC
 	`);
 
 	const getByThreadStmt = db.prepare<MessageRow, { $thread_id: string }>(`
@@ -237,7 +273,8 @@ export function createMailStore(dbPath: string): MailStore {
 		to?: string;
 		unread?: boolean;
 		limit?: number;
-	}): MailMessage[] {
+		projectId?: string;
+	}): MailMessageWithProject[] {
 		const conditions: string[] = [];
 		const params: Record<string, string | number> = {};
 
@@ -252,6 +289,10 @@ export function createMailStore(dbPath: string): MailStore {
 		if (filters?.unread !== undefined) {
 			conditions.push("read = $read");
 			params.$read = filters.unread ? 0 : 1;
+		}
+		if (filters?.projectId !== undefined) {
+			conditions.push("project_id = $project_id");
+			params.$project_id = filters.projectId;
 		}
 
 		const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -269,11 +310,13 @@ export function createMailStore(dbPath: string): MailStore {
 		insert(
 			message: Omit<MailMessage, "read" | "createdAt" | "payload"> & {
 				payload?: string | null;
+				projectId?: string;
 			},
-		): MailMessage {
+		): MailMessageWithProject {
 			const id = message.id || `msg-${randomId()}`;
 			const createdAt = new Date().toISOString();
 			const payload = message.payload ?? null;
+			const projectId = message.projectId ?? "_default";
 
 			try {
 				insertStmt.run({
@@ -288,6 +331,7 @@ export function createMailStore(dbPath: string): MailStore {
 					$payload: payload,
 					$read: 0,
 					$created_at: createdAt,
+					$project_id: projectId,
 				});
 			} catch (err) {
 				throw new MailError(`Failed to insert message: ${id}`, {
@@ -302,10 +346,18 @@ export function createMailStore(dbPath: string): MailStore {
 				payload,
 				read: false,
 				createdAt,
+				projectId,
 			};
 		},
 
-		getUnread(agentName: string): MailMessage[] {
+		getUnread(agentName: string, projectId?: string): MailMessageWithProject[] {
+			if (projectId !== undefined) {
+				const rows = getUnreadByProjectStmt.all({
+					$to_agent: agentName,
+					$project_id: projectId,
+				});
+				return rows.map(rowToMessage);
+			}
 			const rows = getUnreadStmt.all({ $to_agent: agentName });
 			return rows.map(rowToMessage);
 		},
@@ -315,16 +367,17 @@ export function createMailStore(dbPath: string): MailStore {
 			to?: string;
 			unread?: boolean;
 			limit?: number;
-		}): MailMessage[] {
+			projectId?: string;
+		}): MailMessageWithProject[] {
 			return buildFilterQuery(filters);
 		},
 
-		getById(id: string): MailMessage | null {
+		getById(id: string): MailMessageWithProject | null {
 			const row = getByIdStmt.get({ $id: id });
 			return row ? rowToMessage(row) : null;
 		},
 
-		getByThread(threadId: string): MailMessage[] {
+		getByThread(threadId: string): MailMessageWithProject[] {
 			const rows = getByThreadStmt.all({ $thread_id: threadId });
 			return rows.map(rowToMessage);
 		},
