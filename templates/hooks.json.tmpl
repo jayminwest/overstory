@@ -6,11 +6,11 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov prime --agent {{AGENT_NAME}}"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov prime --agent {{AGENT_NAME}} $PROJECT_FLAG"
 					},
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov mail check --inject --agent {{AGENT_NAME}}"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov mail check --inject --agent {{AGENT_NAME}} $PROJECT_FLAG"
 					}
 				]
 			}
@@ -21,7 +21,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov mail check --inject --agent {{AGENT_NAME}}"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov mail check --inject --agent {{AGENT_NAME}} $PROJECT_FLAG"
 					}
 				]
 			}
@@ -32,7 +32,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov log tool-start --agent {{AGENT_NAME}} --stdin"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov log tool-start --agent {{AGENT_NAME}} $PROJECT_FLAG --stdin"
 					}
 				]
 			},
@@ -52,11 +52,11 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov log tool-end --agent {{AGENT_NAME}} --stdin"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov log tool-end --agent {{AGENT_NAME}} $PROJECT_FLAG --stdin"
 					},
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov mail check --inject --agent {{AGENT_NAME}} --debounce 500"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov mail check --inject --agent {{AGENT_NAME}} $PROJECT_FLAG --debounce 500"
 					}
 				]
 			},
@@ -65,7 +65,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov mail check --inject --agent {{AGENT_NAME}} --debounce 30000"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov mail check --inject --agent {{AGENT_NAME}} $PROJECT_FLAG --debounce 30000"
 					}
 				]
 			},
@@ -85,7 +85,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov log session-end --agent {{AGENT_NAME}} --stdin"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov log session-end --agent {{AGENT_NAME}} $PROJECT_FLAG --stdin"
 					},
 					{
 						"type": "command",
@@ -100,7 +100,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov prime --agent {{AGENT_NAME}} --compact"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; PROJECT_FLAG=\"\"; [ -n \"$OVERSTORY_PROJECT_ID\" ] && PROJECT_FLAG=\"--project $OVERSTORY_PROJECT_ID\"; ov prime --agent {{AGENT_NAME}} --compact $PROJECT_FLAG"
 					}
 				]
 			}

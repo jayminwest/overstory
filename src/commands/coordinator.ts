@@ -27,6 +27,7 @@ import { createRunStore } from "../sessions/store.ts";
 import { resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession } from "../types.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import {
 	createSession,
 	ensureTmuxAvailable,
@@ -269,7 +270,7 @@ export function resolveAttach(args: string[], isTTY: boolean): boolean {
 }
 
 async function startCoordinator(
-	opts: { json: boolean; attach: boolean; watchdog: boolean; monitor: boolean },
+	opts: { json: boolean; attach: boolean; watchdog: boolean; monitor: boolean; project?: string },
 	deps: CoordinatorDeps = {},
 ): Promise<void> {
 	const tmux = deps._tmux ?? {
@@ -289,9 +290,9 @@ async function startCoordinator(
 		);
 	}
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const projectRoot = config.project.root;
+	const ctx = await resolveContext({ project: opts.project });
+	const projectRoot = ctx.projectRoot;
+	const config = await loadConfig(projectRoot);
 	const watchdog = deps._watchdog ?? createDefaultWatchdog(projectRoot);
 	const monitor = deps._monitor ?? createDefaultMonitor(projectRoot);
 	const tmuxSession = coordinatorTmuxSession(config.project.name);
@@ -385,6 +386,7 @@ async function startCoordinator(
 		const pid = await tmux.createSession(tmuxSession, projectRoot, spawnCmd, {
 			...runtime.buildEnv(resolvedModel),
 			OVERSTORY_AGENT_NAME: COORDINATOR_NAME,
+			OVERSTORY_PROJECT_ID: ctx.projectId,
 		});
 
 		// Record session BEFORE sending the beacon so that hook-triggered
@@ -404,6 +406,7 @@ async function startCoordinator(
 			parentAgent: null, // Top of hierarchy
 			depth: 0,
 			runId: null,
+			projectId: ctx.projectId,
 			startedAt: new Date().toISOString(),
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
@@ -508,7 +511,10 @@ async function startCoordinator(
  * 3. Mark session as completed in SessionStore
  * 4. Auto-complete the active run (if current-run.txt exists)
  */
-async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = {}): Promise<void> {
+async function stopCoordinator(
+	opts: { json: boolean; project?: string },
+	deps: CoordinatorDeps = {},
+): Promise<void> {
 	const tmux = deps._tmux ?? {
 		createSession,
 		isSessionAlive,
@@ -519,9 +525,8 @@ async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = 
 	};
 
 	const { json } = opts;
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const projectRoot = config.project.root;
+	const ctx = await resolveContext({ project: opts.project });
+	const projectRoot = ctx.projectRoot;
 	const watchdog = deps._watchdog ?? createDefaultWatchdog(projectRoot);
 	const monitor = deps._monitor ?? createDefaultMonitor(projectRoot);
 
@@ -620,7 +625,7 @@ async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = 
  * Checks session registry and tmux liveness to report actual state.
  */
 async function statusCoordinator(
-	opts: { json: boolean },
+	opts: { json: boolean; project?: string },
 	deps: CoordinatorDeps = {},
 ): Promise<void> {
 	const tmux = deps._tmux ?? {
@@ -633,9 +638,8 @@ async function statusCoordinator(
 	};
 
 	const { json } = opts;
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const projectRoot = config.project.root;
+	const ctx = await resolveContext({ project: opts.project });
+	const projectRoot = ctx.projectRoot;
 	const watchdog = deps._watchdog ?? createDefaultWatchdog(projectRoot);
 	const monitor = deps._monitor ?? createDefaultMonitor(projectRoot);
 
@@ -720,9 +724,16 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 		.option("--no-attach", "Never attach to tmux session after start")
 		.option("--watchdog", "Auto-start watchdog daemon with coordinator")
 		.option("--monitor", "Auto-start Tier 2 monitor agent with coordinator")
+		.option("-p, --project <name>", "Target project (workspace mode)")
 		.option("--json", "Output as JSON")
 		.action(
-			async (opts: { attach?: boolean; watchdog?: boolean; monitor?: boolean; json?: boolean }) => {
+			async (opts: {
+				attach?: boolean;
+				watchdog?: boolean;
+				monitor?: boolean;
+				project?: string;
+				json?: boolean;
+			}) => {
 				// opts.attach = true if --attach, false if --no-attach, undefined if neither
 				const shouldAttach = opts.attach !== undefined ? opts.attach : !!process.stdout.isTTY;
 				await startCoordinator(
@@ -731,6 +742,7 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 						attach: shouldAttach,
 						watchdog: opts.watchdog ?? false,
 						monitor: opts.monitor ?? false,
+						project: opts.project,
 					},
 					deps,
 				);
@@ -740,17 +752,19 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 	cmd
 		.command("stop")
 		.description("Stop the coordinator (kills tmux session)")
+		.option("-p, --project <name>", "Target project (workspace mode)")
 		.option("--json", "Output as JSON")
-		.action(async (opts: { json?: boolean }) => {
-			await stopCoordinator({ json: opts.json ?? false }, deps);
+		.action(async (opts: { project?: string; json?: boolean }) => {
+			await stopCoordinator({ json: opts.json ?? false, project: opts.project }, deps);
 		});
 
 	cmd
 		.command("status")
 		.description("Show coordinator state")
+		.option("-p, --project <name>", "Target project (workspace mode)")
 		.option("--json", "Output as JSON")
-		.action(async (opts: { json?: boolean }) => {
-			await statusCoordinator({ json: opts.json ?? false }, deps);
+		.action(async (opts: { project?: string; json?: boolean }) => {
+			await statusCoordinator({ json: opts.json ?? false, project: opts.project }, deps);
 		});
 
 	return cmd;

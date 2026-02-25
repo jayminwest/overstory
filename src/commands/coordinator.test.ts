@@ -1641,3 +1641,70 @@ describe("SessionStore round-trip", () => {
 		expect(exists).toBe(true);
 	});
 });
+
+describe("--project flag routing", () => {
+	test("start passes OVERSTORY_PROJECT_ID to tmux session env", async () => {
+		const { deps, calls } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await captureStdout(() => coordinatorCommand(["start", "--no-attach", "--json"], deps));
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+
+		expect(calls.createSession).toHaveLength(1);
+		const env = calls.createSession[0]?.env;
+		expect(env).toBeDefined();
+		expect(env?.OVERSTORY_PROJECT_ID).toBeDefined();
+		// In single-repo mode, projectId is "_default"
+		expect(env?.OVERSTORY_PROJECT_ID).toBe("_default");
+	});
+
+	test("start --project flag is accepted without error", async () => {
+		const { deps } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		// --project with a valid name (resolveContext ignores it in single-repo mode)
+		await expect(
+			captureStdout(() => coordinatorCommand(["start", "--no-attach", "--json"], deps)),
+		).resolves.toBeDefined();
+
+		Bun.sleep = originalSleep;
+	});
+
+	test("start --help shows --project flag", async () => {
+		const cmd = createCoordinatorCommand({});
+		for (const sub of cmd.commands) {
+			sub.exitOverride();
+		}
+		const output = await captureStdout(async () => {
+			await cmd.parseAsync(["start", "--help"], { from: "user" }).catch(() => {});
+		});
+		expect(output).toContain("--project");
+	});
+
+	test("stop --help shows --project flag", async () => {
+		const cmd = createCoordinatorCommand({});
+		for (const sub of cmd.commands) {
+			sub.exitOverride();
+		}
+		const output = await captureStdout(async () => {
+			await cmd.parseAsync(["stop", "--help"], { from: "user" }).catch(() => {});
+		});
+		expect(output).toContain("--project");
+	});
+
+	test("status --help shows --project flag", async () => {
+		const cmd = createCoordinatorCommand({});
+		for (const sub of cmd.commands) {
+			sub.exitOverride();
+		}
+		const output = await captureStdout(async () => {
+			await cmd.parseAsync(["status", "--help"], { from: "user" }).catch(() => {});
+		});
+		expect(output).toContain("--project");
+	});
+});

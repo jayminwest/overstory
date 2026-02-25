@@ -2436,3 +2436,162 @@ describe("escapeForSingleQuotedShell", () => {
 		expect(parsed.reason).toContain("ov sling");
 	});
 });
+
+describe("PROJECT_FLAG routing in hook commands", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-hooks-project-flag-test-"));
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { recursive: true, force: true });
+	});
+
+	test("SessionStart prime hook includes OVERSTORY_PROJECT_ID conditional", async () => {
+		const worktreePath = join(tempDir, "worktree");
+
+		await deployHooks(worktreePath, "proj-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const primeCmd = parsed.hooks.SessionStart[0].hooks[0].command;
+
+		expect(primeCmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(primeCmd).toContain("PROJECT_FLAG");
+		expect(primeCmd).toContain("--project $OVERSTORY_PROJECT_ID");
+		expect(primeCmd).toContain("ov prime --agent proj-agent");
+	});
+
+	test("SessionStart mail check hook includes OVERSTORY_PROJECT_ID conditional", async () => {
+		const worktreePath = join(tempDir, "worktree");
+
+		await deployHooks(worktreePath, "proj-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const mailCmd = parsed.hooks.SessionStart[0].hooks[1].command;
+
+		expect(mailCmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(mailCmd).toContain("PROJECT_FLAG");
+		expect(mailCmd).toContain("ov mail check --inject --agent proj-agent");
+	});
+
+	test("UserPromptSubmit hook includes OVERSTORY_PROJECT_ID conditional", async () => {
+		const worktreePath = join(tempDir, "worktree");
+
+		await deployHooks(worktreePath, "proj-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const cmd = parsed.hooks.UserPromptSubmit[0].hooks[0].command;
+
+		expect(cmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(cmd).toContain("PROJECT_FLAG");
+		expect(cmd).toContain("ov mail check --inject --agent proj-agent");
+	});
+
+	test("PreToolUse log hook includes OVERSTORY_PROJECT_ID conditional", async () => {
+		const worktreePath = join(tempDir, "worktree");
+
+		await deployHooks(worktreePath, "proj-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const preToolUse = parsed.hooks.PreToolUse;
+		const baseHook = preToolUse.find((h: { matcher: string }) => h.matcher === "");
+		const cmd = baseHook.hooks[0].command;
+
+		expect(cmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(cmd).toContain("PROJECT_FLAG");
+		expect(cmd).toContain("ov log tool-start --agent proj-agent");
+	});
+
+	test("PostToolUse log hook includes OVERSTORY_PROJECT_ID conditional", async () => {
+		const worktreePath = join(tempDir, "worktree");
+
+		await deployHooks(worktreePath, "proj-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const logCmd = parsed.hooks.PostToolUse[0].hooks[0].command;
+
+		expect(logCmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(logCmd).toContain("PROJECT_FLAG");
+		expect(logCmd).toContain("ov log tool-end --agent proj-agent");
+	});
+
+	test("PostToolUse mail check hooks include OVERSTORY_PROJECT_ID conditional", async () => {
+		const worktreePath = join(tempDir, "worktree");
+
+		await deployHooks(worktreePath, "proj-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+
+		// First PostToolUse entry, second hook (debounce 500)
+		const debounce500Cmd = parsed.hooks.PostToolUse[0].hooks[1].command;
+		expect(debounce500Cmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(debounce500Cmd).toContain("PROJECT_FLAG");
+		expect(debounce500Cmd).toContain("--debounce 500");
+
+		// Second PostToolUse entry (debounce 30000)
+		const debounce30000Cmd = parsed.hooks.PostToolUse[1].hooks[0].command;
+		expect(debounce30000Cmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(debounce30000Cmd).toContain("PROJECT_FLAG");
+		expect(debounce30000Cmd).toContain("--debounce 30000");
+	});
+
+	test("Stop log hook includes OVERSTORY_PROJECT_ID conditional", async () => {
+		const worktreePath = join(tempDir, "worktree");
+
+		await deployHooks(worktreePath, "proj-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const cmd = parsed.hooks.Stop[0].hooks[0].command;
+
+		expect(cmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(cmd).toContain("PROJECT_FLAG");
+		expect(cmd).toContain("ov log session-end --agent proj-agent");
+	});
+
+	test("PreCompact hook includes OVERSTORY_PROJECT_ID conditional", async () => {
+		const worktreePath = join(tempDir, "worktree");
+
+		await deployHooks(worktreePath, "proj-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const cmd = parsed.hooks.PreCompact[0].hooks[0].command;
+
+		expect(cmd).toContain("OVERSTORY_PROJECT_ID");
+		expect(cmd).toContain("PROJECT_FLAG");
+		expect(cmd).toContain("ov prime --agent proj-agent --compact");
+	});
+
+	test("PROJECT_FLAG is empty string when OVERSTORY_PROJECT_ID is unset", async () => {
+		// Verify the shell conditional: PROJECT_FLAG="" means no --project arg appended
+		const worktreePath = join(tempDir, "shell-test-wt");
+		await deployHooks(worktreePath, "shell-agent");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+
+		// The prime command should have the conditional structure
+		const primeCmd = parsed.hooks.SessionStart[0].hooks[0].command;
+		expect(primeCmd).toContain('PROJECT_FLAG=""');
+		expect(primeCmd).toContain(
+			'[ -n "$OVERSTORY_PROJECT_ID" ] && PROJECT_FLAG="--project $OVERSTORY_PROJECT_ID"',
+		);
+	});
+});
