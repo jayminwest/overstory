@@ -5,8 +5,50 @@ import { join } from "node:path";
 import { MailError } from "../errors.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
 import type { WorkerDonePayload } from "../types.ts";
-import { createMailClient, type MailClient, parsePayload } from "./client.ts";
+import { createMailClient, type MailClient, parseAddress, parsePayload } from "./client.ts";
 import { createMailStore, type MailStore } from "./store.ts";
+
+describe("parseAddress", () => {
+	test("plain agent name returns null projectId", () => {
+		const result = parseAddress("scout-1");
+		expect(result).toEqual({ projectId: null, agentName: "scout-1" });
+	});
+
+	test("project:agent returns parsed projectId and agentName", () => {
+		const result = parseAddress("frontend:scout-1");
+		expect(result).toEqual({ projectId: "frontend", agentName: "scout-1" });
+	});
+
+	test("group addresses pass through without parsing", () => {
+		const result = parseAddress("@all");
+		expect(result).toEqual({ projectId: null, agentName: "@all" });
+	});
+
+	test("@workspace passes through as group address", () => {
+		const result = parseAddress("@workspace");
+		expect(result).toEqual({ projectId: null, agentName: "@workspace" });
+	});
+
+	test("only first colon is treated as separator", () => {
+		const result = parseAddress("proj:agent:extra");
+		expect(result).toEqual({ projectId: "proj", agentName: "agent:extra" });
+	});
+
+	test("colon at start is not treated as separator", () => {
+		const result = parseAddress(":agent");
+		expect(result).toEqual({ projectId: null, agentName: ":agent" });
+	});
+
+	test("trailing colon is not treated as separator", () => {
+		const result = parseAddress("project:");
+		expect(result).toEqual({ projectId: null, agentName: "project:" });
+	});
+
+	test("workspace as plain agent name works", () => {
+		const result = parseAddress("workspace");
+		expect(result).toEqual({ projectId: null, agentName: "workspace" });
+	});
+});
 
 describe("createMailClient", () => {
 	let tempDir: string;
@@ -97,6 +139,42 @@ describe("createMailClient", () => {
 			expect(msg?.body).toBe("Implementation finished");
 			expect(msg?.threadId).toBe("thread-abc");
 			expect(msg?.read).toBe(false);
+		});
+
+		test("uses defaultProjectId when no cross-project prefix", () => {
+			const projectClient = createMailClient(store, "backend");
+			const id = projectClient.send({
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "test",
+				body: "body",
+			});
+			const msg = store.getById(id);
+			expect(msg?.projectId).toBe("backend");
+		});
+
+		test("cross-project prefix overrides defaultProjectId", () => {
+			const projectClient = createMailClient(store, "backend");
+			const id = projectClient.send({
+				from: "agent-a",
+				to: "frontend:scout-1",
+				subject: "cross-project",
+				body: "hello",
+			});
+			const msg = store.getById(id);
+			expect(msg?.to).toBe("scout-1");
+			expect(msg?.projectId).toBe("frontend");
+		});
+
+		test("falls back to _default when no prefix and no defaultProjectId", () => {
+			const id = client.send({
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "test",
+				body: "body",
+			});
+			const msg = store.getById(id);
+			expect(msg?.projectId).toBe("_default");
 		});
 	});
 
@@ -593,6 +671,20 @@ describe("createMailClient", () => {
 			expect(replyMsg?.from).toBe("agent-c");
 			// Third-party reply goes to original sender
 			expect(replyMsg?.to).toBe("agent-a");
+		});
+
+		test("reply preserves original message projectId", () => {
+			const projectClient = createMailClient(store, "frontend");
+			const originalId = projectClient.send({
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "Question",
+				body: "Help?",
+			});
+			const otherClient = createMailClient(store, "backend");
+			const replyId = otherClient.reply(originalId, "Sure", "orchestrator");
+			const replyMsg = store.getById(replyId);
+			expect(replyMsg?.projectId).toBe("frontend");
 		});
 	});
 

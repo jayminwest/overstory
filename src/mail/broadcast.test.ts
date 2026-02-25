@@ -174,6 +174,31 @@ describe("resolveGroupAddress", () => {
 		});
 	});
 
+	describe("@workspace group", () => {
+		test("resolves to all active agents except sender", () => {
+			const recipients = resolveGroupAddress("@workspace", activeSessions, "orchestrator");
+			expect(recipients).toEqual(["builder-1", "builder-2", "scout-1", "reviewer-1", "lead-1"]);
+		});
+
+		test("excludes sender from recipients", () => {
+			const recipients = resolveGroupAddress("@workspace", activeSessions, "builder-1");
+			expect(recipients).not.toContain("builder-1");
+			expect(recipients).toContain("orchestrator");
+		});
+
+		test("throws when resolves to zero recipients", () => {
+			const singleSession = [createSession("solo", "builder")];
+			expect(() => resolveGroupAddress("@workspace", singleSession, "solo")).toThrow(
+				"resolved to zero recipients",
+			);
+		});
+
+		test("is case-insensitive", () => {
+			const recipients = resolveGroupAddress("@WORKSPACE", activeSessions, "orchestrator");
+			expect(recipients.length).toBe(5);
+		});
+	});
+
 	describe("unknown groups", () => {
 		test("throws for unknown group address", () => {
 			expect(() => resolveGroupAddress("@unknown", activeSessions, "orchestrator")).toThrow(
@@ -182,7 +207,13 @@ describe("resolveGroupAddress", () => {
 		});
 
 		test("error message lists valid groups", () => {
-			expect(() => resolveGroupAddress("@invalid", activeSessions, "orchestrator")).toThrow("@all");
+			try {
+				resolveGroupAddress("@invalid", activeSessions, "orchestrator");
+			} catch (err) {
+				const message = (err as Error).message;
+				expect(message).toContain("@all");
+				expect(message).toContain("@workspace");
+			}
 		});
 	});
 
