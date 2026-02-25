@@ -24,6 +24,7 @@ import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
 import { loadConfig } from "../config.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
 import { inferDomain } from "../insights/analyzer.ts";
 import { jsonOutput } from "../json.ts";
@@ -657,17 +658,17 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 		}
 
-			// 7. Create worktree
-			const worktreeBaseDir = join(ctx.projectRoot, config.worktrees.baseDir);
-			await mkdir(worktreeBaseDir, { recursive: true });
+		// 7. Create worktree
+		const worktreeBaseDir = join(ctx.projectRoot, config.worktrees.baseDir);
+		await mkdir(worktreeBaseDir, { recursive: true });
 
-			const { path: worktreePath, branch: branchName } = await createWorktree({
-				repoRoot: ctx.projectRoot,
-				baseDir: worktreeBaseDir,
-				agentName: name,
-				baseBranch: config.project.canonicalBranch,
-				taskId: taskId,
-			});
+		const { path: worktreePath, branch: branchName } = await createWorktree({
+			repoRoot: ctx.projectRoot,
+			baseDir: worktreeBaseDir,
+			agentName: name,
+			baseBranch: config.project.canonicalBranch,
+			taskId: taskId,
+		});
 
 		// 8. Generate + write overlay CLAUDE.md
 		const agentDefPath = join(ctx.projectRoot, config.agents.baseDir, agentDef.file);
@@ -829,6 +830,8 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			...runtime.buildEnv(resolvedModel),
 			OVERSTORY_AGENT_NAME: name,
 			OVERSTORY_WORKTREE_PATH: worktreePath,
+			OVERSTORY_PROJECT_ID: ctx.projectId,
+			...(ctx.workspaceRoot ? { OVERSTORY_WORKSPACE_ROOT: ctx.workspaceRoot } : {}),
 		});
 
 		// 13. Record session BEFORE sending the beacon so that hook-triggered
@@ -848,6 +851,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			parentAgent: parentAgent,
 			depth,
 			runId,
+			projectId: ctx.projectId,
 			startedAt: new Date().toISOString(),
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,

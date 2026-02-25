@@ -145,6 +145,7 @@ program
 	.option("-q, --quiet", "Suppress non-error output")
 	.option("--json", "JSON output")
 	.option("--verbose", "Verbose output")
+	.option("-p, --project <name>", "Target project (workspace mode)")
 	.option("--timing", "Print command execution time to stderr")
 	.addHelpCommand(false)
 	.configureHelp({
@@ -271,8 +272,8 @@ program
 	.option("--dispatch-max-agents <n>", "Per-lead max agents ceiling (injected into overlay)")
 	.option("--runtime <name>", "Runtime adapter (default: config or claude)")
 	.option("--json", "Output result as JSON")
-	.action(async (taskId, opts) => {
-		await slingCommand(taskId, opts);
+	.action(async (taskId, opts, cmd) => {
+		await slingCommand(taskId, { ...opts, project: cmd.optsWithGlobals().project });
 	});
 
 const specCmd = program.command("spec").description("Manage task specifications");
