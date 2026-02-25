@@ -1,5 +1,5 @@
 /**
- * CLI command: ov costs [--agent <name>] [--run <id>] [--by-capability] [--last <n>] [--self] [--json]
+ * CLI command: ov costs [--agent <name>] [--run <id>] [--by-capability] [--by-project] [--last <n>] [--self] [--json]
  *
  * Shows token/cost analysis and breakdown for agent sessions.
  * Data source: metrics.db via createMetricsStore().
@@ -19,6 +19,7 @@ import { estimateCost, parseTranscriptUsage } from "../metrics/transcript.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { SessionMetrics } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 /** Format a number with thousands separators (e.g., 12345 -> "12,345"). */
 function formatNumber(n: number): string {
@@ -161,10 +162,42 @@ function groupByCapability(sessions: SessionMetrics[]): CapabilityGroup[] {
 	return result;
 }
 
-/** Print the standard per-agent cost summary table. */
-function printCostSummary(sessions: SessionMetrics[]): void {
-	const w = process.stdout.write.bind(process.stdout);
+/** Group SessionMetrics by projectId. */
+interface ProjectGroup {
+	projectId: string;
+	sessions: SessionMetrics[];
+	totals: Totals;
+}
 
+function groupByProject(sessions: SessionMetrics[]): ProjectGroup[] {
+	const groups = new Map<string, SessionMetrics[]>();
+	for (const s of sessions) {
+		const pid = s.projectId ?? "_default";
+		const existing = groups.get(pid);
+		if (existing) {
+			existing.push(s);
+		} else {
+			groups.set(pid, [s]);
+		}
+	}
+	const result: ProjectGroup[] = [];
+	for (const [projectId, projSessions] of groups) {
+		result.push({
+			projectId,
+			sessions: projSessions,
+			totals: computeTotals(projSessions),
+		});
+	}
+	// Sort by cost descending
+	result.sort((a, b) => b.totals.costUsd - a.totals.costUsd);
+	return result;
+}
+
+/** Print the standard per-agent cost summary table. Optionally show [project] column. */
+function printCostSummary(sessions: SessionMetrics[], showProject = false): void {
+	const w = process.stdout.write.bind(process.stdout);
+	const tableWidth = showProject ? 86 : 70;
+	const labelWidth = showProject ? 47 : 31;
 	w(`${renderHeader("Cost Summary")}\n`);
 
 	if (sessions.length === 0) {
@@ -172,30 +205,49 @@ function printCostSummary(sessions: SessionMetrics[]): void {
 		return;
 	}
 
-	w(
-		`${padRight("Agent", 19)}${padRight("Capability", 12)}` +
-			`${padLeft("Input", 10)}${padLeft("Output", 10)}` +
-			`${padLeft("Cache", 10)}${padLeft("Cost", 10)}\n`,
-	);
-	w(`${color.dim(separator())}\n`);
+	if (showProject) {
+		w(
+			`${padRight("Agent", 19)}${padRight("Project", 16)}${padRight("Capability", 12)}` +
+				`${padLeft("Input", 10)}${padLeft("Output", 10)}` +
+				`${padLeft("Cache", 10)}${padLeft("Cost", 10)}\n`,
+		);
+	} else {
+		w(
+			`${padRight("Agent", 19)}${padRight("Capability", 12)}` +
+				`${padLeft("Input", 10)}${padLeft("Output", 10)}` +
+				`${padLeft("Cache", 10)}${padLeft("Cost", 10)}\n`,
+		);
+	}
+	w(`${color.dim(separator(tableWidth))}\n`);
 
 	for (const s of sessions) {
 		const cacheTotal = s.cacheReadTokens + s.cacheCreationTokens;
-		w(
-			`${padRight(s.agentName, 19)}${padRight(s.capability, 12)}` +
-				`${padLeft(formatNumber(s.inputTokens), 10)}` +
-				`${padLeft(formatNumber(s.outputTokens), 10)}` +
-				`${padLeft(formatNumber(cacheTotal), 10)}` +
-				`${padLeft(formatCost(s.estimatedCostUsd), 10)}\n`,
-		);
+		if (showProject) {
+			const pid = s.projectId ?? "_default";
+			w(
+				`${padRight(s.agentName, 19)}${padRight(pid, 16)}${padRight(s.capability, 12)}` +
+					`${padLeft(formatNumber(s.inputTokens), 10)}` +
+					`${padLeft(formatNumber(s.outputTokens), 10)}` +
+					`${padLeft(formatNumber(cacheTotal), 10)}` +
+					`${padLeft(formatCost(s.estimatedCostUsd), 10)}\n`,
+			);
+		} else {
+			w(
+				`${padRight(s.agentName, 19)}${padRight(s.capability, 12)}` +
+					`${padLeft(formatNumber(s.inputTokens), 10)}` +
+					`${padLeft(formatNumber(s.outputTokens), 10)}` +
+					`${padLeft(formatNumber(cacheTotal), 10)}` +
+					`${padLeft(formatCost(s.estimatedCostUsd), 10)}\n`,
+			);
+		}
 	}
 
 	const totals = computeTotals(sessions);
-	w(`${color.dim(separator())}\n`);
+	w(`${color.dim(separator(tableWidth))}\n`);
 	w(
 		`${color.green(
 			color.bold(
-				padRight("Total", 31) +
+				padRight("Total", labelWidth) +
 					padLeft(formatNumber(totals.inputTokens), 10) +
 					padLeft(formatNumber(totals.outputTokens), 10) +
 					padLeft(formatNumber(totals.cacheTokens), 10) +
@@ -252,15 +304,82 @@ function printByCapability(sessions: SessionMetrics[]): void {
 	);
 }
 
+/** Print costs grouped by project with subtotals. */
+function printByProject(sessions: SessionMetrics[]): void {
+	const w = process.stdout.write.bind(process.stdout);
+	const separator = "\u2500".repeat(70);
+
+	w(`${color.bold("Cost by Project")}\n`);
+	w(`${"=".repeat(70)}\n`);
+
+	if (sessions.length === 0) {
+		w(`${color.dim("No session data found.")}\n`);
+		return;
+	}
+
+	const projectGroups = groupByProject(sessions);
+
+	for (const group of projectGroups) {
+		w(`\n${color.bold(`Project: ${group.projectId}`)}\n`);
+		w(`${color.dim(separator)}\n`);
+		w(
+			`${padRight("Agent", 19)}${padRight("Capability", 12)}` +
+				`${padLeft("Input", 10)}${padLeft("Output", 10)}` +
+				`${padLeft("Cache", 10)}${padLeft("Cost", 10)}\n`,
+		);
+		w(`${color.dim(separator)}\n`);
+
+		for (const s of group.sessions) {
+			const cacheTotal = s.cacheReadTokens + s.cacheCreationTokens;
+			w(
+				`${padRight(s.agentName, 19)}${padRight(s.capability, 12)}` +
+					`${padLeft(formatNumber(s.inputTokens), 10)}` +
+					`${padLeft(formatNumber(s.outputTokens), 10)}` +
+					`${padLeft(formatNumber(cacheTotal), 10)}` +
+					`${padLeft(formatCost(s.estimatedCostUsd), 10)}\n`,
+			);
+		}
+
+		w(`${color.dim(separator)}\n`);
+		w(
+			`${color.cyan(
+				color.bold(
+					padRight(`Subtotal (${group.projectId})`, 31) +
+						padLeft(formatNumber(group.totals.inputTokens), 10) +
+						padLeft(formatNumber(group.totals.outputTokens), 10) +
+						padLeft(formatNumber(group.totals.cacheTokens), 10) +
+						padLeft(formatCost(group.totals.costUsd), 10),
+				),
+			)}\n`,
+		);
+	}
+
+	const totals = computeTotals(sessions);
+	w(`\n${"=".repeat(70)}\n`);
+	w(
+		`${color.green(
+			color.bold(
+				padRight("Workspace Total", 31) +
+					padLeft(formatNumber(totals.inputTokens), 10) +
+					padLeft(formatNumber(totals.outputTokens), 10) +
+					padLeft(formatNumber(totals.cacheTokens), 10) +
+					padLeft(formatCost(totals.costUsd), 10),
+			),
+		)}\n`,
+	);
+}
+
 interface CostsOpts {
 	live?: boolean;
 	self?: boolean;
 	byCapability?: boolean;
+	byProject?: boolean;
 	agent?: string;
 	run?: string;
 	bead?: string;
 	last?: string;
 	json?: boolean;
+	project?: string;
 }
 
 async function executeCosts(opts: CostsOpts): Promise<void> {
@@ -268,6 +387,7 @@ async function executeCosts(opts: CostsOpts): Promise<void> {
 	const live = opts.live ?? false;
 	const self = opts.self ?? false;
 	const byCapability = opts.byCapability ?? false;
+	const byProject = opts.byProject ?? false;
 	const agentName = opts.agent;
 	const runId = opts.run;
 	const beadId = opts.bead;
@@ -285,14 +405,15 @@ async function executeCosts(opts: CostsOpts): Promise<void> {
 
 	const last = lastStr ? Number.parseInt(lastStr, 10) : 20;
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const overstoryDir = join(config.project.root, ".overstory");
+	const ctx = await resolveContext({ project: opts.project });
+	const isWorkspace = ctx.mode === "workspace";
+	const metricsDbPath = join(ctx.dbRoot, "metrics.db");
 
 	// Handle --self flag (early return for self-scan)
 	if (self) {
+		const config = await loadConfig(ctx.projectRoot);
 		const runtime = getRuntime(undefined, config);
-		const transcriptPath = await discoverOrchestratorTranscript(runtime.id, config.project.root);
+		const transcriptPath = await discoverOrchestratorTranscript(runtime.id, ctx.projectRoot);
 		if (!transcriptPath) {
 			if (json) {
 				jsonError("costs", `No transcript found for runtime '${runtime.id}'`);
@@ -340,7 +461,6 @@ async function executeCosts(opts: CostsOpts): Promise<void> {
 
 	// Handle --live flag (early return for live view)
 	if (live) {
-		const metricsDbPath = join(overstoryDir, "metrics.db");
 		const metricsFile = Bun.file(metricsDbPath);
 		if (!(await metricsFile.exists())) {
 			if (json) {
@@ -364,7 +484,7 @@ async function executeCosts(opts: CostsOpts): Promise<void> {
 		}
 
 		const metricsStore = createMetricsStore(metricsDbPath);
-		const { store: sessionStore } = openSessionStore(overstoryDir);
+		const { store: sessionStore } = openSessionStore(ctx.overstoryDir);
 
 		try {
 			const snapshots = metricsStore.getLatestSnapshots();
@@ -527,7 +647,6 @@ async function executeCosts(opts: CostsOpts): Promise<void> {
 	}
 
 	// Check if metrics.db exists
-	const metricsDbPath = join(overstoryDir, "metrics.db");
 	const metricsFile = Bun.file(metricsDbPath);
 	if (!(await metricsFile.exists())) {
 		if (json) {
@@ -541,16 +660,19 @@ async function executeCosts(opts: CostsOpts): Promise<void> {
 	const metricsStore = createMetricsStore(metricsDbPath);
 
 	try {
+		// Determine projectId filter for workspace mode with explicit --project
+		const projectIdFilter = isWorkspace && opts.project !== undefined ? ctx.projectId : undefined;
+
 		let sessions: SessionMetrics[];
 
 		if (agentName !== undefined) {
-			sessions = metricsStore.getSessionsByAgent(agentName);
+			sessions = metricsStore.getSessionsByAgent(agentName, projectIdFilter);
 		} else if (runId !== undefined) {
-			sessions = metricsStore.getSessionsByRun(runId);
+			sessions = metricsStore.getSessionsByRun(runId, projectIdFilter);
 		} else if (beadId !== undefined) {
-			sessions = metricsStore.getSessionsByTask(beadId);
+			sessions = metricsStore.getSessionsByTask(beadId, projectIdFilter);
 		} else {
-			sessions = metricsStore.getRecentSessions(last);
+			sessions = metricsStore.getRecentSessions(last, projectIdFilter);
 		}
 
 		if (json) {
@@ -564,6 +686,16 @@ async function executeCosts(opts: CostsOpts): Promise<void> {
 					};
 				}
 				jsonOutput("costs", { grouped });
+			} else if (byProject) {
+				const groups = groupByProject(sessions);
+				const grouped: Record<string, { sessions: SessionMetrics[]; totals: Totals }> = {};
+				for (const group of groups) {
+					grouped[group.projectId] = {
+						sessions: group.sessions,
+						totals: group.totals,
+					};
+				}
+				jsonOutput("costs", { grouped });
 			} else {
 				jsonOutput("costs", { sessions });
 			}
@@ -572,8 +704,11 @@ async function executeCosts(opts: CostsOpts): Promise<void> {
 
 		if (byCapability) {
 			printByCapability(sessions);
+		} else if (byProject) {
+			printByProject(sessions);
 		} else {
-			printCostSummary(sessions);
+			// In workspace mode without --project, show project column
+			printCostSummary(sessions, isWorkspace && opts.project === undefined);
 		}
 	} finally {
 		metricsStore.close();
@@ -589,10 +724,12 @@ export function createCostsCommand(): Command {
 		.option("--run <id>", "Filter by run ID")
 		.option("--bead <id>", "Show cost breakdown for a specific task/bead")
 		.option("--by-capability", "Group results by capability with subtotals")
+		.option("--by-project", "Group results by project with subtotals")
 		.option("--last <n>", "Number of recent sessions (default: 20)")
 		.option("--json", "Output as JSON")
-		.action(async (opts: CostsOpts) => {
-			await executeCosts(opts);
+		.action(async (opts: CostsOpts, cmd: Command) => {
+			const globalOpts = cmd.optsWithGlobals();
+			await executeCosts({ ...opts, project: globalOpts.project as string | undefined });
 		});
 }
 

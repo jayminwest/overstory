@@ -8,7 +8,6 @@
 
 import { join } from "node:path";
 import { Command } from "commander";
-import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
@@ -22,11 +21,17 @@ import {
 } from "../logging/format.ts";
 import { eventLabel, renderHeader } from "../logging/theme.ts";
 import type { StoredEvent } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 /**
  * Print events as an interleaved timeline with ANSI colors and agent labels.
+ * projectNames: optional map from event index to project name (for workspace mode).
  */
-function printReplay(events: StoredEvent[], useAbsoluteTime: boolean): void {
+function printReplay(
+	events: StoredEvent[],
+	useAbsoluteTime: boolean,
+	projectNames?: Map<number, string>,
+): void {
 	const w = process.stdout.write.bind(process.stdout);
 
 	w(`${renderHeader("Replay")}\n`);
@@ -41,7 +46,10 @@ function printReplay(events: StoredEvent[], useAbsoluteTime: boolean): void {
 	const colorMap = buildAgentColorMap(events);
 	let lastDate = "";
 
-	for (const event of events) {
+	for (let i = 0; i < events.length; i++) {
+		const event = events[i];
+		if (!event) continue;
+
 		// Print date separator when the date changes
 		const date = formatDate(event.createdAt);
 		if (date && date !== lastDate) {
@@ -67,11 +75,12 @@ function printReplay(events: StoredEvent[], useAbsoluteTime: boolean): void {
 
 		const agentColorFn = colorMap.get(event.agentName) ?? color.gray;
 		const agentLabel = ` ${agentColorFn(`[${event.agentName}]`)}`;
+		const projectLabel = projectNames?.get(i) ? ` ${color.dim(`[${projectNames.get(i)}]`)}` : "";
 
 		w(
 			`${color.dim(timeStr.padStart(10))} ` +
 				`${applyLevel(label.color(color.bold(label.full)))}` +
-				`${agentLabel}${detailSuffix}\n`,
+				`${agentLabel}${projectLabel}${detailSuffix}\n`,
 		);
 	}
 }
@@ -83,6 +92,7 @@ interface ReplayOpts {
 	until?: string;
 	limit?: string;
 	json?: boolean;
+	project?: string;
 }
 
 async function executeReplay(opts: ReplayOpts): Promise<void> {
@@ -115,12 +125,68 @@ async function executeReplay(opts: ReplayOpts): Promise<void> {
 		});
 	}
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const overstoryDir = join(config.project.root, ".overstory");
+	const ctx = await resolveContext({ project: opts.project });
 
-	// Open event store
-	const eventsDbPath = join(overstoryDir, "events.db");
+	// Workspace-aggregate mode: no --project flag in workspace context
+	const isWorkspaceAggregate =
+		ctx.mode === "workspace" && ctx.workspaceConfig !== null && opts.project === undefined;
+
+	if (isWorkspaceAggregate) {
+		const projects = ctx.workspaceConfig!.projects;
+		const allTagged: Array<{ event: StoredEvent; projectName: string }> = [];
+		const queryOpts = { since: sinceStr, until: untilStr, limit };
+
+		for (const project of projects) {
+			const eventsDbPath = join(project.root, ".overstory", "events.db");
+			if (!(await Bun.file(eventsDbPath).exists())) continue;
+			const store = createEventStore(eventsDbPath);
+			try {
+				let events: StoredEvent[];
+				if (runId) {
+					events = store.getByRun(runId, queryOpts);
+				} else if (agentNames.length > 0) {
+					const merged: StoredEvent[] = [];
+					for (const name of agentNames) {
+						merged.push(...store.getByAgent(name, { since: sinceStr, until: untilStr }));
+					}
+					merged.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+					events = merged.slice(0, limit);
+				} else {
+					const since24h = sinceStr ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+					events = store.getTimeline({ since: since24h, until: untilStr, limit });
+				}
+				for (const event of events) {
+					allTagged.push({ event, projectName: project.name });
+				}
+			} finally {
+				store.close();
+			}
+		}
+
+		// Sort merged results chronologically and apply limit
+		allTagged.sort((a, b) => a.event.createdAt.localeCompare(b.event.createdAt));
+		const limited = allTagged.slice(0, limit);
+
+		if (json) {
+			process.stdout.write(
+				`${JSON.stringify(limited.map((t) => ({ ...t.event, projectName: t.projectName })))}\n`,
+			);
+			return;
+		}
+
+		const events = limited.map((t) => t.event);
+		const projectNameMap = new Map<number, string>();
+		for (let i = 0; i < limited.length; i++) {
+			const item = limited[i];
+			if (item) projectNameMap.set(i, item.projectName);
+		}
+		const useAbsoluteTime = sinceStr !== undefined;
+		printReplay(events, useAbsoluteTime, projectNameMap);
+		return;
+	}
+
+	// Single-project mode (single-repo or workspace with --project)
+	const eventsDbPath = join(ctx.overstoryDir, "events.db");
 	const eventsFile = Bun.file(eventsDbPath);
 	if (!(await eventsFile.exists())) {
 		if (json) {
@@ -156,7 +222,7 @@ async function executeReplay(opts: ReplayOpts): Promise<void> {
 			events = allEvents.slice(0, limit);
 		} else {
 			// Default: try current-run.txt, then fall back to 24h timeline
-			const currentRunPath = join(overstoryDir, "current-run.txt");
+			const currentRunPath = join(ctx.overstoryDir, "current-run.txt");
 			const currentRunFile = Bun.file(currentRunPath);
 			if (await currentRunFile.exists()) {
 				const currentRunId = (await currentRunFile.text()).trim();
@@ -209,8 +275,9 @@ export function createReplayCommand(): Command {
 		.option("--until <timestamp>", "End time filter (ISO 8601)")
 		.option("--limit <n>", "Max events to show (default: 200)")
 		.option("--json", "Output as JSON array of StoredEvent objects")
-		.action(async (opts: ReplayOpts) => {
-			await executeReplay(opts);
+		.action(async (opts: ReplayOpts, cmd: Command) => {
+			const globalOpts = cmd.optsWithGlobals();
+			await executeReplay({ ...opts, project: globalOpts.project as string | undefined });
 		});
 }
 

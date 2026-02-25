@@ -7,7 +7,6 @@
 
 import { join } from "node:path";
 import { Command } from "commander";
-import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
@@ -17,6 +16,7 @@ import { renderHeader, separator, stateIconColored } from "../logging/theme.ts";
 import { createMetricsStore } from "../metrics/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, StoredEvent, ToolStats } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 /**
  * Extract current file from most recent Edit/Write/Read tool_start event.
@@ -106,6 +106,7 @@ export interface InspectData {
 		modelUsed: string | null;
 	} | null;
 	tmuxOutput: string | null;
+	projectId?: string;
 }
 
 /**
@@ -118,14 +119,17 @@ export async function gatherInspectData(
 		limit?: number;
 		noTmux?: boolean;
 		tmuxLines?: number;
+		dbRoot?: string;
+		projectId?: string;
 	} = {},
 ): Promise<InspectData> {
 	const overstoryDir = join(root, ".overstory");
+	const dbRoot = opts.dbRoot ?? overstoryDir;
 	const { store } = openSessionStore(overstoryDir);
 
 	let session: AgentSession | null = null;
 	try {
-		session = store.getByName(agentName);
+		session = store.getByName(agentName, opts.projectId);
 		if (!session) {
 			throw new ValidationError(`Agent not found: ${agentName}`, {
 				field: "agent-name",
@@ -141,13 +145,16 @@ export async function gatherInspectData(
 		let currentFile: string | null = null;
 		let toolStats: ToolStats[] = [];
 
-		const eventsDbPath = join(overstoryDir, "events.db");
+		const eventsDbPath = join(dbRoot, "events.db");
 		const eventsFile = Bun.file(eventsDbPath);
 		if (await eventsFile.exists()) {
 			const eventStore = createEventStore(eventsDbPath);
 			try {
 				// Get recent events for this agent
-				const events = eventStore.getByAgent(agentName, { limit: 200 });
+				const events = eventStore.getByAgent(agentName, {
+					limit: 200,
+					projectId: opts.projectId,
+				});
 
 				// Extract current file from most recent Edit/Write/Read tool_start
 				currentFile = extractCurrentFile(events);
@@ -171,12 +178,12 @@ export async function gatherInspectData(
 
 		// MetricsStore: token usage
 		let tokenUsage: InspectData["tokenUsage"] = null;
-		const metricsDbPath = join(overstoryDir, "metrics.db");
+		const metricsDbPath = join(dbRoot, "metrics.db");
 		const metricsFile = Bun.file(metricsDbPath);
 		if (await metricsFile.exists()) {
 			const metricsStore = createMetricsStore(metricsDbPath);
 			try {
-				const sessions = metricsStore.getSessionsByAgent(agentName);
+				const sessions = metricsStore.getSessionsByAgent(agentName, opts.projectId);
 				const mostRecent = sessions[0];
 				if (mostRecent) {
 					tokenUsage = {
@@ -208,6 +215,7 @@ export async function gatherInspectData(
 			toolStats,
 			tokenUsage,
 			tmuxOutput,
+			projectId: opts.projectId,
 		};
 	} finally {
 		store.close();
@@ -228,6 +236,10 @@ export function printInspectData(data: InspectData): void {
 	w(`Last activity: ${formatDuration(data.timeSinceLastActivity)} ago\n`);
 	w(`Task: ${accent(session.taskId)}\n`);
 	w(`Capability: ${session.capability}\n`);
+	w(`Branch: ${accent(session.branchName)}\n`);
+	if (data.projectId !== undefined) {
+		w(`Project: ${data.projectId}\n`);
+	}
 	w(`Branch: ${accent(session.branchName)}\n`);
 	if (session.parentAgent) {
 		w(`Parent: ${accent(session.parentAgent)} (depth: ${session.depth})\n`);
@@ -302,6 +314,7 @@ interface InspectOpts {
 	interval?: string;
 	limit?: string;
 	tmux?: boolean; // Commander: --no-tmux sets tmux=false
+	project?: string;
 }
 
 async function executeInspect(agentName: string, opts: InspectOpts): Promise<void> {
@@ -328,9 +341,20 @@ async function executeInspect(agentName: string, opts: InspectOpts): Promise<voi
 		});
 	}
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const root = config.project.root;
+	const ctx = await resolveContext({ project: opts.project });
+	const isWorkspace = ctx.mode === "workspace";
+	const root = ctx.projectRoot;
+
+	// In workspace mode, check for agent name ambiguity across projects
+	let resolvedProjectId: string | undefined;
+	if (isWorkspace) {
+		if (opts.project !== undefined) {
+			resolvedProjectId = ctx.projectId;
+		} else {
+			// Workspace-level: no specific project filter — agent looked up across all
+			resolvedProjectId = undefined;
+		}
+	}
 
 	if (follow) {
 		// Polling loop
@@ -341,6 +365,8 @@ async function executeInspect(agentName: string, opts: InspectOpts): Promise<voi
 				limit,
 				noTmux,
 				tmuxLines: 30,
+				dbRoot: ctx.dbRoot,
+				projectId: resolvedProjectId,
 			});
 			if (json) {
 				jsonOutput("inspect", data as unknown as Record<string, unknown>);
@@ -351,7 +377,13 @@ async function executeInspect(agentName: string, opts: InspectOpts): Promise<voi
 		}
 	} else {
 		// Single snapshot
-		const data = await gatherInspectData(root, agentName, { limit, noTmux, tmuxLines: 30 });
+		const data = await gatherInspectData(root, agentName, {
+			limit,
+			noTmux,
+			tmuxLines: 30,
+			dbRoot: ctx.dbRoot,
+			projectId: resolvedProjectId,
+		});
 		if (json) {
 			jsonOutput("inspect", data as unknown as Record<string, unknown>);
 		} else {
@@ -369,8 +401,12 @@ export function createInspectCommand(): Command {
 		.option("--interval <ms>", "Polling interval for --follow in milliseconds (default: 3000)")
 		.option("--limit <n>", "Number of recent tool calls to show (default: 20)")
 		.option("--no-tmux", "Skip tmux capture-pane")
-		.action(async (agentName: string, opts: InspectOpts) => {
-			await executeInspect(agentName, opts);
+		.action(async (agentName: string, opts: InspectOpts, cmd: Command) => {
+			const globalOpts = cmd.optsWithGlobals();
+			await executeInspect(agentName, {
+				...opts,
+				project: globalOpts.project as string | undefined,
+			});
 		});
 }
 

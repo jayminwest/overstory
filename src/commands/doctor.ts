@@ -19,6 +19,7 @@ import { checkProviders } from "../doctor/providers.ts";
 import { checkStructure } from "../doctor/structure.ts";
 import type { DoctorCategory, DoctorCheck, DoctorCheckFn } from "../doctor/types.ts";
 import { checkVersion } from "../doctor/version.ts";
+import { checkWorkspace } from "../doctor/workspace.ts";
 import { ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { color } from "../logging/color.ts";
@@ -28,6 +29,7 @@ import { renderHeader } from "../logging/theme.ts";
 const ALL_CHECKS: Array<{ category: DoctorCategory; fn: DoctorCheckFn }> = [
 	{ category: "dependencies", fn: checkDependencies },
 	{ category: "config", fn: checkConfig },
+	{ category: "workspace", fn: checkWorkspace },
 	{ category: "structure", fn: checkStructure },
 	{ category: "databases", fn: checkDatabases },
 	{ category: "consistency", fn: checkConsistency },
@@ -168,7 +170,7 @@ export function createDoctorCommand(options?: DoctorCommandOptions): Command {
 		.option("--fix", "Attempt to auto-fix issues")
 		.addHelpText(
 			"after",
-			"\nCategories: dependencies, structure, config, databases, consistency, agents, merge, logs, version, ecosystem, providers",
+			"\nCategories: dependencies, config, workspace, structure, databases, consistency, agents, merge, logs, version, ecosystem, providers",
 		)
 		.action(
 			async (opts: { json?: boolean; verbose?: boolean; category?: string; fix?: boolean }) => {

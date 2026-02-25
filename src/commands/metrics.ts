@@ -7,24 +7,25 @@
 
 import { join } from "node:path";
 import { Command } from "commander";
-import { loadConfig } from "../config.ts";
 import { jsonOutput } from "../json.ts";
 import { formatDuration } from "../logging/format.ts";
 import { renderHeader } from "../logging/theme.ts";
 import { createMetricsStore } from "../metrics/store.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 interface MetricsOpts {
 	last?: string;
 	json?: boolean;
+	project?: string;
 }
 
 async function executeMetrics(opts: MetricsOpts): Promise<void> {
 	const limit = opts.last ? Number.parseInt(opts.last, 10) : 20;
 	const json = opts.json ?? false;
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const dbPath = join(config.project.root, ".overstory", "metrics.db");
+	const ctx = await resolveContext({ project: opts.project });
+	const isWorkspace = ctx.mode === "workspace";
+	const dbPath = join(ctx.dbRoot, "metrics.db");
 
 	const dbFile = Bun.file(dbPath);
 	if (!(await dbFile.exists())) {
@@ -38,8 +39,11 @@ async function executeMetrics(opts: MetricsOpts): Promise<void> {
 
 	const store = createMetricsStore(dbPath);
 
+	// Determine projectId filter for workspace mode with explicit --project
+	const projectIdFilter = isWorkspace && opts.project !== undefined ? ctx.projectId : undefined;
+
 	try {
-		const sessions = store.getRecentSessions(limit);
+		const sessions = store.getRecentSessions(limit, projectIdFilter);
 
 		if (json) {
 			jsonOutput("metrics", { sessions } as Record<string, unknown>);
@@ -52,10 +56,15 @@ async function executeMetrics(opts: MetricsOpts): Promise<void> {
 		}
 
 		process.stdout.write(`${renderHeader("Session Metrics")}\n\n`);
+		if (isWorkspace && opts.project === undefined) {
+			process.stdout.write("(workspace: all projects)\n\n");
+		} else if (isWorkspace) {
+			process.stdout.write(`(project: ${ctx.projectId})\n\n`);
+		}
 
 		// Summary stats
 		const completed = sessions.filter((s) => s.completedAt !== null);
-		const avgDuration = store.getAverageDuration();
+		const avgDuration = store.getAverageDuration(undefined, projectIdFilter);
 
 		process.stdout.write(`Total sessions: ${sessions.length}\n`);
 		process.stdout.write(`Completed: ${completed.length}\n`);
@@ -83,7 +92,7 @@ async function executeMetrics(opts: MetricsOpts): Promise<void> {
 		}
 		process.stdout.write("By capability:\n");
 		for (const [cap, count] of Object.entries(capCounts)) {
-			const capAvg = store.getAverageDuration(cap);
+			const capAvg = store.getAverageDuration(cap, projectIdFilter);
 			process.stdout.write(`  ${cap}: ${count} sessions (avg ${formatDuration(capAvg)})\n`);
 		}
 		process.stdout.write("\n");
@@ -93,9 +102,16 @@ async function executeMetrics(opts: MetricsOpts): Promise<void> {
 		for (const s of sessions) {
 			const status = s.completedAt ? "done" : "running";
 			const duration = formatDuration(s.durationMs);
-			process.stdout.write(
-				`  ${s.agentName} [${s.capability}] ${s.taskId} | ${status} | ${duration}\n`,
-			);
+			if (isWorkspace && opts.project === undefined) {
+				const pid = s.projectId ?? "_default";
+				process.stdout.write(
+					`  ${s.agentName} [${s.capability}] [${pid}] ${s.taskId} | ${status} | ${duration}\n`,
+				);
+			} else {
+				process.stdout.write(
+					`  ${s.agentName} [${s.capability}] ${s.taskId} | ${status} | ${duration}\n`,
+				);
+			}
 		}
 	} finally {
 		store.close();
@@ -107,8 +123,9 @@ export function createMetricsCommand(): Command {
 		.description("Show session metrics")
 		.option("--last <n>", "Number of recent sessions to show (default: 20)")
 		.option("--json", "Output as JSON")
-		.action(async (opts: MetricsOpts) => {
-			await executeMetrics(opts);
+		.action(async (opts: MetricsOpts, cmd: Command) => {
+			const globalOpts = cmd.optsWithGlobals();
+			await executeMetrics({ ...opts, project: globalOpts.project as string | undefined });
 		});
 }
 

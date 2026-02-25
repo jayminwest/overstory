@@ -7,7 +7,6 @@
 
 import { join } from "node:path";
 import { Command } from "commander";
-import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
@@ -21,6 +20,7 @@ import {
 import { eventLabel, renderHeader } from "../logging/theme.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { StoredEvent } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 /**
  * Detect whether a target string looks like a task ID.
@@ -33,10 +33,18 @@ function looksLikeTaskId(target: string): boolean {
 /**
  * Print events as a formatted timeline with ANSI colors.
  */
-function printTimeline(events: StoredEvent[], agentName: string, useAbsoluteTime: boolean): void {
+function printTimeline(
+	events: StoredEvent[],
+	agentName: string,
+	useAbsoluteTime: boolean,
+	projectName?: string,
+): void {
 	const w = process.stdout.write.bind(process.stdout);
 
 	w(`${renderHeader(`Timeline for ${accent(agentName)}`)}\n`);
+	if (projectName) {
+		w(`${color.dim(`[${projectName}]`)}\n`);
+	}
 
 	if (events.length === 0) {
 		w(`${color.dim("No events found.")}\n`);
@@ -86,6 +94,7 @@ interface TraceOpts {
 	since?: string;
 	until?: string;
 	limit?: string;
+	project?: string;
 }
 
 async function executeTrace(target: string, opts: TraceOpts): Promise<void> {
@@ -116,9 +125,84 @@ async function executeTrace(target: string, opts: TraceOpts): Promise<void> {
 		});
 	}
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const overstoryDir = join(config.project.root, ".overstory");
+	const ctx = await resolveContext({ project: opts.project });
+
+	// Workspace-aggregate mode: no --project flag in workspace context
+	const isWorkspaceAggregate =
+		ctx.mode === "workspace" && ctx.workspaceConfig !== null && opts.project === undefined;
+
+	if (isWorkspaceAggregate) {
+		// In workspace mode without --project: search all projects for the target agent
+		// If target is a task ID, try to resolve it across all projects' session stores
+		const projects = ctx.workspaceConfig!.projects;
+		let agentName = target;
+		let foundProjectName: string | undefined;
+
+		if (looksLikeTaskId(target)) {
+			// Search all projects' session stores
+			for (const project of projects) {
+				const overstoryDir = join(project.root, ".overstory");
+				const sessionsDbPath = join(overstoryDir, "sessions.db");
+				if (!(await Bun.file(sessionsDbPath).exists())) continue;
+				try {
+					const { store: sessionStore } = openSessionStore(overstoryDir);
+					try {
+						const allSessions = sessionStore.getAll();
+						const matchingSession = allSessions.find((s) => s.taskId === target);
+						if (matchingSession) {
+							agentName = matchingSession.agentName;
+							foundProjectName = project.name;
+							break;
+						}
+					} finally {
+						sessionStore.close();
+					}
+				} catch {
+					// Non-fatal: continue to next project
+				}
+			}
+		}
+
+		// Query the first project that has events for this agent, or aggregate
+		const allTagged: Array<{ event: StoredEvent; projectName: string }> = [];
+		for (const project of projects) {
+			const eventsDbPath = join(project.root, ".overstory", "events.db");
+			if (!(await Bun.file(eventsDbPath).exists())) continue;
+			// If we found the project via task ID, only query that project
+			if (foundProjectName !== undefined && project.name !== foundProjectName) continue;
+			const store = createEventStore(eventsDbPath);
+			try {
+				const events = store.getByAgent(agentName, { since: sinceStr, until: untilStr, limit });
+				for (const event of events) {
+					allTagged.push({ event, projectName: project.name });
+				}
+			} finally {
+				store.close();
+			}
+		}
+
+		// Sort and limit
+		allTagged.sort((a, b) => a.event.createdAt.localeCompare(b.event.createdAt));
+		const limited = allTagged.slice(0, limit);
+
+		if (json) {
+			process.stdout.write(
+				`${JSON.stringify(limited.map((t) => ({ ...t.event, projectName: t.projectName })))}\n`,
+			);
+			return;
+		}
+
+		const events = limited.map((t) => t.event);
+		// Use the project name if there's a single project in results
+		const uniqueProjects = new Set(limited.map((t) => t.projectName));
+		const displayProjectName = uniqueProjects.size === 1 ? [...uniqueProjects][0] : undefined;
+		const useAbsoluteTime = sinceStr !== undefined;
+		printTimeline(events, agentName, useAbsoluteTime, displayProjectName);
+		return;
+	}
+
+	// Single-project mode (single-repo or workspace with --project)
+	const overstoryDir = ctx.overstoryDir;
 
 	// Resolve target to agent name
 	let agentName = target;
@@ -183,8 +267,9 @@ export function createTraceCommand(): Command {
 		.option("--since <timestamp>", "Start time filter (ISO 8601)")
 		.option("--until <timestamp>", "End time filter (ISO 8601)")
 		.option("--limit <n>", "Max events to show (default: 100)")
-		.action(async (target: string, opts: TraceOpts) => {
-			await executeTrace(target, opts);
+		.action(async (target: string, opts: TraceOpts, cmd: Command) => {
+			const globalOpts = cmd.optsWithGlobals();
+			await executeTrace(target, { ...opts, project: globalOpts.project as string | undefined });
 		});
 }
 
