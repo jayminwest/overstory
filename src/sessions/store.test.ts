@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDir } from "../test-helpers.ts";
 import type { AgentSession, AgentState, InsertRun, Run, RunStore } from "../types.ts";
-import { createRunStore, createSessionStore, type SessionStore } from "./store.ts";
+import { createRunStore, createSessionStore, type RunStoreWithProjectId, type SessionStore } from "./store.ts";
 
 let tempDir: string;
 let dbPath: string;
@@ -542,6 +542,151 @@ describe("agent_name uniqueness", () => {
 	});
 });
 
+// === project_id support ===
+
+describe("project_id support", () => {
+	test("upsert with default project_id stores and retrieves session", () => {
+		store.upsert(makeSession({ agentName: "default-agent", id: "s-1" }));
+
+		// Should be retrievable without projectId filter (backward compat)
+		const result = store.getByName("default-agent");
+		expect(result).not.toBeNull();
+		expect(result?.agentName).toBe("default-agent");
+	});
+
+	test("upsert with explicit project_id stores and retrieves session", () => {
+		store.upsert(makeSession({ agentName: "proj-agent", id: "s-1" }), "proj-alpha");
+
+		// Should be retrievable with matching projectId
+		const result = store.getByName("proj-agent", "proj-alpha");
+		expect(result).not.toBeNull();
+		expect(result?.agentName).toBe("proj-agent");
+
+		// Should NOT be found under different projectId
+		const notFound = store.getByName("proj-agent", "proj-beta");
+		expect(notFound).toBeNull();
+	});
+
+	test("same agent name in different projects are distinct rows", () => {
+		store.upsert(makeSession({ agentName: "shared-name", id: "s-alpha" }), "proj-alpha");
+		store.upsert(makeSession({ agentName: "shared-name", id: "s-beta" }), "proj-beta");
+
+		// Both should exist as distinct rows
+		const all = store.getAll();
+		expect(all).toHaveLength(2);
+
+		const alpha = store.getByName("shared-name", "proj-alpha");
+		const beta = store.getByName("shared-name", "proj-beta");
+
+		expect(alpha?.id).toBe("s-alpha");
+		expect(beta?.id).toBe("s-beta");
+	});
+
+	test("upsert within same project replaces existing row", () => {
+		store.upsert(makeSession({ agentName: "agent-x", id: "s-1", state: "booting" }), "proj-a");
+		store.upsert(makeSession({ agentName: "agent-x", id: "s-2", state: "working" }), "proj-a");
+
+		const all = store.getAll("proj-a");
+		expect(all).toHaveLength(1);
+		expect(all[0]?.id).toBe("s-2");
+	});
+
+	test("getActive filters by project_id", () => {
+		store.upsert(makeSession({ agentName: "a1", id: "s-1", state: "working" }), "proj-a");
+		store.upsert(makeSession({ agentName: "a2", id: "s-2", state: "working" }), "proj-b");
+
+		const projA = store.getActive("proj-a");
+		expect(projA).toHaveLength(1);
+		expect(projA[0]?.agentName).toBe("a1");
+
+		const projB = store.getActive("proj-b");
+		expect(projB).toHaveLength(1);
+		expect(projB[0]?.agentName).toBe("a2");
+	});
+
+	test("getAll filters by project_id", () => {
+		store.upsert(makeSession({ agentName: "a1", id: "s-1" }), "proj-a");
+		store.upsert(makeSession({ agentName: "a2", id: "s-2" }), "proj-b");
+		store.upsert(makeSession({ agentName: "a3", id: "s-3" }), "proj-a");
+
+		const projA = store.getAll("proj-a");
+		expect(projA).toHaveLength(2);
+		expect(projA.map((s) => s.agentName).sort()).toEqual(["a1", "a3"]);
+	});
+
+	test("count filters by project_id", () => {
+		store.upsert(makeSession({ agentName: "a1", id: "s-1" }), "proj-a");
+		store.upsert(makeSession({ agentName: "a2", id: "s-2" }), "proj-b");
+		store.upsert(makeSession({ agentName: "a3", id: "s-3" }), "proj-a");
+
+		expect(store.count("proj-a")).toBe(2);
+		expect(store.count("proj-b")).toBe(1);
+		expect(store.count()).toBe(3);
+	});
+
+	test("getByRun filters by project_id", () => {
+		store.upsert(
+			makeSession({ agentName: "a1", id: "s-1", runId: "run-1" }),
+			"proj-a",
+		);
+		store.upsert(
+			makeSession({ agentName: "a2", id: "s-2", runId: "run-1" }),
+			"proj-b",
+		);
+
+		const projA = store.getByRun("run-1", "proj-a");
+		expect(projA).toHaveLength(1);
+		expect(projA[0]?.agentName).toBe("a1");
+	});
+
+	test("migration: old DB without project_id gets '_default' after reopening", () => {
+		store.upsert(makeSession({ agentName: "legacy-agent", id: "s-legacy" }));
+		store.close();
+
+		// Simulate old schema by creating a DB without project_id
+		const { Database } = require("bun:sqlite");
+		const oldDb = new Database(dbPath);
+		// Verify the table exists and has sessions
+		const rows = oldDb.prepare("SELECT * FROM sessions WHERE agent_name = 'legacy-agent'").all();
+		expect(rows).toHaveLength(1);
+		oldDb.close();
+
+		// Reopen with createSessionStore (migration runs)
+		const store2 = createSessionStore(dbPath);
+
+		// Session should be findable by name (backward compat)
+		const found = store2.getByName("legacy-agent");
+		expect(found).not.toBeNull();
+		expect(found?.agentName).toBe("legacy-agent");
+
+		// Session should be findable under '_default' project
+		const foundDefault = store2.getByName("legacy-agent", "_default");
+		expect(foundDefault).not.toBeNull();
+
+		// Session should NOT be found under a different project
+		const notFound = store2.getByName("legacy-agent", "other-project");
+		expect(notFound).toBeNull();
+
+		store2.close();
+		store = createSessionStore(join(tempDir, "unused.db"));
+	});
+
+	test("migration idempotency: reopening a migrated DB is safe", () => {
+		store.upsert(makeSession({ agentName: "agent-idem", id: "s-idem" }));
+		store.close();
+
+		// Open twice — should not fail
+		const store2 = createSessionStore(dbPath);
+		const store3 = createSessionStore(dbPath);
+
+		expect(store2.getByName("agent-idem")).not.toBeNull();
+		store2.close();
+		store3.close();
+
+		store = createSessionStore(join(tempDir, "unused.db"));
+	});
+});
+
 // === edge cases ===
 
 describe("edge cases", () => {
@@ -592,7 +737,7 @@ describe("edge cases", () => {
 // ============================================================
 
 describe("RunStore", () => {
-	let runStore: RunStore;
+	let runStore: RunStoreWithProjectId;
 
 	beforeEach(async () => {
 		// Reuse the same dbPath so RunStore shares sessions.db with SessionStore
@@ -871,6 +1016,76 @@ describe("RunStore", () => {
 			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
 			expect(result?.agentCount).toBe(3);
 			expect(result?.status).toBe("completed");
+		});
+	});
+
+	// === project_id support ===
+
+	describe("project_id support", () => {
+		test("createRun with explicit project_id", () => {
+			runStore.createRun(makeRun({ id: "run-proj-a" }), "proj-a");
+			runStore.createRun(makeRun({ id: "run-proj-b" }), "proj-b");
+
+			// Both runs should be listed without filter
+			const all = runStore.listRuns();
+			expect(all).toHaveLength(2);
+		});
+
+		test("getActiveRun filters by project_id", () => {
+			runStore.createRun(makeRun({ id: "run-a", startedAt: "2026-02-13T10:00:00.000Z" }), "proj-a");
+			runStore.createRun(
+				makeRun({ id: "run-b", startedAt: "2026-02-13T11:00:00.000Z" }),
+				"proj-b",
+			);
+
+			const activeA = runStore.getActiveRun("proj-a");
+			expect(activeA?.id).toBe("run-a");
+
+			const activeB = runStore.getActiveRun("proj-b");
+			expect(activeB?.id).toBe("run-b");
+		});
+
+		test("listRuns filters by project_id", () => {
+			runStore.createRun(makeRun({ id: "run-a1", startedAt: "2026-02-13T10:00:00.000Z" }), "proj-a");
+			runStore.createRun(makeRun({ id: "run-a2", startedAt: "2026-02-13T11:00:00.000Z" }), "proj-a");
+			runStore.createRun(makeRun({ id: "run-b1", startedAt: "2026-02-13T12:00:00.000Z" }), "proj-b");
+
+			const projA = runStore.listRuns({ projectId: "proj-a" });
+			expect(projA).toHaveLength(2);
+			expect(projA.every((r) => ["run-a1", "run-a2"].includes(r.id))).toBe(true);
+
+			const projB = runStore.listRuns({ projectId: "proj-b" });
+			expect(projB).toHaveLength(1);
+			expect(projB[0]?.id).toBe("run-b1");
+		});
+
+		test("listRuns combines status and project_id filters", () => {
+			runStore.createRun(makeRun({ id: "run-a-active" }), "proj-a");
+			runStore.createRun(
+				makeRun({ id: "run-a-done", startedAt: "2026-02-13T11:00:00.000Z" }),
+				"proj-a",
+			);
+			runStore.completeRun("run-a-done", "completed");
+
+			const active = runStore.listRuns({ status: "active", projectId: "proj-a" });
+			expect(active).toHaveLength(1);
+			expect(active[0]?.id).toBe("run-a-active");
+		});
+
+		test("createRun defaults to '_default' project_id", () => {
+			runStore.createRun(makeRun());
+
+			// Should be findable with no filter
+			const result = runStore.getActiveRun();
+			expect(result).not.toBeNull();
+
+			// Should be findable with '_default' filter
+			const resultDefault = runStore.getActiveRun("_default");
+			expect(resultDefault).not.toBeNull();
+
+			// Should not appear under other project
+			const resultOther = runStore.getActiveRun("other-project");
+			expect(resultOther).toBeNull();
 		});
 	});
 

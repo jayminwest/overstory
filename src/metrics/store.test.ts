@@ -742,6 +742,186 @@ describe("token snapshots", () => {
 	});
 });
 
+// === project_id support ===
+
+describe("project_id support", () => {
+	test("recordSession with default project_id stores session", () => {
+		store.recordSession(makeSession());
+		const sessions = store.getRecentSessions(10);
+		expect(sessions).toHaveLength(1);
+	});
+
+	test("recordSession with explicit project_id stores session", () => {
+		store.recordSession(makeSession({ agentName: "agent-a", taskId: "task-a" }), "proj-alpha");
+		store.recordSession(makeSession({ agentName: "agent-b", taskId: "task-b" }), "proj-beta");
+
+		// Both visible with no filter
+		expect(store.getRecentSessions(10)).toHaveLength(2);
+
+		// Filter by proj-alpha returns only agent-a
+		const alpha = store.getRecentSessions(10, "proj-alpha");
+		expect(alpha).toHaveLength(1);
+		expect(alpha[0]?.agentName).toBe("agent-a");
+
+		// Filter by proj-beta returns only agent-b
+		const beta = store.getRecentSessions(10, "proj-beta");
+		expect(beta).toHaveLength(1);
+		expect(beta[0]?.agentName).toBe("agent-b");
+	});
+
+	test("getRecentSessions filters by project_id", () => {
+		for (let i = 0; i < 3; i++) {
+			store.recordSession(
+				makeSession({
+					agentName: `agent-${i}`,
+					taskId: `task-${i}`,
+					startedAt: new Date(Date.now() + i * 1000).toISOString(),
+				}),
+				"proj-x",
+			);
+		}
+		store.recordSession(makeSession({ agentName: "other", taskId: "other-task" }), "proj-y");
+
+		const projX = store.getRecentSessions(10, "proj-x");
+		expect(projX).toHaveLength(3);
+		expect(projX.every((s) => s.agentName.startsWith("agent-"))).toBe(true);
+	});
+
+	test("getSessionsByRun filters by project_id", () => {
+		store.recordSession(
+			makeSession({ agentName: "a1", taskId: "t1", runId: "run-001" }),
+			"proj-a",
+		);
+		store.recordSession(
+			makeSession({ agentName: "a2", taskId: "t2", runId: "run-001" }),
+			"proj-b",
+		);
+
+		const projA = store.getSessionsByRun("run-001", "proj-a");
+		expect(projA).toHaveLength(1);
+		expect(projA[0]?.agentName).toBe("a1");
+
+		const projB = store.getSessionsByRun("run-001", "proj-b");
+		expect(projB).toHaveLength(1);
+		expect(projB[0]?.agentName).toBe("a2");
+	});
+
+	test("recordSnapshot with project_id stores snapshot", () => {
+		const now = new Date().toISOString();
+		store.recordSnapshot(
+			{
+				agentName: "snap-agent",
+				inputTokens: 100,
+				outputTokens: 50,
+				cacheReadTokens: 0,
+				cacheCreationTokens: 0,
+				estimatedCostUsd: null,
+				modelUsed: null,
+				createdAt: now,
+			},
+			"proj-snap",
+		);
+
+		const snapshots = store.getLatestSnapshots("proj-snap");
+		expect(snapshots).toHaveLength(1);
+		expect(snapshots[0]?.agentName).toBe("snap-agent");
+	});
+
+	test("getLatestSnapshots filters by project_id", () => {
+		const now = new Date().toISOString();
+		store.recordSnapshot(
+			{
+				agentName: "agent-a",
+				inputTokens: 100,
+				outputTokens: 50,
+				cacheReadTokens: 0,
+				cacheCreationTokens: 0,
+				estimatedCostUsd: null,
+				modelUsed: null,
+				createdAt: now,
+			},
+			"proj-1",
+		);
+		store.recordSnapshot(
+			{
+				agentName: "agent-b",
+				inputTokens: 200,
+				outputTokens: 100,
+				cacheReadTokens: 0,
+				cacheCreationTokens: 0,
+				estimatedCostUsd: null,
+				modelUsed: null,
+				createdAt: now,
+			},
+			"proj-2",
+		);
+
+		const proj1 = store.getLatestSnapshots("proj-1");
+		expect(proj1).toHaveLength(1);
+		expect(proj1[0]?.agentName).toBe("agent-a");
+
+		const proj2 = store.getLatestSnapshots("proj-2");
+		expect(proj2).toHaveLength(1);
+		expect(proj2[0]?.agentName).toBe("agent-b");
+
+		// No filter returns all
+		const all = store.getLatestSnapshots();
+		expect(all).toHaveLength(2);
+	});
+
+	test("migration on old DB: adds project_id column with '_default'", () => {
+		store.close();
+
+		// Create a DB with old schema (no project_id column)
+		const { Database } = require("bun:sqlite");
+		const oldDb = new Database(dbPath);
+		oldDb.exec("DROP TABLE IF EXISTS sessions");
+		oldDb.exec(`
+			CREATE TABLE sessions (
+				agent_name TEXT NOT NULL,
+				task_id TEXT NOT NULL,
+				capability TEXT NOT NULL,
+				started_at TEXT NOT NULL,
+				completed_at TEXT,
+				duration_ms INTEGER NOT NULL DEFAULT 0,
+				exit_code INTEGER,
+				merge_result TEXT,
+				parent_agent TEXT,
+				input_tokens INTEGER NOT NULL DEFAULT 0,
+				output_tokens INTEGER NOT NULL DEFAULT 0,
+				cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+				cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+				estimated_cost_usd REAL,
+				model_used TEXT,
+				run_id TEXT,
+				PRIMARY KEY (agent_name, task_id)
+			)
+		`);
+		oldDb.exec(`
+			INSERT INTO sessions (agent_name, task_id, capability, started_at, duration_ms)
+			VALUES ('legacy-agent', 'legacy-task', 'builder', '2026-01-01T00:00:00Z', 100000)
+		`);
+		oldDb.close();
+
+		// Re-open with createMetricsStore which should migrate
+		store = createMetricsStore(dbPath);
+
+		// Old session should be readable
+		const sessions = store.getRecentSessions(10);
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0]?.agentName).toBe("legacy-agent");
+
+		// Should be filterable by '_default' project_id (the migration default)
+		const defaultSessions = store.getRecentSessions(10, "_default");
+		expect(defaultSessions).toHaveLength(1);
+		expect(defaultSessions[0]?.agentName).toBe("legacy-agent");
+
+		// Should not appear under other project
+		const otherSessions = store.getRecentSessions(10, "other-project");
+		expect(otherSessions).toHaveLength(0);
+	});
+});
+
 // === close ===
 
 describe("close", () => {

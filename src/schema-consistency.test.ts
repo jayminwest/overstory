@@ -61,6 +61,7 @@ describe("SQL schema consistency", () => {
 				"last_activity",
 				"parent_agent",
 				"pid",
+				"project_id",
 				"run_id",
 				"stalled_since",
 				"started_at",
@@ -89,6 +90,7 @@ describe("SQL schema consistency", () => {
 				"completed_at",
 				"coordinator_session_id",
 				"id",
+				"project_id",
 				"started_at",
 				"status",
 			].sort();
@@ -151,6 +153,7 @@ describe("SQL schema consistency", () => {
 				"model_used",
 				"output_tokens",
 				"parent_agent",
+				"project_id",
 				"run_id",
 				"started_at",
 				"task_id",
@@ -179,6 +182,7 @@ describe("SQL schema consistency", () => {
 				"input_tokens",
 				"model_used",
 				"output_tokens",
+				"project_id",
 			].sort();
 
 			expect(actual).toEqual(expected);

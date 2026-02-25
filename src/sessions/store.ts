@@ -10,37 +10,50 @@ import { Database } from "bun:sqlite";
 import type { AgentSession, AgentState, InsertRun, Run, RunStatus, RunStore } from "../types.ts";
 
 export interface SessionStore {
-	/** Insert or update a session. Uses agent_name as the unique key. */
-	upsert(session: AgentSession): void;
-	/** Get a session by agent name, or null if not found. */
-	getByName(agentName: string): AgentSession | null;
+	/** Insert or update a session. Uses (project_id, agent_name) as the unique key. */
+	upsert(session: AgentSession, projectId?: string): void;
+	/** Get a session by agent name. When projectId provided, filters by both. */
+	getByName(agentName: string, projectId?: string): AgentSession | null;
 	/** Get all active sessions (state IN ('booting', 'working', 'stalled')). */
-	getActive(): AgentSession[];
+	getActive(projectId?: string): AgentSession[];
 	/** Get all sessions regardless of state. */
-	getAll(): AgentSession[];
+	getAll(projectId?: string): AgentSession[];
 	/** Get the total number of sessions. Lightweight alternative to getAll().length. */
-	count(): number;
+	count(projectId?: string): number;
 	/** Get sessions belonging to a specific run. */
-	getByRun(runId: string): AgentSession[];
+	getByRun(runId: string, projectId?: string): AgentSession[];
 	/** Update only the state of a session. */
-	updateState(agentName: string, state: AgentState): void;
+	updateState(agentName: string, state: AgentState, projectId?: string): void;
 	/** Update lastActivity to current ISO timestamp. */
-	updateLastActivity(agentName: string): void;
+	updateLastActivity(agentName: string, projectId?: string): void;
 	/** Update escalation level and stalled timestamp. */
-	updateEscalation(agentName: string, level: number, stalledSince: string | null): void;
+	updateEscalation(
+		agentName: string,
+		level: number,
+		stalledSince: string | null,
+		projectId?: string,
+	): void;
 	/** Update the transcript path for a session. */
-	updateTranscriptPath(agentName: string, path: string): void;
+	updateTranscriptPath(agentName: string, path: string, projectId?: string): void;
 	/** Remove a session by agent name. */
-	remove(agentName: string): void;
+	remove(agentName: string, projectId?: string): void;
 	/** Purge sessions matching criteria. Returns count of deleted rows. */
 	purge(opts: { all?: boolean; state?: AgentState; agent?: string }): number;
 	/** Close the database connection. */
 	close(): void;
 }
 
+/** Extended RunStore interface with optional project_id filtering. */
+export interface RunStoreWithProjectId extends RunStore {
+	createRun(run: InsertRun, projectId?: string): void;
+	getActiveRun(projectId?: string): Run | null;
+	listRuns(opts?: { limit?: number; status?: RunStatus; projectId?: string }): Run[];
+}
+
 /** Row shape as stored in SQLite (snake_case columns). */
 interface SessionRow {
 	id: string;
+	project_id: string;
 	agent_name: string;
 	capability: string;
 	worktree_path: string;
@@ -62,6 +75,7 @@ interface SessionRow {
 /** Row shape for runs table as stored in SQLite (snake_case columns). */
 interface RunRow {
 	id: string;
+	project_id: string;
 	started_at: string;
 	completed_at: string | null;
 	agent_count: number;
@@ -72,7 +86,8 @@ interface RunRow {
 const CREATE_TABLE = `
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
-  agent_name TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL DEFAULT '_default',
+  agent_name TEXT NOT NULL,
   capability TEXT NOT NULL,
   worktree_path TEXT NOT NULL,
   branch_name TEXT NOT NULL,
@@ -88,16 +103,19 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_activity TEXT NOT NULL,
   escalation_level INTEGER NOT NULL DEFAULT 0,
   stalled_since TEXT,
-  transcript_path TEXT
+  transcript_path TEXT,
+  UNIQUE(project_id, agent_name)
 )`;
 
 const CREATE_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
-CREATE INDEX IF NOT EXISTS idx_sessions_run ON sessions(run_id)`;
+CREATE INDEX IF NOT EXISTS idx_sessions_run ON sessions(run_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)`;
 
 const CREATE_RUNS_TABLE = `
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL DEFAULT '_default',
   started_at TEXT NOT NULL,
   completed_at TEXT,
   agent_count INTEGER NOT NULL DEFAULT 0,
@@ -113,6 +131,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)`;
 function rowToSession(row: SessionRow): AgentSession {
 	return {
 		id: row.id,
+		projectId: row.project_id,
 		agentName: row.agent_name,
 		capability: row.capability,
 		worktreePath: row.worktree_path,
@@ -136,6 +155,7 @@ function rowToSession(row: SessionRow): AgentSession {
 function rowToRun(row: RunRow): Run {
 	return {
 		id: row.id,
+		projectId: row.project_id,
 		startedAt: row.started_at,
 		completedAt: row.completed_at,
 		agentCount: row.agent_count,
@@ -169,6 +189,53 @@ function migrateBeadIdToTaskId(db: Database): void {
 }
 
 /**
+ * Migrate an existing sessions table to include project_id with (project_id, agent_name) uniqueness.
+ * Uses rename-recreate-copy-drop pattern since SQLite cannot ALTER constraints.
+ * Safe to call multiple times — skips if project_id already exists or table doesn't exist.
+ */
+function migrateProjectId(db: Database): void {
+	const rows = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+	const existingColumns = new Set(rows.map((r) => r.name));
+	// Skip if table doesn't exist (fresh DB) or already migrated
+	if (existingColumns.size === 0 || existingColumns.has("project_id")) return;
+	const hasTranscriptPath = existingColumns.has("transcript_path");
+
+	db.exec("BEGIN");
+	try {
+		db.exec("ALTER TABLE sessions RENAME TO sessions_old");
+		db.exec(CREATE_TABLE);
+		db.exec(`
+			INSERT INTO sessions
+				(id, project_id, agent_name, capability, worktree_path, branch_name, task_id,
+				 tmux_session, state, pid, parent_agent, depth, run_id, started_at,
+				 last_activity, escalation_level, stalled_since, transcript_path)
+			SELECT
+				id, '_default', agent_name, capability, worktree_path, branch_name, task_id,
+				tmux_session, state, pid, parent_agent, depth, run_id, started_at,
+				last_activity, escalation_level, stalled_since, ${hasTranscriptPath ? "transcript_path" : "NULL"}
+			FROM sessions_old
+		`);
+		db.exec("DROP TABLE sessions_old");
+		db.exec("COMMIT");
+	} catch (err) {
+		db.exec("ROLLBACK");
+		throw err;
+	}
+}
+
+/**
+ * Migrate the runs table to add project_id column.
+ * Safe to call multiple times — only adds if missing and table exists.
+ */
+function migrateRunsProjectId(db: Database): void {
+	const rows = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+	const existingColumns = new Set(rows.map((r) => r.name));
+	if (existingColumns.size > 0 && !existingColumns.has("project_id")) {
+		db.exec("ALTER TABLE runs ADD COLUMN project_id TEXT NOT NULL DEFAULT '_default'");
+	}
+}
+
+/**
  * Create a new SessionStore backed by a SQLite database at the given path.
  *
  * Initializes the database with WAL mode and a 5-second busy timeout.
@@ -182,15 +249,18 @@ export function createSessionStore(dbPath: string): SessionStore {
 	db.exec("PRAGMA synchronous = NORMAL");
 	db.exec("PRAGMA busy_timeout = 5000");
 
-	// Create schema
+	// Run migrations first (handles existing DBs with old schema)
+	migrateBeadIdToTaskId(db);
+	migrateProjectId(db);
+
+	// Create schema for fresh DBs (idempotent — IF NOT EXISTS)
 	db.exec(CREATE_TABLE);
 	db.exec(CREATE_INDEXES);
 	db.exec(CREATE_RUNS_TABLE);
 	db.exec(CREATE_RUNS_INDEXES);
-
-	// Migrate: rename bead_id → task_id on existing tables
-	migrateBeadIdToTaskId(db);
-	// Migrate: add transcript_path column to existing tables
+	// Migrate runs table project_id (for existing runs tables without it)
+	migrateRunsProjectId(db);
+	// Migrate transcript path (for existing sessions tables without it)
 	migrateAddTranscriptPath(db);
 
 	// Prepare statements for frequent operations
@@ -198,6 +268,7 @@ export function createSessionStore(dbPath: string): SessionStore {
 		void,
 		{
 			$id: string;
+			$project_id: string;
 			$agent_name: string;
 			$capability: string;
 			$worktree_path: string;
@@ -217,14 +288,16 @@ export function createSessionStore(dbPath: string): SessionStore {
 		}
 	>(`
 		INSERT INTO sessions
-			(id, agent_name, capability, worktree_path, branch_name, task_id,
+			(id, project_id, agent_name, capability, worktree_path, branch_name, task_id,
 			 tmux_session, state, pid, parent_agent, depth, run_id,
 			 started_at, last_activity, escalation_level, stalled_since, transcript_path)
 		VALUES
-			($id, $agent_name, $capability, $worktree_path, $branch_name, $task_id,
+			($id, $project_id, $agent_name, $capability, $worktree_path, $branch_name, $task_id,
 			 $tmux_session, $state, $pid, $parent_agent, $depth, $run_id,
 			 $started_at, $last_activity, $escalation_level, $stalled_since, $transcript_path)
-		ON CONFLICT(agent_name) DO UPDATE SET
+		ON CONFLICT(project_id, agent_name) DO UPDATE SET
+			 $started_at, $last_activity, $escalation_level, $stalled_since, $transcript_path)
+		ON CONFLICT(project_id, agent_name) DO UPDATE SET
 			id = excluded.id,
 			capability = excluded.capability,
 			worktree_path = excluded.worktree_path,
@@ -244,7 +317,7 @@ export function createSessionStore(dbPath: string): SessionStore {
 	`);
 
 	const getByNameStmt = db.prepare<SessionRow, { $agent_name: string }>(`
-		SELECT * FROM sessions WHERE agent_name = $agent_name
+		SELECT * FROM sessions WHERE agent_name = $agent_name LIMIT 1
 	`);
 
 	const getActiveStmt = db.prepare<SessionRow, Record<string, never>>(`
@@ -267,9 +340,22 @@ export function createSessionStore(dbPath: string): SessionStore {
 	const updateStateStmt = db.prepare<void, { $agent_name: string; $state: string }>(`
 		UPDATE sessions SET state = $state WHERE agent_name = $agent_name
 	`);
+	const updateStateByProjectStmt = db.prepare<
+		void,
+		{ $agent_name: string; $state: string; $project_id: string }
+	>(`
+		UPDATE sessions SET state = $state WHERE agent_name = $agent_name AND project_id = $project_id
+	`);
 
 	const updateLastActivityStmt = db.prepare<void, { $agent_name: string; $last_activity: string }>(`
 		UPDATE sessions SET last_activity = $last_activity WHERE agent_name = $agent_name
+	`);
+	const updateLastActivityByProjectStmt = db.prepare<
+		void,
+		{ $agent_name: string; $last_activity: string; $project_id: string }
+	>(`
+		UPDATE sessions SET last_activity = $last_activity
+		WHERE agent_name = $agent_name AND project_id = $project_id
 	`);
 
 	const updateEscalationStmt = db.prepare<
@@ -284,9 +370,25 @@ export function createSessionStore(dbPath: string): SessionStore {
 		SET escalation_level = $escalation_level, stalled_since = $stalled_since
 		WHERE agent_name = $agent_name
 	`);
+	const updateEscalationByProjectStmt = db.prepare<
+		void,
+		{
+			$agent_name: string;
+			$escalation_level: number;
+			$stalled_since: string | null;
+			$project_id: string;
+		}
+	>(`
+		UPDATE sessions
+		SET escalation_level = $escalation_level, stalled_since = $stalled_since
+		WHERE agent_name = $agent_name AND project_id = $project_id
+	`);
 
 	const removeStmt = db.prepare<void, { $agent_name: string }>(`
 		DELETE FROM sessions WHERE agent_name = $agent_name
+	`);
+	const removeByProjectStmt = db.prepare<void, { $agent_name: string; $project_id: string }>(`
+		DELETE FROM sessions WHERE agent_name = $agent_name AND project_id = $project_id
 	`);
 
 	const updateTranscriptPathStmt = db.prepare<
@@ -295,11 +397,21 @@ export function createSessionStore(dbPath: string): SessionStore {
 	>(`
 		UPDATE sessions SET transcript_path = $transcript_path WHERE agent_name = $agent_name
 	`);
+	const updateTranscriptPathByProjectStmt = db.prepare<
+		void,
+		{ $agent_name: string; $transcript_path: string; $project_id: string }
+	>(`
+		UPDATE sessions
+		SET transcript_path = $transcript_path
+		WHERE agent_name = $agent_name AND project_id = $project_id
+	`);
 
 	return {
-		upsert(session: AgentSession): void {
+		upsert(session: AgentSession, projectId = "_default"): void {
+			const effectiveProjectId = projectId ?? session.projectId ?? "_default";
 			upsertStmt.run({
 				$id: session.id,
+				$project_id: effectiveProjectId,
 				$agent_name: session.agentName,
 				$capability: session.capability,
 				$worktree_path: session.worktreePath,
@@ -319,56 +431,134 @@ export function createSessionStore(dbPath: string): SessionStore {
 			});
 		},
 
-		getByName(agentName: string): AgentSession | null {
+		getByName(agentName: string, projectId?: string): AgentSession | null {
+			if (projectId !== undefined) {
+				const row = db
+					.prepare<SessionRow, { $agent_name: string; $project_id: string }>(
+						"SELECT * FROM sessions WHERE agent_name = $agent_name AND project_id = $project_id",
+					)
+					.get({ $agent_name: agentName, $project_id: projectId });
+				return row ? rowToSession(row) : null;
+			}
 			const row = getByNameStmt.get({ $agent_name: agentName });
 			return row ? rowToSession(row) : null;
 		},
 
-		getActive(): AgentSession[] {
+		getActive(projectId?: string): AgentSession[] {
+			if (projectId !== undefined) {
+				const rows = db
+					.prepare<SessionRow, { $project_id: string }>(
+						`SELECT * FROM sessions WHERE state IN ('booting', 'working', 'stalled')
+						AND project_id = $project_id ORDER BY started_at ASC`,
+					)
+					.all({ $project_id: projectId });
+				return rows.map(rowToSession);
+			}
 			const rows = getActiveStmt.all({});
 			return rows.map(rowToSession);
 		},
 
-		getAll(): AgentSession[] {
+		getAll(projectId?: string): AgentSession[] {
+			if (projectId !== undefined) {
+				const rows = db
+					.prepare<SessionRow, { $project_id: string }>(
+						"SELECT * FROM sessions WHERE project_id = $project_id ORDER BY started_at ASC",
+					)
+					.all({ $project_id: projectId });
+				return rows.map(rowToSession);
+			}
 			const rows = getAllStmt.all({});
 			return rows.map(rowToSession);
 		},
 
-		count(): number {
+		count(projectId?: string): number {
+			if (projectId !== undefined) {
+				const row = db
+					.prepare<{ cnt: number }, { $project_id: string }>(
+						"SELECT COUNT(*) as cnt FROM sessions WHERE project_id = $project_id",
+					)
+					.get({ $project_id: projectId });
+				return row?.cnt ?? 0;
+			}
 			const row = countStmt.get({});
 			return row?.cnt ?? 0;
 		},
 
-		getByRun(runId: string): AgentSession[] {
+		getByRun(runId: string, projectId?: string): AgentSession[] {
+			if (projectId !== undefined) {
+				const rows = db
+					.prepare<SessionRow, { $run_id: string; $project_id: string }>(
+						`SELECT * FROM sessions WHERE run_id = $run_id AND project_id = $project_id
+						ORDER BY started_at ASC`,
+					)
+					.all({ $run_id: runId, $project_id: projectId });
+				return rows.map(rowToSession);
+			}
 			const rows = getByRunStmt.all({ $run_id: runId });
 			return rows.map(rowToSession);
 		},
 
-		updateState(agentName: string, state: AgentState): void {
-			updateStateStmt.run({ $agent_name: agentName, $state: state });
+		updateState(agentName: string, state: AgentState, projectId?: string): void {
+			if (projectId !== undefined) {
+				updateStateByProjectStmt.run({ $agent_name: agentName, $state: state, $project_id: projectId });
+			} else {
+				updateStateStmt.run({ $agent_name: agentName, $state: state });
+			}
 		},
 
-		updateLastActivity(agentName: string): void {
-			updateLastActivityStmt.run({
-				$agent_name: agentName,
-				$last_activity: new Date().toISOString(),
-			});
+		updateLastActivity(agentName: string, projectId?: string): void {
+			const lastActivity = new Date().toISOString();
+			if (projectId !== undefined) {
+				updateLastActivityByProjectStmt.run({
+					$agent_name: agentName,
+					$last_activity: lastActivity,
+					$project_id: projectId,
+				});
+			} else {
+				updateLastActivityStmt.run({ $agent_name: agentName, $last_activity: lastActivity });
+			}
 		},
 
-		updateEscalation(agentName: string, level: number, stalledSince: string | null): void {
-			updateEscalationStmt.run({
-				$agent_name: agentName,
-				$escalation_level: level,
-				$stalled_since: stalledSince,
-			});
+		updateEscalation(
+			agentName: string,
+			level: number,
+			stalledSince: string | null,
+			projectId?: string,
+		): void {
+			if (projectId !== undefined) {
+				updateEscalationByProjectStmt.run({
+					$agent_name: agentName,
+					$escalation_level: level,
+					$stalled_since: stalledSince,
+					$project_id: projectId,
+				});
+			} else {
+				updateEscalationStmt.run({
+					$agent_name: agentName,
+					$escalation_level: level,
+					$stalled_since: stalledSince,
+				});
+			}
 		},
 
-		updateTranscriptPath(agentName: string, path: string): void {
-			updateTranscriptPathStmt.run({ $agent_name: agentName, $transcript_path: path });
+		updateTranscriptPath(agentName: string, path: string, projectId?: string): void {
+			if (projectId !== undefined) {
+				updateTranscriptPathByProjectStmt.run({
+					$agent_name: agentName,
+					$transcript_path: path,
+					$project_id: projectId,
+				});
+			} else {
+				updateTranscriptPathStmt.run({ $agent_name: agentName, $transcript_path: path });
+			}
 		},
 
-		remove(agentName: string): void {
-			removeStmt.run({ $agent_name: agentName });
+		remove(agentName: string, projectId?: string): void {
+			if (projectId !== undefined) {
+				removeByProjectStmt.run({ $agent_name: agentName, $project_id: projectId });
+			} else {
+				removeStmt.run({ $agent_name: agentName });
+			}
 		},
 
 		purge(opts: { all?: boolean; state?: AgentState; agent?: string }): number {
@@ -426,7 +616,7 @@ export function createSessionStore(dbPath: string): SessionStore {
  * Shares the same sessions.db file as SessionStore. Initializes the runs
  * table alongside sessions. Uses WAL mode for concurrent access.
  */
-export function createRunStore(dbPath: string): RunStore {
+export function createRunStore(dbPath: string): RunStoreWithProjectId {
 	const db = new Database(dbPath);
 
 	// Configure for concurrent access from multiple agent processes.
@@ -438,11 +628,15 @@ export function createRunStore(dbPath: string): RunStore {
 	db.exec(CREATE_RUNS_TABLE);
 	db.exec(CREATE_RUNS_INDEXES);
 
+	// Migrate existing runs tables without project_id
+	migrateRunsProjectId(db);
+
 	// Prepare statements for frequent operations
 	const insertRunStmt = db.prepare<
 		void,
 		{
 			$id: string;
+			$project_id: string;
 			$started_at: string;
 			$completed_at: string | null;
 			$agent_count: number;
@@ -450,8 +644,8 @@ export function createRunStore(dbPath: string): RunStore {
 			$status: string;
 		}
 	>(`
-		INSERT INTO runs (id, started_at, completed_at, agent_count, coordinator_session_id, status)
-		VALUES ($id, $started_at, $completed_at, $agent_count, $coordinator_session_id, $status)
+		INSERT INTO runs (id, project_id, started_at, completed_at, agent_count, coordinator_session_id, status)
+		VALUES ($id, $project_id, $started_at, $completed_at, $agent_count, $coordinator_session_id, $status)
 	`);
 
 	const getRunStmt = db.prepare<RunRow, { $id: string }>(`
@@ -476,9 +670,11 @@ export function createRunStore(dbPath: string): RunStore {
 	`);
 
 	return {
-		createRun(run: InsertRun): void {
+		createRun(run: InsertRun, projectId = "_default"): void {
+			const effectiveProjectId = projectId ?? run.projectId ?? "_default";
 			insertRunStmt.run({
 				$id: run.id,
+				$project_id: effectiveProjectId,
 				$started_at: run.startedAt,
 				$completed_at: null,
 				$agent_count: run.agentCount ?? 0,
@@ -492,18 +688,32 @@ export function createRunStore(dbPath: string): RunStore {
 			return row ? rowToRun(row) : null;
 		},
 
-		getActiveRun(): Run | null {
+		getActiveRun(projectId?: string): Run | null {
+			if (projectId !== undefined) {
+				const row = db
+					.prepare<RunRow, { $project_id: string }>(
+						`SELECT * FROM runs WHERE status = 'active' AND project_id = $project_id
+						ORDER BY started_at DESC LIMIT 1`,
+					)
+					.get({ $project_id: projectId });
+				return row ? rowToRun(row) : null;
+			}
 			const row = getActiveRunStmt.get({});
 			return row ? rowToRun(row) : null;
 		},
 
-		listRuns(opts?: { limit?: number; status?: RunStatus }): Run[] {
+		listRuns(opts?: { limit?: number; status?: RunStatus; projectId?: string }): Run[] {
 			const conditions: string[] = [];
 			const params: Record<string, string | number> = {};
 
 			if (opts?.status !== undefined) {
 				conditions.push("status = $status");
 				params.$status = opts.status;
+			}
+
+			if (opts?.projectId !== undefined) {
+				conditions.push("project_id = $project_id");
+				params.$project_id = opts.projectId;
 			}
 
 			const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";

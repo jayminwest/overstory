@@ -9,22 +9,22 @@ import { Database } from "bun:sqlite";
 import type { SessionMetrics, TokenSnapshot } from "../types.ts";
 
 export interface MetricsStore {
-	recordSession(metrics: SessionMetrics): void;
-	getRecentSessions(limit?: number): SessionMetrics[];
-	getSessionsByAgent(agentName: string): SessionMetrics[];
-	getSessionsByRun(runId: string): SessionMetrics[];
-	getSessionsByTask(taskId: string): SessionMetrics[];
-	getAverageDuration(capability?: string): number;
+	recordSession(metrics: SessionMetrics, projectId?: string): void;
+	getRecentSessions(limit?: number, projectId?: string): SessionMetrics[];
+	getSessionsByAgent(agentName: string, projectId?: string): SessionMetrics[];
+	getSessionsByRun(runId: string, projectId?: string): SessionMetrics[];
+	getSessionsByTask(taskId: string, projectId?: string): SessionMetrics[];
+	getAverageDuration(capability?: string, projectId?: string): number;
 	/** Count the total number of sessions in the database (no limit cap). */
-	countSessions(): number;
+	countSessions(projectId?: string): number;
 	/** Delete metrics matching the given criteria. Returns the number of rows deleted. */
 	purge(options: { all?: boolean; agent?: string }): number;
 	/** Record a token usage snapshot for a running agent. */
-	recordSnapshot(snapshot: TokenSnapshot): void;
+	recordSnapshot(snapshot: TokenSnapshot, projectId?: string): void;
 	/** Get the most recent snapshot per active agent (one row per agent). */
-	getLatestSnapshots(): TokenSnapshot[];
+	getLatestSnapshots(projectId?: string): TokenSnapshot[];
 	/** Get the timestamp of the most recent snapshot for an agent, or null. */
-	getLatestSnapshotTime(agentName: string): string | null;
+	getLatestSnapshotTime(agentName: string, projectId?: string): string | null;
 	/** Delete snapshots matching criteria. Returns number of rows deleted. */
 	purgeSnapshots(options: { all?: boolean; agent?: string; olderThanMs?: number }): number;
 	close(): void;
@@ -32,6 +32,7 @@ export interface MetricsStore {
 
 /** Row shape as stored in SQLite (snake_case columns). */
 interface SessionRow {
+	project_id: string;
 	agent_name: string;
 	task_id: string;
 	capability: string;
@@ -53,6 +54,7 @@ interface SessionRow {
 /** Snapshot row shape as stored in SQLite (snake_case columns). */
 interface SnapshotRow {
 	id: number;
+	project_id: string;
 	agent_name: string;
 	input_tokens: number;
 	output_tokens: number;
@@ -65,6 +67,7 @@ interface SnapshotRow {
 
 const CREATE_TABLE = `
 CREATE TABLE IF NOT EXISTS sessions (
+  project_id TEXT NOT NULL DEFAULT '_default',
   agent_name TEXT NOT NULL,
   task_id TEXT NOT NULL,
   capability TEXT NOT NULL,
@@ -87,6 +90,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 const CREATE_SNAPSHOTS_TABLE = `
 CREATE TABLE IF NOT EXISTS token_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL DEFAULT '_default',
   agent_name TEXT NOT NULL,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -151,9 +155,36 @@ function migrateTokenColumns(db: Database): void {
 	}
 }
 
+/**
+ * Migrate the sessions table to add project_id column.
+ * Safe to call multiple times — only adds if table exists and column is missing.
+ */
+function migrateSessionProjectIdColumn(db: Database): void {
+	const rows = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+	const existingColumns = new Set(rows.map((r) => r.name));
+	if (existingColumns.size > 0 && !existingColumns.has("project_id")) {
+		db.exec("ALTER TABLE sessions ADD COLUMN project_id TEXT NOT NULL DEFAULT '_default'");
+	}
+}
+
+/**
+ * Migrate the token_snapshots table to add project_id column.
+ * Safe to call multiple times — only adds if table exists and column is missing.
+ */
+function migrateSnapshotProjectIdColumn(db: Database): void {
+	const rows = db.prepare("PRAGMA table_info(token_snapshots)").all() as Array<{ name: string }>;
+	const existingColumns = new Set(rows.map((r) => r.name));
+	if (existingColumns.size > 0 && !existingColumns.has("project_id")) {
+		db.exec(
+			"ALTER TABLE token_snapshots ADD COLUMN project_id TEXT NOT NULL DEFAULT '_default'",
+		);
+	}
+}
+
 /** Convert a database row (snake_case) to a SessionMetrics object (camelCase). */
 function rowToMetrics(row: SessionRow): SessionMetrics {
 	return {
+		projectId: row.project_id,
 		agentName: row.agent_name,
 		taskId: row.task_id,
 		capability: row.capability,
@@ -176,6 +207,7 @@ function rowToMetrics(row: SessionRow): SessionMetrics {
 /** Convert a database snapshot row (snake_case) to a TokenSnapshot object (camelCase). */
 function rowToSnapshot(row: SnapshotRow): TokenSnapshot {
 	return {
+		projectId: row.project_id,
 		agentName: row.agent_name,
 		inputTokens: row.input_tokens,
 		outputTokens: row.output_tokens,
@@ -192,7 +224,7 @@ function rowToSnapshot(row: SnapshotRow): TokenSnapshot {
  *
  * Initializes the database with WAL mode and a 5-second busy timeout.
  * Creates the sessions table if it does not already exist.
- * Migrates existing tables to add token columns if missing.
+ * Migrates existing tables to add token columns and project_id if missing.
  */
 export function createMetricsStore(dbPath: string): MetricsStore {
 	const db = new Database(dbPath);
@@ -206,15 +238,18 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 	db.exec(CREATE_SNAPSHOTS_TABLE);
 	db.exec(CREATE_SNAPSHOTS_INDEX);
 
-	// Migrate: rename bead_id → task_id, add token columns and run_id column to existing tables
+	// Migrate: rename bead_id → task_id, add token columns, run_id, and project_id to existing tables
 	migrateBeadIdToTaskId(db);
 	migrateTokenColumns(db);
 	migrateRunIdColumn(db);
+	migrateSessionProjectIdColumn(db);
+	migrateSnapshotProjectIdColumn(db);
 
 	// Prepare statements for all queries
 	const insertStmt = db.prepare<
 		void,
 		{
+			$project_id: string;
 			$agent_name: string;
 			$task_id: string;
 			$capability: string;
@@ -234,9 +269,9 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 		}
 	>(`
 		INSERT OR REPLACE INTO sessions
-			(agent_name, task_id, capability, started_at, completed_at, duration_ms, exit_code, merge_result, parent_agent, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd, model_used, run_id)
+			(project_id, agent_name, task_id, capability, started_at, completed_at, duration_ms, exit_code, merge_result, parent_agent, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd, model_used, run_id)
 		VALUES
-			($agent_name, $task_id, $capability, $started_at, $completed_at, $duration_ms, $exit_code, $merge_result, $parent_agent, $input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $estimated_cost_usd, $model_used, $run_id)
+			($project_id, $agent_name, $task_id, $capability, $started_at, $completed_at, $duration_ms, $exit_code, $merge_result, $parent_agent, $input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $estimated_cost_usd, $model_used, $run_id)
 	`);
 
 	const recentStmt = db.prepare<SessionRow, { $limit: number }>(`
@@ -275,6 +310,7 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 	const insertSnapshotStmt = db.prepare<
 		void,
 		{
+			$project_id: string;
 			$agent_name: string;
 			$input_tokens: number;
 			$output_tokens: number;
@@ -286,9 +322,9 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 		}
 	>(`
 		INSERT INTO token_snapshots
-			(agent_name, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd, model_used, created_at)
+			(project_id, agent_name, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd, model_used, created_at)
 		VALUES
-			($agent_name, $input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $estimated_cost_usd, $model_used, $created_at)
+			($project_id, $agent_name, $input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $estimated_cost_usd, $model_used, $created_at)
 	`);
 
 	const latestSnapshotsStmt = db.prepare<SnapshotRow, Record<string, never>>(`
@@ -311,8 +347,10 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 	`);
 
 	return {
-		recordSession(metrics: SessionMetrics): void {
+		recordSession(metrics: SessionMetrics, projectId = "_default"): void {
+			const effectiveProjectId = projectId ?? metrics.projectId ?? "_default";
 			insertStmt.run({
+				$project_id: effectiveProjectId,
 				$agent_name: metrics.agentName,
 				$task_id: metrics.taskId,
 				$capability: metrics.capability,
@@ -332,37 +370,102 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 			});
 		},
 
-		getRecentSessions(limit = 20): SessionMetrics[] {
+		getRecentSessions(limit = 20, projectId?: string): SessionMetrics[] {
+			if (projectId !== undefined) {
+				const rows = db
+					.prepare<SessionRow, { $limit: number; $project_id: string }>(
+						"SELECT * FROM sessions WHERE project_id = $project_id ORDER BY started_at DESC LIMIT $limit",
+					)
+					.all({ $limit: limit, $project_id: projectId });
+				return rows.map(rowToMetrics);
+			}
 			const rows = recentStmt.all({ $limit: limit });
 			return rows.map(rowToMetrics);
 		},
 
-		getSessionsByAgent(agentName: string): SessionMetrics[] {
+		getSessionsByAgent(agentName: string, projectId?: string): SessionMetrics[] {
+			if (projectId !== undefined) {
+				const rows = db
+					.prepare<SessionRow, { $agent_name: string; $project_id: string }>(
+						`SELECT * FROM sessions WHERE agent_name = $agent_name
+						AND project_id = $project_id ORDER BY started_at DESC`,
+					)
+					.all({ $agent_name: agentName, $project_id: projectId });
+				return rows.map(rowToMetrics);
+			}
 			const rows = byAgentStmt.all({ $agent_name: agentName });
 			return rows.map(rowToMetrics);
 		},
 
-		getSessionsByRun(runId: string): SessionMetrics[] {
+		getSessionsByRun(runId: string, projectId?: string): SessionMetrics[] {
+			if (projectId !== undefined) {
+				const rows = db
+					.prepare<SessionRow, { $run_id: string; $project_id: string }>(
+						`SELECT * FROM sessions WHERE run_id = $run_id
+						AND project_id = $project_id ORDER BY started_at DESC`,
+					)
+					.all({ $run_id: runId, $project_id: projectId });
+				return rows.map(rowToMetrics);
+			}
 			const rows = byRunStmt.all({ $run_id: runId });
 			return rows.map(rowToMetrics);
 		},
 
-		getSessionsByTask(taskId: string): SessionMetrics[] {
+		getSessionsByTask(taskId: string, projectId?: string): SessionMetrics[] {
+			if (projectId !== undefined) {
+				const rows = db
+					.prepare<SessionRow, { $task_id: string; $project_id: string }>(
+						`SELECT * FROM sessions WHERE task_id = $task_id
+						AND project_id = $project_id ORDER BY started_at DESC`,
+					)
+					.all({ $task_id: taskId, $project_id: projectId });
+				return rows.map(rowToMetrics);
+			}
 			const rows = byTaskStmt.all({ $task_id: taskId });
 			return rows.map(rowToMetrics);
 		},
 
-		getAverageDuration(capability?: string): number {
+		getAverageDuration(capability?: string, projectId?: string): number {
+			if (capability !== undefined && projectId !== undefined) {
+				const row = db
+					.prepare<
+						{ avg_duration: number | null },
+						{ $capability: string; $project_id: string }
+					>(
+						`SELECT AVG(duration_ms) AS avg_duration FROM sessions
+						WHERE completed_at IS NOT NULL AND capability = $capability
+						AND project_id = $project_id`,
+					)
+					.get({ $capability: capability, $project_id: projectId });
+				return row?.avg_duration ?? 0;
+			}
 			if (capability !== undefined) {
 				const row = avgDurationByCapStmt.get({ $capability: capability });
+				return row?.avg_duration ?? 0;
+			}
+			if (projectId !== undefined) {
+				const row = db
+					.prepare<{ avg_duration: number | null }, { $project_id: string }>(
+						`SELECT AVG(duration_ms) AS avg_duration FROM sessions
+						WHERE completed_at IS NOT NULL AND project_id = $project_id`,
+					)
+					.get({ $project_id: projectId });
 				return row?.avg_duration ?? 0;
 			}
 			const row = avgDurationAllStmt.get({});
 			return row?.avg_duration ?? 0;
 		},
 
-		countSessions(): number {
-			const row = countSessionsStmt.get({});
+		countSessions(projectId?: string): number {
+			if (projectId !== undefined) {
+				const row = db
+					.prepare<{ cnt: number }, { $project_id: string }>(
+						"SELECT COUNT(*) as cnt FROM sessions WHERE project_id = $project_id",
+					)
+					.get({ $project_id: projectId });
+				return row?.cnt ?? 0;
+			}
+			const row = countSessionsStmt.get();
 			return row?.cnt ?? 0;
 		},
 
@@ -392,8 +495,10 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 			return 0;
 		},
 
-		recordSnapshot(snapshot: TokenSnapshot): void {
+		recordSnapshot(snapshot: TokenSnapshot, projectId = "_default"): void {
+			const effectiveProjectId = projectId ?? snapshot.projectId ?? "_default";
 			insertSnapshotStmt.run({
+				$project_id: effectiveProjectId,
 				$agent_name: snapshot.agentName,
 				$input_tokens: snapshot.inputTokens,
 				$output_tokens: snapshot.outputTokens,
@@ -405,12 +510,40 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 			});
 		},
 
-		getLatestSnapshots(): TokenSnapshot[] {
+		getLatestSnapshots(projectId?: string): TokenSnapshot[] {
+			if (projectId !== undefined) {
+				const rows = db
+					.prepare<SnapshotRow, { $project_id: string }>(
+						`SELECT s.*
+						FROM token_snapshots s
+						INNER JOIN (
+							SELECT agent_name, MAX(created_at) as max_created_at
+							FROM token_snapshots
+							WHERE project_id = $project_id
+							GROUP BY agent_name
+						) latest ON s.agent_name = latest.agent_name AND s.created_at = latest.max_created_at
+						WHERE s.project_id = $project_id`,
+					)
+					.all({ $project_id: projectId });
+				return rows.map(rowToSnapshot);
+			}
 			const rows = latestSnapshotsStmt.all({});
 			return rows.map(rowToSnapshot);
 		},
 
-		getLatestSnapshotTime(agentName: string): string | null {
+		getLatestSnapshotTime(agentName: string, projectId?: string): string | null {
+			if (projectId !== undefined) {
+				const row = db
+					.prepare<
+						{ created_at: string } | null,
+						{ $agent_name: string; $project_id: string }
+					>(
+						`SELECT MAX(created_at) as created_at FROM token_snapshots
+						WHERE agent_name = $agent_name AND project_id = $project_id`,
+					)
+					.get({ $agent_name: agentName, $project_id: projectId });
+				return row?.created_at ?? null;
+			}
 			const row = latestSnapshotTimeStmt.get({ $agent_name: agentName });
 			return row?.created_at ?? null;
 		},
