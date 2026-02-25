@@ -108,6 +108,32 @@ export interface OverstoryConfig {
 	};
 }
 
+// === Workspace Configuration ===
+
+/** A project registered in a workspace. */
+export interface WorkspaceProject {
+	/** Unique project identifier (used as project_id in databases). */
+	name: string;
+	/** Path to project root, relative to workspace root. */
+	root: string;
+	/** Canonical branch for this project (e.g., "main"). */
+	canonicalBranch: string;
+}
+
+/** Configuration for a multi-repo workspace (parsed from workspace.yaml). */
+export interface WorkspaceConfig {
+	/** Workspace display name. */
+	name: string;
+	/** Absolute path to the workspace root directory. */
+	root: string;
+	/** Registered projects in this workspace. */
+	projects: WorkspaceProject[];
+	/** Maximum total concurrent agents across all projects. */
+	maxConcurrentTotal: number;
+	/** Maximum hierarchy depth (must be >= 3 for workspace mode). */
+	maxDepth: number;
+}
+
 // === Agent Manifest ===
 
 export interface AgentManifest {
@@ -135,6 +161,7 @@ export const SUPPORTED_CAPABILITIES = [
 	"coordinator",
 	"supervisor",
 	"monitor",
+	"workspace",
 ] as const;
 
 /** Union type derived from the capabilities constant. */
@@ -157,6 +184,7 @@ export interface AgentSession {
 	parentAgent: string | null; // Who spawned this agent (null = orchestrator)
 	depth: number; // 0 = direct from orchestrator
 	runId: string | null; // Groups sessions in the same orchestrator run
+	projectId: string; // Project this session belongs to ("_default" for single-repo mode)
 	startedAt: string;
 	lastActivity: string;
 	escalationLevel: number; // Progressive nudge stage: 0=warn, 1=nudge, 2=escalate, 3=terminate
@@ -225,6 +253,7 @@ export interface MailMessage {
 	threadId: string | null; // Conversation threading
 	payload: string | null; // JSON-encoded structured data for protocol messages
 	read: boolean;
+	projectId: string; // Project this message belongs to ("_default" for single-repo mode)
 	createdAt: string; // ISO timestamp
 }
 
@@ -423,6 +452,7 @@ export interface SessionMetrics {
 	estimatedCostUsd: number | null;
 	modelUsed: string | null;
 	runId: string | null;
+	projectId: string; // Project this session belongs to ("_default" for single-repo mode)
 }
 
 /** A point-in-time token usage snapshot for a running agent session. */
@@ -434,6 +464,7 @@ export interface TokenSnapshot {
 	cacheCreationTokens: number;
 	estimatedCostUsd: number | null;
 	modelUsed: string | null;
+	projectId: string; // Project this snapshot belongs to ("_default" for single-repo mode)
 	createdAt: string;
 }
 
@@ -489,6 +520,7 @@ export interface StoredEvent {
 	toolDurationMs: number | null;
 	level: EventLevel;
 	data: string | null;
+	projectId: string; // Project this event belongs to ("_default" for single-repo mode)
 	createdAt: string;
 }
 
@@ -549,6 +581,7 @@ export interface Run {
 	agentCount: number;
 	coordinatorSessionId: string | null;
 	status: RunStatus;
+	projectId: string; // Project this run belongs to ("_default" for single-repo mode)
 }
 
 /** Input for creating a new run. */
