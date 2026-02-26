@@ -42,6 +42,7 @@ import { createTrackerClient, resolveBackend } from "../tracker/factory.ts";
 import type { TrackerIssue } from "../tracker/types.ts";
 import type { EventStore, MailMessage, StoredEvent } from "../types.ts";
 import { evaluateHealth } from "../watchdog/health.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import { getCachedTmuxSessions, getCachedWorktrees, type StatusData } from "./status.ts";
 
 const pkgPath = resolve(import.meta.dir, "../../package.json");
@@ -164,8 +165,8 @@ export interface DashboardStores {
  * Open all database connections needed by the dashboard.
  * Returns null handles for databases that do not exist on disk.
  */
-export function openDashboardStores(root: string): DashboardStores {
-	const overstoryDir = join(root, ".overstory");
+export function openDashboardStores(root: string, dbRoot?: string): DashboardStores {
+	const overstoryDir = dbRoot ?? join(root, ".overstory");
 	const { store: sessionStore } = openSessionStore(overstoryDir);
 
 	let mailStore: MailStore | null = null;
@@ -335,9 +336,15 @@ async function loadDashboardData(
 	runId?: string | null,
 	thresholds?: { staleMs: number; zombieMs: number },
 	eventBuffer?: EventBuffer,
+	activeProjectId?: string,
 ): Promise<DashboardData> {
 	// Get all sessions from the pre-opened session store
 	const allSessions = stores.sessionStore.getAll();
+
+	// Filter by projectId when --project flag is active
+	const projectFilteredSessions = activeProjectId
+		? allSessions.filter((s) => s.projectId === activeProjectId)
+		: allSessions;
 
 	// Get worktrees and tmux sessions via cached subprocess helpers
 	const worktrees = await getCachedWorktrees(root);
@@ -346,7 +353,7 @@ async function loadDashboardData(
 	// Evaluate health for active agents using the same logic as the watchdog.
 	const tmuxSessionNames = new Set(tmuxSessions.map((s) => s.name));
 	const healthThresholds = thresholds ?? { staleMs: 300_000, zombieMs: 600_000 };
-	for (const session of allSessions) {
+	for (const session of projectFilteredSessions) {
 		if (session.state === "completed") continue;
 		const tmuxAlive = tmuxSessionNames.has(session.tmuxSession);
 		const check = evaluateHealth(session, tmuxAlive, healthThresholds);
@@ -361,7 +368,8 @@ async function loadDashboardData(
 	}
 
 	// If run-scoped, filter agents to only those belonging to the current run.
-	const filteredAgents = filterAgentsByRun(allSessions, runId);
+	// Also includes null-runId sessions (e.g. coordinator) per filterAgentsByRun logic.
+	const filteredAgents = filterAgentsByRun(projectFilteredSessions, runId);
 
 	// Count unread mail
 	let unreadMailCount = 0;
@@ -966,6 +974,7 @@ function renderDashboard(data: DashboardData, interval: number): void {
 interface DashboardOpts {
 	interval?: string;
 	all?: boolean;
+	project?: string;
 }
 
 async function executeDashboard(opts: DashboardOpts): Promise<void> {
@@ -980,28 +989,34 @@ async function executeDashboard(opts: DashboardOpts): Promise<void> {
 		});
 	}
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const root = config.project.root;
+	const ctx = await resolveContext({ project: opts.project });
+	const root = ctx.projectRoot;
+
+	// Derive thresholds from config (best-effort; fall back to defaults)
+	let thresholds = { staleMs: 300_000, zombieMs: 600_000 };
+	try {
+		const config = await loadConfig(root);
+		thresholds = {
+			staleMs: config.watchdog.staleThresholdMs,
+			zombieMs: config.watchdog.zombieThresholdMs,
+		};
+	} catch {
+		// best effort
+	}
+	const activeProjectId = ctx.projectId === "_workspace" ? undefined : ctx.projectId;
 
 	// Read current run ID unless --all flag is set
 	let runId: string | null | undefined;
 	if (!showAll) {
-		const overstoryDir = join(root, ".overstory");
+		const overstoryDir = ctx.dbRoot;
 		runId = await readCurrentRunId(overstoryDir);
 	}
 
 	// Open stores once for the entire poll loop lifetime
-	const stores = openDashboardStores(root);
+	const stores = openDashboardStores(root, ctx.dbRoot);
 
 	// Create rolling event buffer (persisted across poll ticks)
 	const eventBuffer = new EventBuffer(100);
-
-	// Compute health thresholds once from config (reused across poll ticks)
-	const thresholds = {
-		staleMs: config.watchdog.staleThresholdMs,
-		zombieMs: config.watchdog.zombieThresholdMs,
-	};
 
 	// Hide cursor
 	process.stdout.write(CURSOR.hideCursor);
@@ -1018,7 +1033,14 @@ async function executeDashboard(opts: DashboardOpts): Promise<void> {
 
 	// Poll loop
 	while (running) {
-		const data = await loadDashboardData(root, stores, runId, thresholds, eventBuffer);
+		const data = await loadDashboardData(
+			root,
+			stores,
+			runId,
+			thresholds,
+			eventBuffer,
+			activeProjectId,
+		);
 		renderDashboard(data, interval);
 		await Bun.sleep(interval);
 	}
@@ -1029,8 +1051,9 @@ export function createDashboardCommand(): Command {
 		.description("Live TUI dashboard for agent monitoring (Ctrl+C to stop)")
 		.option("--interval <ms>", "Poll interval in milliseconds (default: 2000, min: 500)")
 		.option("--all", "Show data from all runs (default: current run only)")
-		.action(async (opts: DashboardOpts) => {
-			await executeDashboard(opts);
+		.action(async (opts: DashboardOpts, cmd: Command) => {
+			const globalOpts = cmd.optsWithGlobals();
+			await executeDashboard({ ...opts, project: globalOpts.project as string | undefined });
 		});
 }
 
