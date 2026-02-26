@@ -10,8 +10,13 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDir } from "../test-helpers.ts";
-import type { AgentSession, AgentState, InsertRun, Run, RunStore } from "../types.ts";
-import { createRunStore, createSessionStore, type RunStoreWithProjectId, type SessionStore } from "./store.ts";
+import type { AgentSession, AgentState, InsertRun, Run } from "../types.ts";
+import {
+	createRunStore,
+	createSessionStore,
+	type RunStoreWithProjectId,
+	type SessionStore,
+} from "./store.ts";
 
 let tempDir: string;
 let dbPath: string;
@@ -32,6 +37,7 @@ afterEach(async () => {
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 	return {
 		id: "session-001-test-agent",
+		projectId: "_default",
 		agentName: "test-agent",
 		capability: "builder",
 		worktreePath: "/tmp/worktrees/test-agent",
@@ -625,14 +631,8 @@ describe("project_id support", () => {
 	});
 
 	test("getByRun filters by project_id", () => {
-		store.upsert(
-			makeSession({ agentName: "a1", id: "s-1", runId: "run-1" }),
-			"proj-a",
-		);
-		store.upsert(
-			makeSession({ agentName: "a2", id: "s-2", runId: "run-1" }),
-			"proj-b",
-		);
+		store.upsert(makeSession({ agentName: "a1", id: "s-1", runId: "run-1" }), "proj-a");
+		store.upsert(makeSession({ agentName: "a2", id: "s-2", runId: "run-1" }), "proj-b");
 
 		const projA = store.getByRun("run-1", "proj-a");
 		expect(projA).toHaveLength(1);
@@ -751,6 +751,7 @@ describe("RunStore", () => {
 	/** Helper to create an InsertRun with optional overrides. */
 	function makeRun(overrides: Partial<InsertRun> = {}): InsertRun {
 		return {
+			projectId: "_default",
 			id: "run-2026-02-13T10:00:00.000Z",
 			startedAt: "2026-02-13T10:00:00.000Z",
 			coordinatorSessionId: "coord-session-001",
@@ -1033,10 +1034,7 @@ describe("RunStore", () => {
 
 		test("getActiveRun filters by project_id", () => {
 			runStore.createRun(makeRun({ id: "run-a", startedAt: "2026-02-13T10:00:00.000Z" }), "proj-a");
-			runStore.createRun(
-				makeRun({ id: "run-b", startedAt: "2026-02-13T11:00:00.000Z" }),
-				"proj-b",
-			);
+			runStore.createRun(makeRun({ id: "run-b", startedAt: "2026-02-13T11:00:00.000Z" }), "proj-b");
 
 			const activeA = runStore.getActiveRun("proj-a");
 			expect(activeA?.id).toBe("run-a");
@@ -1046,9 +1044,18 @@ describe("RunStore", () => {
 		});
 
 		test("listRuns filters by project_id", () => {
-			runStore.createRun(makeRun({ id: "run-a1", startedAt: "2026-02-13T10:00:00.000Z" }), "proj-a");
-			runStore.createRun(makeRun({ id: "run-a2", startedAt: "2026-02-13T11:00:00.000Z" }), "proj-a");
-			runStore.createRun(makeRun({ id: "run-b1", startedAt: "2026-02-13T12:00:00.000Z" }), "proj-b");
+			runStore.createRun(
+				makeRun({ id: "run-a1", startedAt: "2026-02-13T10:00:00.000Z" }),
+				"proj-a",
+			);
+			runStore.createRun(
+				makeRun({ id: "run-a2", startedAt: "2026-02-13T11:00:00.000Z" }),
+				"proj-a",
+			);
+			runStore.createRun(
+				makeRun({ id: "run-b1", startedAt: "2026-02-13T12:00:00.000Z" }),
+				"proj-b",
+			);
 
 			const projA = runStore.listRuns({ projectId: "proj-a" });
 			expect(projA).toHaveLength(2);
@@ -1135,6 +1142,7 @@ describe("RunStore", () => {
 
 		test("all fields roundtrip correctly", () => {
 			const run: InsertRun = {
+				projectId: "_default",
 				id: "run-roundtrip-test",
 				startedAt: "2026-02-13T15:30:00.000Z",
 				coordinatorSessionId: "coord-session-roundtrip",

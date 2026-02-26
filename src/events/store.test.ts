@@ -5,8 +5,8 @@
  * Philosophy: "never mock what you can use for real".
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { InsertEvent, StoredEvent, ToolStats } from "../types.ts";
 import {
 	createEventStore,
@@ -27,6 +27,7 @@ afterEach(() => {
 /** Helper to create an InsertEvent with sensible defaults. */
 function makeEvent(overrides: Partial<InsertEventWithProject> = {}): InsertEventWithProject {
 	return {
+		projectId: "_default",
 		runId: "run-001",
 		agentName: "builder-1",
 		sessionId: "sess-abc",

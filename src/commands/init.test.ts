@@ -26,6 +26,7 @@ const AGENT_DEF_FILES = [
 	"merger.md",
 	"coordinator.md",
 	"monitor.md",
+	"workspace.md",
 ];
 
 /** Resolve the source agents directory (same logic as init.ts). */

@@ -16,12 +16,6 @@ import type {
 	ToolStats,
 } from "../types.ts";
 
-/** StoredEvent extended with project_id support (store-level only, types.ts not modified). */
-export type StoredEventWithProject = StoredEvent & { projectId: string };
-
-/** InsertEvent extended with optional project_id. */
-export type InsertEventWithProject = InsertEvent & { projectId?: string };
-
 /** EventQueryOptions extended with optional project_id filter. */
 export interface EventQueryOptionsWithProject extends EventQueryOptions {
 	projectId?: string;
@@ -74,9 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_events_project_time ON events(project_id, created
  * via ALTER TABLE. This is idempotent — safe to run on an already-migrated DB.
  */
 function migrateSchema(db: Database): void {
-	const tableInfo = db
-		.prepare<{ name: string }, []>("PRAGMA table_info(events)")
-		.all();
+	const tableInfo = db.prepare<{ name: string }, []>("PRAGMA table_info(events)").all();
 	if (tableInfo.length === 0) {
 		// Table doesn't exist yet; CREATE TABLE IF NOT EXISTS will handle it
 		return;
@@ -87,8 +79,8 @@ function migrateSchema(db: Database): void {
 	}
 }
 
-/** Convert a database row (snake_case) to a StoredEventWithProject object (camelCase). */
-function rowToEvent(row: EventRow): StoredEventWithProject {
+/** Convert a database row (snake_case) to a StoredEvent object (camelCase). */
+function rowToEvent(row: EventRow): StoredEvent {
 	return {
 		id: row.id,
 		runId: row.run_id,
@@ -139,13 +131,11 @@ function buildFilterClauses(
 
 /** EventStore interface extended with project_id support at the store level. */
 export interface EventStoreWithProject extends EventStore {
-	insert(event: InsertEventWithProject): number;
-	getByAgent(agentName: string, opts?: EventQueryOptionsWithProject): StoredEventWithProject[];
-	getByRun(runId: string, opts?: EventQueryOptionsWithProject): StoredEventWithProject[];
-	getErrors(opts?: EventQueryOptionsWithProject): StoredEventWithProject[];
-	getTimeline(
-		opts: EventQueryOptionsWithProject & { since: string },
-	): StoredEventWithProject[];
+	insert(event: InsertEvent): number;
+	getByAgent(agentName: string, opts?: EventQueryOptionsWithProject): StoredEvent[];
+	getByRun(runId: string, opts?: EventQueryOptionsWithProject): StoredEvent[];
+	getErrors(opts?: EventQueryOptionsWithProject): StoredEvent[];
+	getTimeline(opts: EventQueryOptionsWithProject & { since: string }): StoredEvent[];
 }
 
 /**
@@ -222,7 +212,7 @@ export function createEventStore(dbPath: string): EventStoreWithProject {
 	`);
 
 	return {
-		insert(event: InsertEventWithProject): number {
+		insert(event: InsertEvent): number {
 			const row = insertStmt.get({
 				$run_id: event.runId,
 				$agent_name: event.agentName,
@@ -267,7 +257,7 @@ export function createEventStore(dbPath: string): EventStoreWithProject {
 			return { startId: startRow.id, durationMs };
 		},
 
-		getByAgent(agentName: string, opts?: EventQueryOptionsWithProject): StoredEventWithProject[] {
+		getByAgent(agentName: string, opts?: EventQueryOptionsWithProject): StoredEvent[] {
 			if (
 				opts !== undefined &&
 				(opts.since !== undefined ||
@@ -290,7 +280,7 @@ export function createEventStore(dbPath: string): EventStoreWithProject {
 			return rows.map(rowToEvent);
 		},
 
-		getByRun(runId: string, opts?: EventQueryOptionsWithProject): StoredEventWithProject[] {
+		getByRun(runId: string, opts?: EventQueryOptionsWithProject): StoredEvent[] {
 			if (
 				opts !== undefined &&
 				(opts.since !== undefined ||
@@ -312,16 +302,14 @@ export function createEventStore(dbPath: string): EventStoreWithProject {
 			return rows.map(rowToEvent);
 		},
 
-		getErrors(opts?: EventQueryOptionsWithProject): StoredEventWithProject[] {
+		getErrors(opts?: EventQueryOptionsWithProject): StoredEvent[] {
 			const { whereClause, params, limitClause } = buildFilterClauses(opts, ["level = 'error'"]);
 			const query = `SELECT * FROM events ${whereClause} ORDER BY created_at DESC ${limitClause}`;
 			const rows = db.prepare<EventRow, Record<string, string | number>>(query).all(params);
 			return rows.map(rowToEvent);
 		},
 
-		getTimeline(
-			opts: EventQueryOptionsWithProject & { since: string },
-		): StoredEventWithProject[] {
+		getTimeline(opts: EventQueryOptionsWithProject & { since: string }): StoredEvent[] {
 			const { whereClause, params, limitClause } = buildFilterClauses(opts);
 			const query = `SELECT * FROM events ${whereClause} ORDER BY created_at ASC ${limitClause}`;
 			const rows = db.prepare<EventRow, Record<string, string | number>>(query).all(params);

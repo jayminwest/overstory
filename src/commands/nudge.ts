@@ -176,6 +176,7 @@ function recordNudgeEvent(
 ): void {
 	try {
 		eventStore.insert({
+			projectId: "_default",
 			runId: opts.runId,
 			agentName: opts.agentName,
 			sessionId: null,

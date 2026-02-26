@@ -37,6 +37,7 @@ import { createRunStore } from "../sessions/store.ts";
 import type { TrackerIssue } from "../tracker/factory.ts";
 import { createTrackerClient, resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession, OverlayConfig } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import { createWorktree } from "../worktree/manager.ts";
 import {
 	capturePaneContent,
@@ -532,6 +533,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		const runStore = createRunStore(join(overstoryDir, "sessions.db"));
 		try {
 			runStore.createRun({
+				projectId: "_default",
 				id: runId,
 				startedAt: new Date().toISOString(),
 				coordinatorSessionId: null,

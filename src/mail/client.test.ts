@@ -709,6 +709,7 @@ describe("createMailClient", () => {
 		test("returns null for invalid JSON payload", () => {
 			// Manually insert a message with malformed payload via store
 			const msg = store.insert({
+				projectId: "_default",
 				id: "msg-bad-json",
 				from: "agent-a",
 				to: "orchestrator",

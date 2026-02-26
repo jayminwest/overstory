@@ -536,6 +536,7 @@ describe("traceCommand", () => {
 			const sessDbPath = join(tempDir, ".overstory", "sessions.db");
 			const sessionStore = createSessionStore(sessDbPath);
 			sessionStore.upsert({
+				projectId: "_default",
 				id: "sess-001",
 				agentName: "builder-for-task",
 				capability: "builder",

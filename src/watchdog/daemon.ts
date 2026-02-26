@@ -115,6 +115,7 @@ function recordEvent(
 	if (!eventStore) return;
 	try {
 		eventStore.insert({
+			projectId: "_default",
 			runId: event.runId,
 			agentName: event.agentName,
 			sessionId: null,

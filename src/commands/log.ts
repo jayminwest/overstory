@@ -506,6 +506,7 @@ async function runLog(opts: {
 					? filterToolArgs(toolName, toolInput)
 					: { args: {}, summary: toolName };
 				eventStore.insert({
+					projectId: "_default",
 					runId: null,
 					agentName: opts.agent,
 					sessionId,
@@ -536,6 +537,7 @@ async function runLog(opts: {
 					? filterToolArgs(toolName, toolInput)
 					: { args: {}, summary: toolName };
 				eventStore.insert({
+					projectId: "_default",
 					runId: null,
 					agentName: opts.agent,
 					sessionId,
@@ -584,6 +586,7 @@ async function runLog(opts: {
 							const metricsDbPath = join(config.project.root, ".overstory", "metrics.db");
 							const metricsStore = createMetricsStore(metricsDbPath);
 							metricsStore.recordSnapshot({
+								projectId: "_default",
 								agentName: opts.agent,
 								inputTokens: usage.inputTokens,
 								outputTokens: usage.outputTokens,
@@ -707,6 +710,7 @@ async function runLog(opts: {
 						}
 
 						metricsStore.recordSession({
+							projectId: "_default",
 							agentName: opts.agent,
 							taskId: agentSession.taskId,
 							capability: agentSession.capability,
@@ -773,6 +777,7 @@ async function runLog(opts: {
 					const eventsDbPath = join(config.project.root, ".overstory", "events.db");
 					const eventStore = createEventStore(eventsDbPath);
 					eventStore.insert({
+						projectId: "_default",
 						runId: null,
 						agentName: opts.agent,
 						sessionId,

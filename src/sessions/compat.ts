@@ -20,6 +20,7 @@ import { createSessionStore, type SessionStore } from "./store.ts";
  */
 function normalizeSession(raw: Record<string, unknown>): AgentSession {
 	return {
+		projectId: (raw.projectId as string | null) ?? "_default",
 		id: raw.id as string,
 		agentName: raw.agentName as string,
 		capability: raw.capability as string,

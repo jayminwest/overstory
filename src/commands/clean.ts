@@ -92,6 +92,7 @@ async function logSyntheticSessionEndEvents(overstoryDir: string): Promise<numbe
 		try {
 			for (const session of activeSessions) {
 				eventStore.insert({
+					projectId: "_default",
 					runId: session.runId,
 					agentName: session.agentName,
 					sessionId: session.id,

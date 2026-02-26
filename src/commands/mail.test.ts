@@ -758,6 +758,7 @@ describe("mailCommand", () => {
 
 			const sessions = [
 				{
+					projectId: "_default",
 					id: "session-orchestrator",
 					agentName: "orchestrator",
 					capability: "coordinator",
@@ -777,6 +778,7 @@ describe("mailCommand", () => {
 					transcriptPath: null,
 				},
 				{
+					projectId: "_default",
 					id: "session-builder-1",
 					agentName: "builder-1",
 					capability: "builder",
@@ -796,6 +798,7 @@ describe("mailCommand", () => {
 					transcriptPath: null,
 				},
 				{
+					projectId: "_default",
 					id: "session-builder-2",
 					agentName: "builder-2",
 					capability: "builder",
@@ -815,6 +818,7 @@ describe("mailCommand", () => {
 					transcriptPath: null,
 				},
 				{
+					projectId: "_default",
 					id: "session-scout-1",
 					agentName: "scout-1",
 					capability: "scout",
@@ -1128,6 +1132,7 @@ describe("mailCommand", () => {
 
 			for (const [idx, session] of sessions.entries()) {
 				sessionStore.upsert({
+					projectId: "_default",
 					id: `session-${idx}`,
 					agentName: session.agentName,
 					capability: session.capability as

@@ -261,6 +261,7 @@ async function getGroupProgress(
 				const mailStore = createMailStore(mailDbPath);
 				try {
 					mailStore.insert({
+						projectId: "_default",
 						id: "",
 						from: "system",
 						to: "coordinator",
