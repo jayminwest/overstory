@@ -107,8 +107,24 @@ export async function createSession(
 
 	const wrappedCommand = exports.length > 0 ? `${exports.join(" && ")} && ${command}` : command;
 
+	// tmux has an internal IPC message size limit (~8-16KB depending on version).
+	// When the command string (e.g. claude --append-system-prompt with a large agent
+	// definition) exceeds this limit, tmux returns "command too long". Work around
+	// this by writing the command to a temp shell script and passing the script path
+	// to tmux instead of the raw string.
+	const TMUX_CMD_SAFE_LIMIT = 8000;
+	let tmuxCmd = wrappedCommand;
+	if (wrappedCommand.length > TMUX_CMD_SAFE_LIMIT) {
+		const tmpPath = `/tmp/overstory-${name}-${Date.now()}.sh`;
+		await Bun.write(tmpPath, `#!/bin/sh\n${wrappedCommand}\n`);
+		const { exitCode: chmodExit } = await runCommand(["chmod", "+x", tmpPath]);
+		if (chmodExit === 0) {
+			tmuxCmd = tmpPath;
+		}
+	}
+
 	const { exitCode, stderr } = await runCommand(
-		["tmux", "new-session", "-d", "-s", name, "-c", cwd, wrappedCommand],
+		["tmux", "new-session", "-d", "-s", name, "-c", cwd, tmuxCmd],
 		cwd,
 	);
 
