@@ -14,6 +14,7 @@ import { AgentError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { printSuccess, printWarning } from "../logging/color.ts";
 import { openSessionStore } from "../sessions/compat.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import { removeWorktree } from "../worktree/manager.ts";
 import { isSessionAlive, killSession } from "../worktree/tmux.ts";
 
@@ -21,6 +22,7 @@ export interface StopOptions {
 	force?: boolean;
 	cleanWorktree?: boolean;
 	json?: boolean;
+	project?: string;
 }
 
 /** Dependency injection for testing. Uses real implementations when omitted. */
@@ -65,11 +67,11 @@ export async function stopCommand(
 	const worktree = deps._worktree ?? { remove: removeWorktree };
 
 	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const projectRoot = config.project.root;
-	const overstoryDir = join(projectRoot, ".overstory");
+	await loadConfig(cwd);
+	const ctx = await resolveContext({ project: opts.project });
+	const projectRoot = ctx.projectRoot;
 
-	const { store } = openSessionStore(overstoryDir);
+	const { store } = openSessionStore(ctx.dbRoot);
 	try {
 		const session = store.getByName(agentName);
 		if (!session) {

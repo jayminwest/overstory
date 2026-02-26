@@ -15,19 +15,20 @@ import { jsonOutput } from "../json.ts";
 import { accent, printHint, printSuccess } from "../logging/color.ts";
 import { createTrackerClient, resolveBackend, type TrackerClient } from "../tracker/factory.ts";
 import type { TaskGroup, TaskGroupProgress } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 /**
- * Resolve the groups.json path from the project root.
+ * Resolve the groups.json path from the overstory directory.
  */
-function groupsPath(projectRoot: string): string {
-	return join(projectRoot, ".overstory", "groups.json");
+function groupsPath(overstoryDir: string): string {
+	return join(overstoryDir, "groups.json");
 }
 
 /**
  * Load groups from .overstory/groups.json.
  */
-export async function loadGroups(projectRoot: string): Promise<TaskGroup[]> {
-	const path = groupsPath(projectRoot);
+export async function loadGroups(overstoryDir: string): Promise<TaskGroup[]> {
+	const path = groupsPath(overstoryDir);
 	const file = Bun.file(path);
 	if (!(await file.exists())) {
 		return [];
@@ -43,8 +44,8 @@ export async function loadGroups(projectRoot: string): Promise<TaskGroup[]> {
 /**
  * Save groups to .overstory/groups.json.
  */
-async function saveGroups(projectRoot: string, groups: TaskGroup[]): Promise<void> {
-	const path = groupsPath(projectRoot);
+async function saveGroups(overstoryDir: string, groups: TaskGroup[]): Promise<void> {
+	const path = groupsPath(overstoryDir);
 	await Bun.write(path, `${JSON.stringify(groups, null, "\t")}\n`);
 }
 
@@ -82,7 +83,7 @@ function generateGroupId(): string {
  * Create a new task group.
  */
 async function createGroup(
-	projectRoot: string,
+	overstoryDir: string,
 	name: string,
 	issueIds: string[],
 	skipValidation = false,
@@ -108,7 +109,7 @@ async function createGroup(
 		throw new ValidationError("Duplicate issue IDs provided", { field: "issueIds" });
 	}
 
-	const groups = await loadGroups(projectRoot);
+	const groups = await loadGroups(overstoryDir);
 	const group: TaskGroup = {
 		id: generateGroupId(),
 		name: name.trim(),
@@ -118,7 +119,7 @@ async function createGroup(
 		completedAt: null,
 	};
 	groups.push(group);
-	await saveGroups(projectRoot, groups);
+	await saveGroups(overstoryDir, groups);
 	return group;
 }
 
@@ -126,7 +127,7 @@ async function createGroup(
  * Add issues to an existing group.
  */
 async function addToGroup(
-	projectRoot: string,
+	overstoryDir: string,
 	groupId: string,
 	issueIds: string[],
 	skipValidation = false,
@@ -136,7 +137,7 @@ async function addToGroup(
 		throw new ValidationError("At least one issue ID is required", { field: "issueIds" });
 	}
 
-	const groups = await loadGroups(projectRoot);
+	const groups = await loadGroups(overstoryDir);
 	const group = groups.find((g) => g.id === groupId);
 	if (!group) {
 		throw new GroupError(`Group "${groupId}" not found`, { groupId });
@@ -166,7 +167,7 @@ async function addToGroup(
 		group.completedAt = null;
 	}
 
-	await saveGroups(projectRoot, groups);
+	await saveGroups(overstoryDir, groups);
 	return group;
 }
 
@@ -174,7 +175,7 @@ async function addToGroup(
  * Remove issues from an existing group.
  */
 async function removeFromGroup(
-	projectRoot: string,
+	overstoryDir: string,
 	groupId: string,
 	issueIds: string[],
 ): Promise<TaskGroup> {
@@ -182,7 +183,7 @@ async function removeFromGroup(
 		throw new ValidationError("At least one issue ID is required", { field: "issueIds" });
 	}
 
-	const groups = await loadGroups(projectRoot);
+	const groups = await loadGroups(overstoryDir);
 	const group = groups.find((g) => g.id === groupId);
 	if (!group) {
 		throw new GroupError(`Group "${groupId}" not found`, { groupId });
@@ -204,7 +205,7 @@ async function removeFromGroup(
 	}
 
 	group.memberIssueIds = remaining;
-	await saveGroups(projectRoot, groups);
+	await saveGroups(overstoryDir, groups);
 	return group;
 }
 
@@ -213,7 +214,8 @@ async function removeFromGroup(
  * Auto-closes the group if all members are closed.
  */
 async function getGroupProgress(
-	projectRoot: string,
+	overstoryDir: string,
+	dbRoot: string,
 	group: TaskGroup,
 	groups: TaskGroup[],
 	tracker?: TrackerClient,
@@ -247,14 +249,14 @@ async function getGroupProgress(
 	if (completed === total && total > 0 && group.status === "active") {
 		group.status = "completed";
 		group.completedAt = new Date().toISOString();
-		await saveGroups(projectRoot, groups);
+		await saveGroups(overstoryDir, groups);
 		process.stdout.write(
 			`Group "${group.name}" (${accent(group.id)}) auto-closed: all issues done\n`,
 		);
 
 		// Notify coordinator via mail (best-effort)
 		try {
-			const mailDbPath = join(projectRoot, ".overstory", "mail.db");
+			const mailDbPath = join(dbRoot, "mail.db");
 			const mailDbFile = Bun.file(mailDbPath);
 			if (await mailDbFile.exists()) {
 				const { createMailStore } = await import("../mail/store.ts");
@@ -315,14 +317,23 @@ export function createGroupCommand(): Command {
 		.option("--json", "Output as JSON")
 		.option("--skip-validation", "Skip task validation (for offline use)")
 		.action(
-			async (name: string, ids: string[], opts: { json?: boolean; skipValidation?: boolean }) => {
+			async (
+				name: string,
+				ids: string[],
+				opts: { json?: boolean; skipValidation?: boolean },
+				cmdObj: Command,
+			) => {
 				const config = await loadConfig(process.cwd());
-				const projectRoot = config.project.root;
-				const resolvedBackend = await resolveBackend(config.taskTracker.backend, projectRoot);
-				const tracker = createTrackerClient(resolvedBackend, projectRoot);
+				const globalOpts = cmdObj.optsWithGlobals();
+				const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
+				const resolvedBackend = await resolveBackend(
+					config.taskTracker.backend,
+					ctx.projectRoot,
+				);
+				const tracker = createTrackerClient(resolvedBackend, ctx.projectRoot);
 
 				const group = await createGroup(
-					projectRoot,
+					ctx.overstoryDir,
 					name,
 					ids,
 					opts.skipValidation ?? false,
@@ -346,21 +357,35 @@ export function createGroupCommand(): Command {
 		.option("--json", "Output as JSON")
 		.option("--skip-validation", "Skip task validation (for offline use)")
 		.action(
-			async (groupId: string | undefined, opts: { json?: boolean; skipValidation?: boolean }) => {
+			async (
+				groupId: string | undefined,
+				opts: { json?: boolean; skipValidation?: boolean },
+				cmdObj: Command,
+			) => {
 				const config = await loadConfig(process.cwd());
-				const projectRoot = config.project.root;
-				const resolvedBackend = await resolveBackend(config.taskTracker.backend, projectRoot);
-				const tracker = createTrackerClient(resolvedBackend, projectRoot);
+				const globalOpts = cmdObj.optsWithGlobals();
+				const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
+				const resolvedBackend = await resolveBackend(
+					config.taskTracker.backend,
+					ctx.projectRoot,
+				);
+				const tracker = createTrackerClient(resolvedBackend, ctx.projectRoot);
 				const json = opts.json ?? false;
 
-				const groups = await loadGroups(projectRoot);
+				const groups = await loadGroups(ctx.overstoryDir);
 
 				if (groupId) {
 					const group = groups.find((g) => g.id === groupId);
 					if (!group) {
 						throw new GroupError(`Group "${groupId}" not found`, { groupId });
 					}
-					const progress = await getGroupProgress(projectRoot, group, groups, tracker);
+					const progress = await getGroupProgress(
+						ctx.overstoryDir,
+						ctx.dbRoot,
+						group,
+						groups,
+						tracker,
+					);
 					if (json) {
 						jsonOutput("group status", { ...progress });
 					} else {
@@ -378,7 +403,13 @@ export function createGroupCommand(): Command {
 					}
 					const progressList: TaskGroupProgress[] = [];
 					for (const group of activeGroups) {
-						const progress = await getGroupProgress(projectRoot, group, groups, tracker);
+						const progress = await getGroupProgress(
+							ctx.overstoryDir,
+							ctx.dbRoot,
+							group,
+							groups,
+							tracker,
+						);
 						progressList.push(progress);
 					}
 					if (json) {
@@ -405,14 +436,19 @@ export function createGroupCommand(): Command {
 				groupId: string,
 				ids: string[],
 				opts: { json?: boolean; skipValidation?: boolean },
+				cmdObj: Command,
 			) => {
 				const config = await loadConfig(process.cwd());
-				const projectRoot = config.project.root;
-				const resolvedBackend = await resolveBackend(config.taskTracker.backend, projectRoot);
-				const tracker = createTrackerClient(resolvedBackend, projectRoot);
+				const globalOpts = cmdObj.optsWithGlobals();
+				const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
+				const resolvedBackend = await resolveBackend(
+					config.taskTracker.backend,
+					ctx.projectRoot,
+				);
+				const tracker = createTrackerClient(resolvedBackend, ctx.projectRoot);
 
 				const group = await addToGroup(
-					projectRoot,
+					ctx.overstoryDir,
 					groupId,
 					ids,
 					opts.skipValidation ?? false,
@@ -435,11 +471,12 @@ export function createGroupCommand(): Command {
 		.argument("<group-id>", "Group ID")
 		.argument("<ids...>", "Issue IDs to remove")
 		.option("--json", "Output as JSON")
-		.action(async (groupId: string, ids: string[], opts: { json?: boolean }) => {
-			const config = await loadConfig(process.cwd());
-			const projectRoot = config.project.root;
+		.action(async (groupId: string, ids: string[], opts: { json?: boolean }, cmdObj: Command) => {
+			await loadConfig(process.cwd());
+			const globalOpts = cmdObj.optsWithGlobals();
+			const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
 
-			const group = await removeFromGroup(projectRoot, groupId, ids);
+			const group = await removeFromGroup(ctx.overstoryDir, groupId, ids);
 			if (opts.json) {
 				jsonOutput("group remove", { ...group });
 			} else {
@@ -454,11 +491,12 @@ export function createGroupCommand(): Command {
 		.command("list")
 		.description("List all groups (summary)")
 		.option("--json", "Output as JSON")
-		.action(async (opts: { json?: boolean }) => {
-			const config = await loadConfig(process.cwd());
-			const projectRoot = config.project.root;
+		.action(async (opts: { json?: boolean }, cmdObj: Command) => {
+			await loadConfig(process.cwd());
+			const globalOpts = cmdObj.optsWithGlobals();
+			const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
 
-			const groups = await loadGroups(projectRoot);
+			const groups = await loadGroups(ctx.overstoryDir);
 			if (groups.length === 0) {
 				if (opts.json) {
 					process.stdout.write("[]\n");

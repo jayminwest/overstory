@@ -30,6 +30,7 @@ import { printHint, printSuccess } from "../logging/color.ts";
 import { createMulchClient } from "../mulch/client.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, MulchDoctorResult, MulchPruneResult, MulchStatus } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import { listWorktrees, removeWorktree } from "../worktree/manager.ts";
 import { killSession, listSessions } from "../worktree/tmux.ts";
 
@@ -44,6 +45,7 @@ export interface CleanOptions {
 	agents?: boolean;
 	specs?: boolean;
 	json?: boolean;
+	project?: string;
 }
 
 /**
@@ -54,14 +56,14 @@ export interface CleanOptions {
  * an empty database file as a side effect (which would interfere with
  * the "Nothing to clean" detection later in the pipeline).
  */
-function loadActiveSessions(overstoryDir: string): AgentSession[] {
+function loadActiveSessions(overstoryDir: string, dbRoot: string): AgentSession[] {
 	try {
-		const dbPath = join(overstoryDir, "sessions.db");
+		const dbPath = join(dbRoot, "sessions.db");
 		const jsonPath = join(overstoryDir, "sessions.json");
 		if (!existsSync(dbPath) && !existsSync(jsonPath)) {
 			return [];
 		}
-		const { store } = openSessionStore(overstoryDir);
+		const { store } = openSessionStore(dbRoot);
 		try {
 			return store.getActive();
 		} finally {
@@ -79,15 +81,15 @@ function loadActiveSessions(overstoryDir: string): AgentSession[] {
  * because the process is killed externally. This function writes session_end events
  * to the EventStore with reason='clean' so observability records are complete.
  */
-async function logSyntheticSessionEndEvents(overstoryDir: string): Promise<number> {
+async function logSyntheticSessionEndEvents(overstoryDir: string, dbRoot: string): Promise<number> {
 	let logged = 0;
 	try {
-		const activeSessions = loadActiveSessions(overstoryDir);
+		const activeSessions = loadActiveSessions(overstoryDir, dbRoot);
 		if (activeSessions.length === 0) {
 			return 0;
 		}
 
-		const eventsDbPath = join(overstoryDir, "events.db");
+		const eventsDbPath = join(dbRoot, "events.db");
 		const eventStore = createEventStore(eventsDbPath);
 		try {
 			for (const session of activeSessions) {
@@ -147,7 +149,11 @@ interface CleanResult {
  * Falls back to killing all "overstory-{projectName}-" prefixed tmux sessions
  * only if the SessionStore is unavailable (graceful degradation for broken state).
  */
-async function killAllTmuxSessions(overstoryDir: string, projectName: string): Promise<number> {
+async function killAllTmuxSessions(
+	overstoryDir: string,
+	dbRoot: string,
+	projectName: string,
+): Promise<number> {
 	let killed = 0;
 	const projectPrefix = `overstory-${projectName}-`;
 	try {
@@ -158,7 +164,7 @@ async function killAllTmuxSessions(overstoryDir: string, projectName: string): P
 		}
 
 		// Build a set of tmux session names registered in this project's SessionStore.
-		const registeredNames = loadRegisteredTmuxNames(overstoryDir);
+		const registeredNames = loadRegisteredTmuxNames(overstoryDir, dbRoot);
 
 		// If we got registered names, only kill those. Otherwise fall back to all
 		// overstory-{projectName}-* sessions.
@@ -187,9 +193,9 @@ async function killAllTmuxSessions(overstoryDir: string, projectName: string): P
  * Returns null if the SessionStore cannot be opened (signals the caller to
  * fall back to the legacy "kill all overstory-*" behavior).
  */
-function loadRegisteredTmuxNames(overstoryDir: string): Set<string> | null {
+function loadRegisteredTmuxNames(overstoryDir: string, dbRoot: string): Set<string> | null {
 	try {
-		const dbPath = join(overstoryDir, "sessions.db");
+		const dbPath = join(dbRoot, "sessions.db");
 		const jsonPath = join(overstoryDir, "sessions.json");
 		if (!existsSync(dbPath) && !existsSync(jsonPath)) {
 			// No session data at all -- return empty set (not null).
@@ -197,7 +203,7 @@ function loadRegisteredTmuxNames(overstoryDir: string): Set<string> | null {
 			// has no registered sessions, so nothing should be killed.
 			return new Set();
 		}
-		const { store } = openSessionStore(overstoryDir);
+		const { store } = openSessionStore(dbRoot);
 		try {
 			const allSessions = store.getAll();
 			return new Set(allSessions.map((s) => s.tmuxSession));
@@ -425,8 +431,10 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 	}
 
 	const config = await loadConfig(process.cwd());
-	const root = config.project.root;
-	const overstoryDir = join(root, ".overstory");
+	const ctx = await resolveContext({ project: opts.project });
+	const root = ctx.projectRoot;
+	const overstoryDir = ctx.overstoryDir;
+	const dbRoot = ctx.dbRoot;
 
 	const result: CleanResult = {
 		sessionEndEventsLogged: 0,
@@ -464,12 +472,12 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 	// When processes are killed externally, the Stop hook never fires,
 	// so session_end events would be lost without this step.
 	if (doWorktrees || all) {
-		result.sessionEndEventsLogged = await logSyntheticSessionEndEvents(overstoryDir);
+		result.sessionEndEventsLogged = await logSyntheticSessionEndEvents(overstoryDir, dbRoot);
 	}
 
 	// 2. Kill tmux sessions (must happen before worktree removal)
 	if (doWorktrees || all) {
-		result.tmuxKilled = await killAllTmuxSessions(overstoryDir, config.project.name);
+		result.tmuxKilled = await killAllTmuxSessions(overstoryDir, dbRoot, config.project.name);
 	}
 
 	// 3. Remove worktrees
@@ -484,20 +492,20 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 
 	// 5. Wipe databases
 	if (doMail) {
-		result.mailWiped = await wipeSqliteDb(join(overstoryDir, "mail.db"));
+		result.mailWiped = await wipeSqliteDb(join(dbRoot, "mail.db"));
 	}
 	if (doMetrics) {
-		result.metricsWiped = await wipeSqliteDb(join(overstoryDir, "metrics.db"));
+		result.metricsWiped = await wipeSqliteDb(join(dbRoot, "metrics.db"));
 	}
 
 	// 6. Wipe sessions.db + legacy sessions.json
 	if (doSessions) {
-		result.sessionsCleared = await wipeSqliteDb(join(overstoryDir, "sessions.db"));
+		result.sessionsCleared = await wipeSqliteDb(join(dbRoot, "sessions.db"));
 		// Also clean legacy sessions.json if it still exists
 		await resetJsonFile(join(overstoryDir, "sessions.json"));
 	}
 	if (all) {
-		result.mergeQueueCleared = await wipeSqliteDb(join(overstoryDir, "merge-queue.db"));
+		result.mergeQueueCleared = await wipeSqliteDb(join(dbRoot, "merge-queue.db"));
 	}
 
 	// 7. Clear directories

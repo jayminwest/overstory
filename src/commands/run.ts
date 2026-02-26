@@ -21,6 +21,7 @@ import { formatDuration } from "../logging/format.ts";
 import { renderHeader, separator } from "../logging/theme.ts";
 import { createRunStore, createSessionStore } from "../sessions/store.ts";
 import type { AgentSession, Run } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 /**
  * Get the path to the current-run.txt file.
@@ -67,7 +68,7 @@ function formatAgentDuration(agent: AgentSession): string {
 /**
  * Show current run status (default subcommand).
  */
-async function showCurrentRun(overstoryDir: string, json: boolean): Promise<void> {
+async function showCurrentRun(overstoryDir: string, dbRoot: string, json: boolean): Promise<void> {
 	const runId = await readCurrentRunId(overstoryDir);
 	if (!runId) {
 		if (json) {
@@ -78,7 +79,7 @@ async function showCurrentRun(overstoryDir: string, json: boolean): Promise<void
 		return;
 	}
 
-	const dbPath = join(overstoryDir, "sessions.db");
+	const dbPath = join(dbRoot, "sessions.db");
 	const runStore = createRunStore(dbPath);
 	try {
 		const run = runStore.getRun(runId);
@@ -110,8 +111,8 @@ async function showCurrentRun(overstoryDir: string, json: boolean): Promise<void
 /**
  * List recent runs.
  */
-async function listRuns(overstoryDir: string, limit: number, json: boolean): Promise<void> {
-	const dbPath = join(overstoryDir, "sessions.db");
+async function listRuns(dbRoot: string, limit: number, json: boolean): Promise<void> {
+	const dbPath = join(dbRoot, "sessions.db");
 	const dbFile = Bun.file(dbPath);
 	if (!(await dbFile.exists())) {
 		if (json) {
@@ -158,7 +159,11 @@ async function listRuns(overstoryDir: string, limit: number, json: boolean): Pro
 /**
  * Mark the current run as completed.
  */
-async function completeCurrentRun(overstoryDir: string, json: boolean): Promise<void> {
+async function completeCurrentRun(
+	overstoryDir: string,
+	dbRoot: string,
+	json: boolean,
+): Promise<void> {
 	const runId = await readCurrentRunId(overstoryDir);
 	if (!runId) {
 		if (json) {
@@ -170,7 +175,7 @@ async function completeCurrentRun(overstoryDir: string, json: boolean): Promise<
 		return;
 	}
 
-	const dbPath = join(overstoryDir, "sessions.db");
+	const dbPath = join(dbRoot, "sessions.db");
 	const runStore = createRunStore(dbPath);
 	try {
 		runStore.completeRun(runId, "completed");
@@ -196,8 +201,8 @@ async function completeCurrentRun(overstoryDir: string, json: boolean): Promise<
 /**
  * Show detailed information for a specific run.
  */
-async function showRun(overstoryDir: string, runId: string, json: boolean): Promise<void> {
-	const dbPath = join(overstoryDir, "sessions.db");
+async function showRun(dbRoot: string, runId: string, json: boolean): Promise<void> {
+	const dbPath = join(dbRoot, "sessions.db");
 	const dbFile = Bun.file(dbPath);
 	if (!(await dbFile.exists())) {
 		if (json) {
@@ -279,11 +284,12 @@ export function createRunCommand(): Command {
 	const cmd = new Command("run").description("Manage runs (coordinator session groupings)");
 
 	// Default action (bare `overstory run`)
-	cmd.option("--json", "Output as JSON").action(async (opts: RunDefaultOpts) => {
+	cmd.option("--json", "Output as JSON").action(async (opts: RunDefaultOpts, cmdObj: Command) => {
 		const cwd = process.cwd();
-		const config = await loadConfig(cwd);
-		const overstoryDir = join(config.project.root, ".overstory");
-		await showCurrentRun(overstoryDir, opts.json ?? false);
+		await loadConfig(cwd);
+		const globalOpts = cmdObj.optsWithGlobals();
+		const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
+		await showCurrentRun(ctx.overstoryDir, ctx.dbRoot, opts.json ?? false);
 	});
 
 	// `overstory run list`
@@ -292,7 +298,7 @@ export function createRunCommand(): Command {
 		.description("List recent runs")
 		.option("--last <n>", "Number of recent runs to show (default: 10)")
 		.option("--json", "Output as JSON")
-		.action(async (opts: RunListOpts) => {
+		.action(async (opts: RunListOpts, cmdObj: Command) => {
 			const lastStr = opts.last;
 			const limit = lastStr ? Number.parseInt(lastStr, 10) : 10;
 			if (Number.isNaN(limit) || limit < 1) {
@@ -302,9 +308,10 @@ export function createRunCommand(): Command {
 				});
 			}
 			const cwd = process.cwd();
-			const config = await loadConfig(cwd);
-			const overstoryDir = join(config.project.root, ".overstory");
-			await listRuns(overstoryDir, limit, opts.json ?? false);
+			await loadConfig(cwd);
+			const globalOpts = cmdObj.optsWithGlobals();
+			const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
+			await listRuns(ctx.dbRoot, limit, opts.json ?? false);
 		});
 
 	// `overstory run show <id>`
@@ -313,11 +320,12 @@ export function createRunCommand(): Command {
 		.description("Show run details (agents, duration)")
 		.argument("<id>", "Run ID")
 		.option("--json", "Output as JSON")
-		.action(async (id: string, opts: RunShowOpts) => {
+		.action(async (id: string, opts: RunShowOpts, cmdObj: Command) => {
 			const cwd = process.cwd();
-			const config = await loadConfig(cwd);
-			const overstoryDir = join(config.project.root, ".overstory");
-			await showRun(overstoryDir, id, opts.json ?? false);
+			await loadConfig(cwd);
+			const globalOpts = cmdObj.optsWithGlobals();
+			const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
+			await showRun(ctx.dbRoot, id, opts.json ?? false);
 		});
 
 	// `overstory run complete`
@@ -325,11 +333,12 @@ export function createRunCommand(): Command {
 		.command("complete")
 		.description("Mark current run as completed")
 		.option("--json", "Output as JSON")
-		.action(async (opts: RunCompleteOpts) => {
+		.action(async (opts: RunCompleteOpts, cmdObj: Command) => {
 			const cwd = process.cwd();
-			const config = await loadConfig(cwd);
-			const overstoryDir = join(config.project.root, ".overstory");
-			await completeCurrentRun(overstoryDir, opts.json ?? false);
+			await loadConfig(cwd);
+			const globalOpts = cmdObj.optsWithGlobals();
+			const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
+			await completeCurrentRun(ctx.overstoryDir, ctx.dbRoot, opts.json ?? false);
 		});
 
 	return cmd;

@@ -17,7 +17,25 @@ import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { EventStore } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import { isSessionAlive, sendKeys } from "../worktree/tmux.ts";
+
+/**
+ * Extract --project / -p flag from process.argv (global option parsed by parent Commander).
+ */
+function extractProjectFlag(): string | undefined {
+	const args = process.argv;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--project" || arg === "-p") {
+			return args[i + 1];
+		}
+		if (arg?.startsWith("--project=")) {
+			return arg.slice("--project=".length);
+		}
+	}
+	return undefined;
+}
 
 const DEFAULT_MESSAGE = "Check your mail inbox for new messages.";
 const MAX_RETRIES = 3;
@@ -56,9 +74,9 @@ async function loadOrchestratorTmuxSession(projectRoot: string): Promise<string 
 async function resolveTargetSession(
 	projectRoot: string,
 	agentName: string,
+	dbRoot: string,
 ): Promise<string | null> {
-	const overstoryDir = join(projectRoot, ".overstory");
-	const { store } = openSessionStore(overstoryDir);
+	const { store } = openSessionStore(dbRoot);
 	try {
 		const session = store.getByName(agentName);
 		if (session && session.state !== "zombie" && session.state !== "completed") {
@@ -204,6 +222,7 @@ function recordNudgeEvent(
  * @param agentName - Name of the agent to nudge
  * @param message - Text to send (defaults to mail check prompt)
  * @param force - Skip debounce check
+ * @param dbRoot - Optional: path to DB root (defaults to join(projectRoot, '.overstory'))
  * @returns Object with delivery status
  */
 export async function nudgeAgent(
@@ -211,11 +230,15 @@ export async function nudgeAgent(
 	agentName: string,
 	message: string = DEFAULT_MESSAGE,
 	force = false,
+	dbRoot?: string,
 ): Promise<{ delivered: boolean; reason?: string }> {
 	let result: { delivered: boolean; reason?: string };
 
+	const effectiveDbRoot = dbRoot ?? join(projectRoot, ".overstory");
+	const overstoryDir = join(projectRoot, ".overstory");
+
 	// Resolve tmux session (SessionStore for agents, orchestrator-tmux.json for orchestrator)
-	const tmuxSessionName = await resolveTargetSession(projectRoot, agentName);
+	const tmuxSessionName = await resolveTargetSession(projectRoot, agentName, effectiveDbRoot);
 
 	if (!tmuxSessionName) {
 		result = { delivered: false, reason: `No active session for agent "${agentName}"` };
@@ -223,7 +246,7 @@ export async function nudgeAgent(
 		// Check debounce (unless forced)
 		let debounced = false;
 		if (!force) {
-			const statePath = join(projectRoot, ".overstory", "nudge-state.json");
+			const statePath = join(overstoryDir, "nudge-state.json");
 			debounced = await isDebounced(statePath, agentName);
 		}
 
@@ -243,7 +266,7 @@ export async function nudgeAgent(
 
 				if (delivered) {
 					// Record nudge for debounce tracking
-					const statePath = join(projectRoot, ".overstory", "nudge-state.json");
+					const statePath = join(overstoryDir, "nudge-state.json");
 					await recordNudge(statePath, agentName);
 					result = { delivered: true };
 				} else {
@@ -258,8 +281,7 @@ export async function nudgeAgent(
 
 	// Record event to EventStore (fire-and-forget)
 	try {
-		const overstoryDir = join(projectRoot, ".overstory");
-		const eventsDbPath = join(overstoryDir, "events.db");
+		const eventsDbPath = join(effectiveDbRoot, "events.db");
 		const eventStore = createEventStore(eventsDbPath);
 		try {
 			const runId = await readCurrentRunId(overstoryDir);
@@ -305,11 +327,16 @@ export async function nudgeCommand(args: string[]): Promise<void> {
 				const rawMessage = customMessage.length > 0 ? customMessage : DEFAULT_MESSAGE;
 				const message = `[NUDGE from ${opts.from}] ${rawMessage}`;
 
-				// Resolve project root
-				const { resolveProjectRoot } = await import("../config.ts");
-				const projectRoot = await resolveProjectRoot(process.cwd());
+				// Resolve context (respects --project flag)
+				const ctx = await resolveContext({ project: extractProjectFlag() });
 
-				const result = await nudgeAgent(projectRoot, agentName, message, opts.force ?? false);
+				const result = await nudgeAgent(
+					ctx.projectRoot,
+					agentName,
+					message,
+					opts.force ?? false,
+					ctx.dbRoot,
+				);
 
 				if (opts.json) {
 					jsonOutput("nudge", { agentName, delivered: result.delivered, reason: result.reason });
