@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { existsSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import type { AgentSession } from "../types.ts";
 import { WORKSPACE_CONFIG_FILENAME, WORKSPACE_DIR } from "../workspace/config.ts";
 import {
+	createWorkspaceCommand,
 	serializeWorkspaceYaml,
 	startWorkspace,
 	type WorkspaceDeps,
@@ -587,6 +589,264 @@ describe("workspaceInitCommand mail-check-state.json", () => {
 
 		const content = await Bun.file(join(dir, WORKSPACE_DIR, "mail-check-state.json")).text();
 		expect(content).toBe("{}");
+	});
+});
+
+// === BUG 1: workspace status --json — Commander integration ===
+
+describe("Commander integration — workspace status --json", () => {
+	it("workspace status --json produces valid JSON via parseAsync", async () => {
+		const wsDir = await makeTempDir();
+		const repo = await makeTempGitRepo();
+
+		await setupWorkspace(
+			wsDir,
+			serializeWorkspaceYaml("cmd-test-ws", [
+				{ name: "proj", root: repo, canonicalBranch: "main" },
+			]),
+		);
+		process.chdir(wsDir);
+
+		const lines: string[] = [];
+		const orig = process.stdout.write.bind(process.stdout);
+		process.stdout.write = (s: string) => {
+			lines.push(s);
+			return true;
+		};
+
+		try {
+			const cmd = createWorkspaceCommand();
+			// Prevent Commander from calling process.exit on errors
+			cmd.exitOverride();
+			await cmd.parseAsync(["status", "--json"], { from: "user" });
+		} finally {
+			process.stdout.write = orig;
+		}
+
+		const output = lines.join("");
+		const parsed = JSON.parse(output) as {
+			workspace: string;
+			projects: Array<{ name: string }>;
+		};
+		expect(parsed.workspace).toBe("cmd-test-ws");
+		expect(parsed.projects).toHaveLength(1);
+		expect(parsed.projects[0]?.name).toBe("proj");
+	});
+
+	it("workspace status without --json produces human text via parseAsync", async () => {
+		const wsDir = await makeTempDir();
+		await setupWorkspace(wsDir, serializeWorkspaceYaml("human-ws", []));
+		process.chdir(wsDir);
+
+		const lines: string[] = [];
+		const orig = process.stdout.write.bind(process.stdout);
+		process.stdout.write = (s: string) => {
+			lines.push(s);
+			return true;
+		};
+
+		try {
+			const cmd = createWorkspaceCommand();
+			cmd.exitOverride();
+			await cmd.parseAsync(["status"], { from: "user" });
+		} finally {
+			process.stdout.write = orig;
+		}
+
+		const output = lines.join("");
+		expect(output).toContain("Workspace: human-ws");
+		expect(() => JSON.parse(output)).toThrow();
+	});
+});
+
+// === BUG 2: loadConfigOrEmpty respects maxDepth/maxConcurrentTotal ===
+
+describe("loadConfigOrEmpty maxDepth/maxConcurrentTotal for empty-projects workspace", () => {
+	it("respects custom maxDepth in empty-projects workspace", async () => {
+		const wsDir = await makeTempDir();
+		await setupWorkspace(
+			wsDir,
+			`# Overstory workspace configuration\nname: depth-ws\nprojects: []\nmaxDepth: 5\n`,
+		);
+		process.chdir(wsDir);
+
+		const lines: string[] = [];
+		const orig = process.stdout.write.bind(process.stdout);
+		process.stdout.write = (s: string) => {
+			lines.push(s);
+			return true;
+		};
+
+		try {
+			await workspaceStatusCommand({ json: true });
+		} finally {
+			process.stdout.write = orig;
+		}
+
+		const parsed = JSON.parse(lines.join("")) as { maxDepth: number };
+		expect(parsed.maxDepth).toBe(5);
+	});
+
+	it("respects custom maxConcurrentTotal in empty-projects workspace", async () => {
+		const wsDir = await makeTempDir();
+		await setupWorkspace(
+			wsDir,
+			`# Overstory workspace configuration\nname: concurrent-ws\nprojects: []\nmaxConcurrentTotal: 10\n`,
+		);
+		process.chdir(wsDir);
+
+		const lines: string[] = [];
+		const orig = process.stdout.write.bind(process.stdout);
+		process.stdout.write = (s: string) => {
+			lines.push(s);
+			return true;
+		};
+
+		try {
+			await workspaceStatusCommand({ json: true });
+		} finally {
+			process.stdout.write = orig;
+		}
+
+		const parsed = JSON.parse(lines.join("")) as { maxConcurrentTotal: number };
+		expect(parsed.maxConcurrentTotal).toBe(10);
+	});
+
+	it("throws on maxDepth < 3 in empty-projects workspace", async () => {
+		const wsDir = await makeTempDir();
+		await setupWorkspace(
+			wsDir,
+			`# Overstory workspace configuration\nname: bad-depth-ws\nprojects: []\nmaxDepth: 2\n`,
+		);
+		process.chdir(wsDir);
+
+		await expect(workspaceStatusCommand({})).rejects.toThrow(/maxDepth must be >= 3/);
+	});
+
+	it("throws on maxConcurrentTotal <= 0 in empty-projects workspace", async () => {
+		const wsDir = await makeTempDir();
+		await setupWorkspace(
+			wsDir,
+			`# Overstory workspace configuration\nname: bad-concurrent-ws\nprojects: []\nmaxConcurrentTotal: 0\n`,
+		);
+		process.chdir(wsDir);
+
+		await expect(workspaceStatusCommand({})).rejects.toThrow(
+			/maxConcurrentTotal must be a positive integer/,
+		);
+	});
+
+	it("uses defaults (maxDepth=4, maxConcurrentTotal=25) when not specified", async () => {
+		const wsDir = await makeTempDir();
+		await setupWorkspace(wsDir, serializeWorkspaceYaml("default-ws", []));
+		process.chdir(wsDir);
+
+		const lines: string[] = [];
+		const orig = process.stdout.write.bind(process.stdout);
+		process.stdout.write = (s: string) => {
+			lines.push(s);
+			return true;
+		};
+
+		try {
+			await workspaceStatusCommand({ json: true });
+		} finally {
+			process.stdout.write = orig;
+		}
+
+		const parsed = JSON.parse(lines.join("")) as {
+			maxDepth: number;
+			maxConcurrentTotal: number;
+		};
+		expect(parsed.maxDepth).toBe(4);
+		expect(parsed.maxConcurrentTotal).toBe(25);
+	});
+});
+
+// === BUG 3: workspace status tolerates deleted project directories ===
+
+describe("workspaceStatusCommand — deleted project directory", () => {
+	it("does not crash when project root is deleted; shows [-] marker", async () => {
+		const wsDir = await makeTempDir();
+		const repo = await makeTempGitRepo();
+
+		await setupWorkspace(
+			wsDir,
+			serializeWorkspaceYaml("deleted-dir-ws", [
+				{ name: "gone-project", root: repo, canonicalBranch: "main" },
+			]),
+		);
+		process.chdir(wsDir);
+
+		// Delete the repo directory to simulate a missing project
+		rmSync(repo, { recursive: true, force: true });
+
+		const lines: string[] = [];
+		const orig = process.stdout.write.bind(process.stdout);
+		process.stdout.write = (s: string) => {
+			lines.push(s);
+			return true;
+		};
+
+		try {
+			// Must NOT throw
+			await expect(workspaceStatusCommand({})).resolves.toBeUndefined();
+		} finally {
+			process.stdout.write = orig;
+		}
+
+		const output = lines.join("");
+		expect(output).toContain("gone-project");
+		// [-] marker: hasOverstory=false since dir doesn't exist
+		expect(output).toContain("[-]");
+	});
+
+	it("status --json includes project with hasOverstory=false for deleted directory", async () => {
+		const wsDir = await makeTempDir();
+		const repo = await makeTempGitRepo();
+
+		await setupWorkspace(
+			wsDir,
+			serializeWorkspaceYaml("deleted-json-ws", [
+				{ name: "missing-proj", root: repo, canonicalBranch: "main" },
+			]),
+		);
+		process.chdir(wsDir);
+
+		rmSync(repo, { recursive: true, force: true });
+
+		const lines: string[] = [];
+		const orig = process.stdout.write.bind(process.stdout);
+		process.stdout.write = (s: string) => {
+			lines.push(s);
+			return true;
+		};
+
+		try {
+			await expect(workspaceStatusCommand({ json: true })).resolves.toBeUndefined();
+		} finally {
+			process.stdout.write = orig;
+		}
+
+		const parsed = JSON.parse(lines.join("")) as {
+			projects: Array<{ name: string; hasOverstory: boolean }>;
+		};
+		expect(parsed.projects).toHaveLength(1);
+		expect(parsed.projects[0]?.name).toBe("missing-proj");
+		expect(parsed.projects[0]?.hasOverstory).toBe(false);
+	});
+});
+
+// === BUG 4: workspaceInitCommand creates metrics.db ===
+
+describe("workspaceInitCommand — metrics.db creation", () => {
+	it("creates metrics.db in workspace dir", async () => {
+		const dir = await makeTempDir();
+		process.chdir(dir);
+
+		await workspaceInitCommand({ name: "metrics-ws" });
+
+		expect(existsSync(join(dir, WORKSPACE_DIR, "metrics.db"))).toBe(true);
 	});
 });
 

@@ -14,6 +14,7 @@ import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import type { ReadyState } from "../runtimes/types.ts";
+import { createMetricsStore } from "../metrics/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, WorkspaceProject } from "../types.ts";
 import {
@@ -116,10 +117,32 @@ async function loadConfigOrEmpty(wsRoot: string): Promise<{
 	if (/projects:\s*\[\]/.test(rawText)) {
 		const nameMatch = rawText.match(/^name:\s*(.+)$/m);
 		const workspaceName = nameMatch?.[1]?.trim() ?? basename(wsRoot);
-		return { workspaceName, projects: [], maxConcurrentTotal: 25, maxDepth: 4 };
+
+		// BUG 2: Parse optional settings from raw YAML text instead of hardcoding
+		const depthMatch = rawText.match(/^maxDepth:\s*(\d+)$/m);
+		const concurrentMatch = rawText.match(/^maxConcurrentTotal:\s*(\d+)$/m);
+		const maxDepth = depthMatch?.[1] !== undefined ? Number.parseInt(depthMatch[1], 10) : 4;
+		const maxConcurrentTotal =
+			concurrentMatch?.[1] !== undefined ? Number.parseInt(concurrentMatch[1], 10) : 25;
+
+		if (maxDepth < 3) {
+			throw new ValidationError(
+				"maxDepth must be >= 3 (workspace needs workspace -> coordinator -> lead -> specialist)",
+				{ field: "maxDepth", value: maxDepth },
+			);
+		}
+		if (maxConcurrentTotal <= 0) {
+			throw new ValidationError("maxConcurrentTotal must be a positive integer", {
+				field: "maxConcurrentTotal",
+				value: maxConcurrentTotal,
+			});
+		}
+
+		return { workspaceName, projects: [], maxConcurrentTotal, maxDepth };
 	}
 
-	const config = await loadWorkspaceConfig(wsRoot);
+	// BUG 3: Use lenient mode so missing project dirs don't crash status/list/start
+	const config = await loadWorkspaceConfig(wsRoot, { lenient: true });
 	return {
 		workspaceName: config.name,
 		projects: config.projects,
@@ -183,6 +206,11 @@ pending-nudges/
 
 	await Bun.write(join(workspaceDir, "mail-check-state.json"), "{}");
 	process.stdout.write(`  \u2713 Created mail-check-state.json\n`);
+
+	// BUG 4: Create metrics.db eagerly (other DBs are lazy, but metrics may be expected)
+	const metricsDb = createMetricsStore(join(workspaceDir, "metrics.db"));
+	metricsDb.close();
+	process.stdout.write(`  \u2713 Created metrics.db\n`);
 
 	process.stdout.write("\nDone.\n");
 	process.stdout.write("  Next: run `ov workspace add <path>` to register projects.\n");
@@ -754,8 +782,11 @@ export function createWorkspaceCommand(deps: WorkspaceDeps = {}): Command {
 		.command("status")
 		.description("Show workspace status")
 		.option("--json", "JSON output")
-		.action(async (opts: WorkspaceStatusOptions) => {
-			await workspaceStatusCommand(opts);
+		.action(async (_opts: WorkspaceStatusOptions, cmd: Command) => {
+			// BUG 1: Use cmd.opts() to ensure --json is picked up correctly when
+			// workspace is nested under program (Commander option routing can bypass
+			// the `opts` first parameter in deeply nested command chains)
+			await workspaceStatusCommand(cmd.opts() as WorkspaceStatusOptions);
 		});
 
 	workspace

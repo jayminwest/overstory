@@ -160,7 +160,7 @@ function validateAndBuild(
 				value: absRoot,
 			});
 		}
-		if (!lenient && !existsSync(resolve(absRoot, ".git"))) {
+	if (!lenient && !existsSync(resolve(absRoot, ".git"))) {
 			throw new ValidationError(
 				`projects[${i}].root is not a git repository (no .git found): '${absRoot}'`,
 				{ field: `projects[${i}].root`, value: absRoot },
