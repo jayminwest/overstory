@@ -488,8 +488,8 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		: [];
 
 	// 1. Load config
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
+	const ctx = await resolveContext({ project: opts.project, requireProject: true });
+	const config = await loadConfig(ctx.projectRoot);
 	const resolvedBackend = await resolveBackend(config.taskTracker.backend, config.project.root);
 
 	// 2. Validate depth limit
@@ -507,8 +507,8 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 	// 3. Load manifest and validate capability
 	const manifestLoader = createManifestLoader(
-		join(config.project.root, config.agents.manifestPath),
-		join(config.project.root, config.agents.baseDir),
+		join(ctx.projectRoot, config.agents.manifestPath),
+		join(ctx.projectRoot, config.agents.baseDir),
 	);
 	const manifest = await manifestLoader.load();
 
@@ -521,7 +521,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 	}
 
 	// 4. Resolve or create run_id for this spawn
-	const overstoryDir = join(config.project.root, ".overstory");
+	const overstoryDir = ctx.overstoryDir;
 	const currentRunPath = join(overstoryDir, "current-run.txt");
 	let runId: string;
 
@@ -530,10 +530,10 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		runId = (await currentRunFile.text()).trim();
 	} else {
 		runId = `run-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-		const runStore = createRunStore(join(overstoryDir, "sessions.db"));
+		const runStore = createRunStore(join(ctx.dbRoot, "sessions.db"));
 		try {
 			runStore.createRun({
-				projectId: "_default",
+				projectId: ctx.projectId,
 				id: runId,
 				startedAt: new Date().toISOString(),
 				coordinatorSessionId: null,
@@ -547,7 +547,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 	// 4b. Check per-run session limit
 	if (config.agents.maxSessionsPerRun > 0) {
-		const runCheckStore = createRunStore(join(overstoryDir, "sessions.db"));
+		const runCheckStore = createRunStore(join(ctx.dbRoot, "sessions.db"));
 		try {
 			const run = runCheckStore.getRun(runId);
 			if (run && checkRunSessionLimit(config.agents.maxSessionsPerRun, run.agentCount)) {
@@ -563,7 +563,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 	}
 
 	// 5. Check name uniqueness and concurrency limit against active sessions
-	const { store } = openSessionStore(overstoryDir);
+	const { store } = openSessionStore(ctx.dbRoot);
 	try {
 		const activeSessions = store.getActive();
 		if (activeSessions.length >= config.agents.maxConcurrent) {
@@ -635,7 +635,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		}
 
 		// 6. Validate task exists and is in a workable state (if tracker enabled)
-		const tracker = createTrackerClient(resolvedBackend, config.project.root);
+			const tracker = createTrackerClient(resolvedBackend, ctx.projectRoot);
 		if (config.taskTracker.enabled && !skipTaskCheck) {
 			let issue: TrackerIssue;
 			try {
@@ -656,30 +656,30 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 		}
 
-		// 7. Create worktree
-		const worktreeBaseDir = join(config.project.root, config.worktrees.baseDir);
-		await mkdir(worktreeBaseDir, { recursive: true });
+			// 7. Create worktree
+			const worktreeBaseDir = join(ctx.projectRoot, config.worktrees.baseDir);
+			await mkdir(worktreeBaseDir, { recursive: true });
 
-		const { path: worktreePath, branch: branchName } = await createWorktree({
-			repoRoot: config.project.root,
-			baseDir: worktreeBaseDir,
-			agentName: name,
-			baseBranch: config.project.canonicalBranch,
-			taskId: taskId,
-		});
+			const { path: worktreePath, branch: branchName } = await createWorktree({
+				repoRoot: ctx.projectRoot,
+				baseDir: worktreeBaseDir,
+				agentName: name,
+				baseBranch: config.project.canonicalBranch,
+				taskId: taskId,
+			});
 
 		// 8. Generate + write overlay CLAUDE.md
-		const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
+		const agentDefPath = join(ctx.projectRoot, config.agents.baseDir, agentDef.file);
 		const baseDefinition = await Bun.file(agentDefPath).text();
 
 		// 8a. Fetch file-scoped mulch expertise if mulch is enabled and files are provided
-		let mulchExpertise: string | undefined;
-		if (config.mulch.enabled && fileScope.length > 0) {
-			try {
-				const mulch = createMulchClient(config.project.root);
-				mulchExpertise = await mulch.prime(undefined, undefined, {
-					files: fileScope,
-					sortByScore: true,
+			let mulchExpertise: string | undefined;
+			if (config.mulch.enabled && fileScope.length > 0) {
+				try {
+					const mulch = createMulchClient(ctx.projectRoot);
+					mulchExpertise = await mulch.prime(undefined, undefined, {
+						files: fileScope,
+						sortByScore: true,
 				});
 			} catch {
 				// Non-fatal: mulch expertise is supplementary context
@@ -717,16 +717,16 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		// Resolve runtime before writeOverlay so we can pass runtime.instructionPath
 		const runtime = getRuntime(opts.runtime, config);
 
-		try {
-			await writeOverlay(worktreePath, overlayConfig, config.project.root, runtime.instructionPath);
-		} catch (err) {
-			// Clean up the orphaned worktree created in step 7 (overstory-p4st)
 			try {
-				const cleanupProc = Bun.spawn(["git", "worktree", "remove", "--force", worktreePath], {
-					cwd: config.project.root,
-					stdout: "pipe",
-					stderr: "pipe",
-				});
+				await writeOverlay(worktreePath, overlayConfig, ctx.projectRoot, runtime.instructionPath);
+			} catch (err) {
+				// Clean up the orphaned worktree created in step 7 (overstory-p4st)
+				try {
+					const cleanupProc = Bun.spawn(["git", "worktree", "remove", "--force", worktreePath], {
+						cwd: ctx.projectRoot,
+						stdout: "pipe",
+						stderr: "pipe",
+					});
 				await cleanupProc.exited;
 			} catch {
 				// Best-effort cleanup; the original error is more important
@@ -755,7 +755,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			parentAgent,
 			instructionPath: runtime.instructionPath,
 		});
-		const mailStore = createMailStore(join(overstoryDir, "mail.db"));
+		const mailStore = createMailStore(join(ctx.dbRoot, "mail.db"));
 		try {
 			const mailClient = createMailClient(mailStore);
 			mailClient.send({
@@ -780,7 +780,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		}
 
 		// 11. Create agent identity (if new)
-		const identityBaseDir = join(config.project.root, ".overstory", "agents");
+		const identityBaseDir = join(overstoryDir, "agents");
 		const existingIdentity = await loadIdentity(identityBaseDir, name);
 		if (!existingIdentity) {
 			await createIdentity(identityBaseDir, {
@@ -854,10 +854,10 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			transcriptPath: null,
 		};
 
-		store.upsert(session);
+		store.upsert(session, ctx.projectId);
 
 		// Increment agent count for the run
-		const runStore = createRunStore(join(overstoryDir, "sessions.db"));
+		const runStore = createRunStore(join(ctx.dbRoot, "sessions.db"));
 		try {
 			runStore.incrementAgentCount(runId);
 		} finally {

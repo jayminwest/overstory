@@ -296,15 +296,18 @@ export async function workspaceRemoveCommand(name: string): Promise<void> {
 		throw new ValidationError(`Project not found: '${name}'`, { field: "name" });
 	}
 
-	// C4: Guard against removing a project with active agents
+	// C4: Guard against removing a project with active agents.
+	// In workspace mode, all sessions live in the shared .overstory-workspace/
+	// session store, not in each project's local .overstory/. Filter by projectId
+	// so we only block removal when agents for THIS project are still running.
 	const project = config.projects[idx];
-	if (project && existsSync(join(project.root, ".overstory"))) {
-		const projectOvDir = join(project.root, ".overstory");
-		const { store } = openSessionStore(projectOvDir);
+	if (project) {
+		const dbRoot = join(wsRoot, WORKSPACE_DIR);
+		const { store } = openSessionStore(dbRoot);
 		try {
 			const sessions = store.getAll();
 			const activeSessions = sessions.filter(
-				(s) => s.state !== "completed" && s.state !== "zombie",
+				(s) => s.state !== "completed" && s.state !== "zombie" && s.projectId === name,
 			);
 			if (activeSessions.length > 0) {
 				throw new ValidationError(
@@ -617,7 +620,7 @@ export async function startWorkspace(
 				transcriptPath: null,
 			};
 
-		store.upsert(session);
+		store.upsert(session, WORKSPACE_PROJECT_ID);
 
 		// Wait for Claude Code TUI to render before sending input
 			const tuiReady = await tmux.waitForTuiReady(WORKSPACE_TMUX_SESSION, (content) => {

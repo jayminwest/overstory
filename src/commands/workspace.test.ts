@@ -482,9 +482,6 @@ describe("workspaceRemoveCommand active session guard", () => {
 		const wsDir = await makeTempDir();
 		const repo = await makeTempGitRepo();
 
-		// Create .overstory dir in the repo (needed for the project's session store)
-		await mkdir(join(repo, ".overstory"), { recursive: true });
-
 		await setupWorkspace(
 			wsDir,
 			serializeWorkspaceYaml("test-ws", [
@@ -493,8 +490,11 @@ describe("workspaceRemoveCommand active session guard", () => {
 		);
 		process.chdir(wsDir);
 
-		// Seed an active session into the project's session store
-		const { store } = openSessionStore(join(repo, ".overstory"));
+		// Seed an active session into the shared workspace session store.
+		// In workspace mode, all sessions live in .overstory-workspace/, not
+		// in each project's local .overstory/. Pass the project name as the
+		// second arg to upsert() so it is stored with the correct project_id.
+		const { store } = openSessionStore(join(wsDir, WORKSPACE_DIR));
 		try {
 			const activeSession: AgentSession = {
 				id: "session-123-builder",
@@ -509,13 +509,13 @@ describe("workspaceRemoveCommand active session guard", () => {
 				parentAgent: null,
 				depth: 1,
 				runId: null,
-				projectId: "_default",
+				projectId: "active-project",
 				startedAt: new Date().toISOString(),
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
 			};
-			store.upsert(activeSession);
+			store.upsert(activeSession, "active-project");
 		} finally {
 			store.close();
 		}
@@ -529,8 +529,6 @@ describe("workspaceRemoveCommand active session guard", () => {
 		const wsDir = await makeTempDir();
 		const repo = await makeTempGitRepo();
 
-		await mkdir(join(repo, ".overstory"), { recursive: true });
-
 		await setupWorkspace(
 			wsDir,
 			serializeWorkspaceYaml("test-ws", [
@@ -539,8 +537,8 @@ describe("workspaceRemoveCommand active session guard", () => {
 		);
 		process.chdir(wsDir);
 
-		// Seed completed and zombie sessions
-		const { store } = openSessionStore(join(repo, ".overstory"));
+		// Seed a completed session into the shared workspace session store
+		const { store } = openSessionStore(join(wsDir, WORKSPACE_DIR));
 		try {
 			const completedSession: AgentSession = {
 				id: "session-1-builder",
@@ -555,13 +553,13 @@ describe("workspaceRemoveCommand active session guard", () => {
 				parentAgent: null,
 				depth: 1,
 				runId: null,
-				projectId: "_default",
+				projectId: "done-project",
 				startedAt: new Date().toISOString(),
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
 			};
-			store.upsert(completedSession);
+			store.upsert(completedSession, "done-project");
 		} finally {
 			store.close();
 		}

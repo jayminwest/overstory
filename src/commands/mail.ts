@@ -18,6 +18,7 @@ import { createMailStore } from "../mail/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { MailMessage, MailMessageType } from "../types.ts";
 import { MAIL_MESSAGE_TYPES } from "../types.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import { resolveContext } from "../workspace/resolver.ts";
 
 /**
@@ -291,7 +292,7 @@ async function handleSend(
 	opts: SendOpts,
 	root: string,
 	dbRoot: string,
-	projectId: string,
+	projectId: string | undefined,
 ): Promise<void> {
 	const cwd = root;
 	const { to, subject, body } = opts;
@@ -383,7 +384,7 @@ async function handleSend(
 								toolArgs: null,
 								toolDurationMs: null,
 								level: "info",
-								projectId,
+								projectId: projectId ?? "_workspace",
 								data: JSON.stringify({
 									to: recipient,
 									subject,
@@ -466,7 +467,7 @@ async function handleSend(
 					toolArgs: null,
 					toolDurationMs: null,
 					level: "info",
-					projectId,
+					projectId: projectId ?? "_workspace",
 					data: JSON.stringify({ to, subject, type, priority, messageId: id }),
 				});
 			} finally {
@@ -557,7 +558,11 @@ async function handleSend(
 }
 
 /** overstory mail check */
-async function handleCheck(opts: CheckOpts, dbRoot: string, projectId: string): Promise<void> {
+async function handleCheck(
+	opts: CheckOpts,
+	dbRoot: string,
+	projectId: string | undefined,
+): Promise<void> {
 	const agent = opts.agent ?? "orchestrator";
 	const inject = opts.inject ?? false;
 	const json = opts.json ?? false;
@@ -628,7 +633,7 @@ async function handleCheck(opts: CheckOpts, dbRoot: string, projectId: string): 
 }
 
 /** overstory mail list */
-function handleList(opts: ListOpts, dbRoot: string, projectId: string): void {
+function handleList(opts: ListOpts, dbRoot: string, projectId: string | undefined): void {
 	const from = opts.from;
 	// --to takes precedence over --agent (agent is an alias for recipient filtering)
 	const to = opts.to ?? opts.agent;
@@ -672,7 +677,12 @@ function handleRead(id: string, dbRoot: string): void {
 }
 
 /** overstory mail reply */
-function handleReply(id: string, opts: ReplyOpts, dbRoot: string, projectId: string): void {
+function handleReply(
+	id: string,
+	opts: ReplyOpts,
+	dbRoot: string,
+	projectId: string | undefined,
+): void {
 	const body = opts.body;
 	const from = opts.agent ?? opts.from ?? "orchestrator";
 
@@ -744,8 +754,11 @@ export async function mailCommand(args: string[]): Promise<void> {
 	const ctx = await resolveContext({ project: projectFlag });
 	const root = ctx.projectRoot;
 	const dbRoot = ctx.dbRoot;
-	const projectId = ctx.projectId;
-
+	// When at workspace root with no --project flag, ctx.projectId is WORKSPACE_PROJECT_ID
+	// (_workspace). No agents have that projectId — agents use project-specific IDs.
+	// Pass undefined so group address resolution (resolveGroupAddress) falls through
+	// to all-agents mode, and check/list show messages across all projects.
+	const resolvedProjectId = ctx.projectId === WORKSPACE_PROJECT_ID ? undefined : ctx.projectId;
 	const program = new Command();
 	program.name("ov mail").description("Agent messaging system").exitOverride();
 
@@ -763,7 +776,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--json", "Output as JSON")
 		.exitOverride()
 		.action(async (opts: SendOpts) => {
-			await handleSend(opts, root, dbRoot, projectId);
+			await handleSend(opts, root, dbRoot, resolvedProjectId);
 		});
 
 	program
@@ -775,7 +788,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--debounce <ms>", "Debounce interval in milliseconds")
 		.exitOverride()
 		.action(async (opts: CheckOpts) => {
-			await handleCheck(opts, dbRoot, projectId);
+			await handleCheck(opts, dbRoot, resolvedProjectId);
 		});
 
 	program
@@ -788,7 +801,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--json", "Output as JSON")
 		.exitOverride()
 		.action((opts: ListOpts) => {
-			handleList(opts, dbRoot, projectId);
+			handleList(opts, dbRoot, resolvedProjectId);
 		});
 
 	program
@@ -810,7 +823,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--json", "Output as JSON")
 		.exitOverride()
 		.action((id: string, opts: ReplyOpts) => {
-			handleReply(id, opts, dbRoot, projectId);
+			handleReply(id, opts, dbRoot, resolvedProjectId);
 		});
 
 	program
