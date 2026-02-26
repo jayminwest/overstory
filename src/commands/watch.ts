@@ -14,6 +14,7 @@ import { printError, printHint, printSuccess } from "../logging/color.ts";
 import type { HealthCheck } from "../types.ts";
 import { startDaemon } from "../watchdog/daemon.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 /**
  * Format a health check for display.
@@ -115,9 +116,14 @@ async function resolveOverstoryBin(): Promise<string> {
 /**
  * Core implementation for the watch command.
  */
-async function runWatch(opts: { interval?: string; background?: boolean }): Promise<void> {
+async function runWatch(opts: {
+	interval?: string;
+	background?: boolean;
+	project?: string;
+}): Promise<void> {
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const ctx = await resolveContext({ project: opts.project });
 
 	const intervalMs = opts.interval
 		? Number.parseInt(opts.interval, 10)
@@ -125,7 +131,7 @@ async function runWatch(opts: { interval?: string; background?: boolean }): Prom
 
 	const staleThresholdMs = config.watchdog.staleThresholdMs;
 	const zombieThresholdMs = config.watchdog.zombieThresholdMs;
-	const pidFilePath = join(config.project.root, ".overstory", "watchdog.pid");
+	const pidFilePath = join(ctx.projectRoot, ".overstory", "watchdog.pid");
 
 	if (opts.background) {
 		// Check if a watchdog is already running
@@ -181,7 +187,7 @@ async function runWatch(opts: { interval?: string; background?: boolean }): Prom
 	await writePidFile(pidFilePath, process.pid);
 
 	const { stop } = startDaemon({
-		root: config.project.root,
+		root: ctx.projectRoot,
 		intervalMs,
 		staleThresholdMs,
 		zombieThresholdMs,
@@ -212,8 +218,9 @@ export function createWatchCommand(): Command {
 		.description("Start Tier 0 mechanical watchdog daemon")
 		.option("--interval <ms>", "Health check interval in milliseconds")
 		.option("--background", "Daemonize (run in background)")
-		.action(async (opts: { interval?: string; background?: boolean }) => {
-			await runWatch(opts);
+		.action(async (opts: { interval?: string; background?: boolean }, cmd: Command) => {
+			const globalOpts = cmd.optsWithGlobals();
+			await runWatch({ ...opts, project: globalOpts.project as string | undefined });
 		});
 }
 

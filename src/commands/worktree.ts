@@ -15,6 +15,7 @@ import { printHint, printSuccess, printWarning } from "../logging/color.ts";
 import { createMailStore } from "../mail/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import {
 	isBranchMerged,
 	listWorktrees,
@@ -26,10 +27,9 @@ import { isSessionAlive, killSession } from "../worktree/tmux.ts";
 /**
  * Handle `ov worktree list`.
  */
-async function handleList(root: string, json: boolean): Promise<void> {
+async function handleList(root: string, dbRoot: string, json: boolean): Promise<void> {
 	const worktrees = await listWorktrees(root);
-	const overstoryDir = join(root, ".overstory");
-	const { store } = openSessionStore(overstoryDir);
+	const { store } = openSessionStore(dbRoot);
 	let sessions: AgentSession[];
 	try {
 		sessions = store.getAll();
@@ -78,14 +78,14 @@ async function handleList(root: string, json: boolean): Promise<void> {
 async function handleClean(
 	opts: { all: boolean; force: boolean; completedOnly: boolean },
 	root: string,
+	dbRoot: string,
 	json: boolean,
 	canonicalBranch: string,
 ): Promise<void> {
 	const { force, completedOnly } = opts;
 
 	const worktrees = await listWorktrees(root);
-	const overstoryDir = join(root, ".overstory");
-	const { store } = openSessionStore(overstoryDir);
+	const { store } = openSessionStore(dbRoot);
 
 	let sessions: AgentSession[];
 	try {
@@ -198,7 +198,7 @@ async function handleClean(
 		// Purge mail for cleaned agents
 		let mailPurged = 0;
 		if (cleaned.length > 0) {
-			const mailDbPath = join(root, ".overstory", "mail.db");
+			const mailDbPath = join(dbRoot, "mail.db");
 			const mailDbFile = Bun.file(mailDbPath);
 			if (await mailDbFile.exists()) {
 				const mailStore = createMailStore(mailDbPath);
@@ -299,10 +299,12 @@ export function createWorktreeCommand(): Command {
 		.command("list")
 		.description("List worktrees with agent status")
 		.option("--json", "Output as JSON")
-		.action(async (opts: { json?: boolean }) => {
+		.action(async (opts: { json?: boolean }, cmd: Command) => {
 			const cwd = process.cwd();
-			const config = await loadConfig(cwd);
-			await handleList(config.project.root, opts.json ?? false);
+			await loadConfig(cwd);
+			const globalOpts = cmd.optsWithGlobals();
+			const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
+			await handleList(ctx.projectRoot, ctx.dbRoot, opts.json ?? false);
 		});
 
 	cmd
@@ -313,9 +315,14 @@ export function createWorktreeCommand(): Command {
 		.option("--force", "Delete even if branches are unmerged")
 		.option("--json", "Output as JSON")
 		.action(
-			async (opts: { completed?: boolean; all?: boolean; force?: boolean; json?: boolean }) => {
+			async (
+				opts: { completed?: boolean; all?: boolean; force?: boolean; json?: boolean },
+				cmd: Command,
+			) => {
 				const cwd = process.cwd();
 				const config = await loadConfig(cwd);
+				const globalOpts = cmd.optsWithGlobals();
+				const ctx = await resolveContext({ project: globalOpts.project as string | undefined });
 				const all = opts.all ?? false;
 				await handleClean(
 					{
@@ -323,7 +330,8 @@ export function createWorktreeCommand(): Command {
 						force: opts.force ?? false,
 						completedOnly: opts.completed ?? !all,
 					},
-					config.project.root,
+					ctx.projectRoot,
+					ctx.dbRoot,
 					opts.json ?? false,
 					config.project.canonicalBranch,
 				);
