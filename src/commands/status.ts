@@ -7,7 +7,6 @@
 
 import { join } from "node:path";
 import { Command } from "commander";
-import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { accent, color } from "../logging/color.ts";
@@ -19,6 +18,7 @@ import { createMetricsStore } from "../metrics/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { evaluateHealth } from "../watchdog/health.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 import { listWorktrees } from "../worktree/manager.ts";
 import { listSessions } from "../worktree/tmux.ts";
 
@@ -111,8 +111,9 @@ export async function gatherStatus(
 	agentName = "orchestrator",
 	verbose = false,
 	runId?: string | null,
+	dbRoot?: string,
 ): Promise<StatusData> {
-	const overstoryDir = join(root, ".overstory");
+	const overstoryDir = dbRoot ?? join(root, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 
 	let sessions: AgentSession[];
@@ -148,11 +149,11 @@ export async function gatherStatus(
 			}
 		}
 
-		let unreadMailCount = 0;
-		let mailStore: ReturnType<typeof createMailStore> | null = null;
-		try {
-			const mailDbPath = join(root, ".overstory", "mail.db");
-			const mailFile = Bun.file(mailDbPath);
+			let unreadMailCount = 0;
+			let mailStore: ReturnType<typeof createMailStore> | null = null;
+			try {
+				const mailDbPath = join(overstoryDir, "mail.db");
+				const mailFile = Bun.file(mailDbPath);
 			if (await mailFile.exists()) {
 				mailStore = createMailStore(mailDbPath);
 				const unread = mailStore.getAll({ to: agentName, unread: true });
@@ -162,20 +163,20 @@ export async function gatherStatus(
 			// mail db might not exist
 		}
 
-		let mergeQueueCount = 0;
-		try {
-			const queuePath = join(root, ".overstory", "merge-queue.db");
-			const queue = createMergeQueue(queuePath);
+			let mergeQueueCount = 0;
+			try {
+				const queuePath = join(overstoryDir, "merge-queue.db");
+				const queue = createMergeQueue(queuePath);
 			mergeQueueCount = queue.list("pending").length;
 			queue.close();
 		} catch {
 			// queue might not exist
 		}
 
-		let recentMetricsCount = 0;
-		try {
-			const metricsDbPath = join(root, ".overstory", "metrics.db");
-			const metricsFile = Bun.file(metricsDbPath);
+			let recentMetricsCount = 0;
+			try {
+				const metricsDbPath = join(overstoryDir, "metrics.db");
+				const metricsFile = Bun.file(metricsDbPath);
 			if (await metricsFile.exists()) {
 				const metricsStore = createMetricsStore(metricsDbPath);
 				recentMetricsCount = metricsStore.countSessions();
@@ -186,10 +187,10 @@ export async function gatherStatus(
 		}
 
 		let verboseDetails: Record<string, VerboseAgentDetail> | undefined;
-		if (verbose && sessions.length > 0) {
-			verboseDetails = {};
-			for (const session of sessions) {
-				const logsDir = join(root, ".overstory", "logs", session.agentName);
+			if (verbose && sessions.length > 0) {
+				verboseDetails = {};
+				for (const session of sessions) {
+					const logsDir = join(overstoryDir, "logs", session.agentName);
 
 				let lastMailSent: string | null = null;
 				let lastMailReceived: string | null = null;
@@ -306,6 +307,7 @@ interface StatusOpts {
 	all?: boolean;
 	interval?: string;
 	agent?: string;
+	project?: string;
 }
 
 async function executeStatus(opts: StatusOpts): Promise<void> {
@@ -324,10 +326,13 @@ async function executeStatus(opts: StatusOpts): Promise<void> {
 	}
 
 	const agentName = opts.agent ?? "orchestrator";
+	if (watch) {
+		process.stderr.write("⚠️  --watch is deprecated. Use 'ov dashboard' for live monitoring.\n\n");
+	}
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const root = config.project.root;
+	const ctx = await resolveContext({ project: opts.project });
+	const root = ctx.projectRoot;
+	const dbRoot = ctx.dbRoot;
 
 	let runId: string | null | undefined;
 	if (!all) {
@@ -336,14 +341,11 @@ async function executeStatus(opts: StatusOpts): Promise<void> {
 	}
 
 	if (watch) {
-		process.stderr.write(
-			"Warning: --watch is deprecated. Use 'ov dashboard' for live monitoring.\n\n",
-		);
 		// Polling loop (kept for one release cycle)
 		while (true) {
 			// Clear screen
 			process.stdout.write("\x1b[2J\x1b[H");
-			const data = await gatherStatus(root, agentName, verbose, runId);
+			const data = await gatherStatus(root, agentName, verbose, runId, dbRoot);
 			if (json) {
 				jsonOutput("status", data as unknown as Record<string, unknown>);
 			} else {
@@ -352,7 +354,7 @@ async function executeStatus(opts: StatusOpts): Promise<void> {
 			await Bun.sleep(interval);
 		}
 	} else {
-		const data = await gatherStatus(root, agentName, verbose, runId);
+		const data = await gatherStatus(root, agentName, verbose, runId, dbRoot);
 		if (json) {
 			jsonOutput("status", data as unknown as Record<string, unknown>);
 		} else {
@@ -370,8 +372,9 @@ export function createStatusCommand(): Command {
 		.option("--all", "Show sessions from all runs (default: current run only)")
 		.option("--watch", "(deprecated) Use 'ov dashboard' for live monitoring")
 		.option("--interval <ms>", "Poll interval for --watch in milliseconds (default: 3000)")
-		.action(async (opts: StatusOpts) => {
-			await executeStatus(opts);
+		.action(async (opts: StatusOpts, cmd: Command) => {
+			const globalOpts = cmd.optsWithGlobals();
+			await executeStatus({ ...opts, project: globalOpts.project as string | undefined });
 		});
 }
 
