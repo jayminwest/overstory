@@ -8,7 +8,6 @@
 
 import { join } from "node:path";
 import { Command } from "commander";
-import { resolveProjectRoot } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
@@ -19,6 +18,7 @@ import { createMailStore } from "../mail/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { MailMessage, MailMessageType } from "../types.ts";
 import { MAIL_MESSAGE_TYPES } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
 
 /**
  * Protocol message types that require immediate recipient attention.
@@ -66,11 +66,28 @@ function formatMessage(msg: MailMessage): string {
 }
 
 /**
- * Open a mail store connected to the project's mail.db.
- * The cwd must already be resolved to the canonical project root.
+ * Extract --project / -p flag from process.argv.
+ * The root CLI may parse flags before delegating into mailCommand().
  */
-function openStore(cwd: string) {
-	const dbPath = join(cwd, ".overstory", "mail.db");
+function extractProjectFlag(): string | undefined {
+	const args = process.argv;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--project" || arg === "-p") {
+			return args[i + 1];
+		}
+		if (arg?.startsWith("--project=")) {
+			return arg.slice("--project=".length);
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Open a mail store connected to mail.db under dbRoot.
+ */
+function openStore(dbRoot: string) {
+	const dbPath = join(dbRoot, "mail.db");
 	return createMailStore(dbPath);
 }
 
@@ -160,24 +177,24 @@ async function readAndClearPendingNudge(
 /**
  * Path to the mail check debounce state file.
  */
-function mailCheckStatePath(cwd: string): string {
-	return join(cwd, ".overstory", "mail-check-state.json");
+function mailCheckStatePath(dbRoot: string): string {
+	return join(dbRoot, "mail-check-state.json");
 }
 
 /**
  * Check if a mail check for this agent is within the debounce window.
  *
- * @param cwd - Project root directory
+ * @param dbRoot - Directory containing mail.db
  * @param agentName - Agent name
  * @param debounceMs - Debounce interval in milliseconds
  * @returns true if the last check was within the debounce window
  */
 async function isMailCheckDebounced(
-	cwd: string,
+	dbRoot: string,
 	agentName: string,
 	debounceMs: number,
 ): Promise<boolean> {
-	const statePath = mailCheckStatePath(cwd);
+	const statePath = mailCheckStatePath(dbRoot);
 	const file = Bun.file(statePath);
 	if (!(await file.exists())) {
 		return false;
@@ -198,11 +215,11 @@ async function isMailCheckDebounced(
 /**
  * Record a mail check timestamp for debounce tracking.
  *
- * @param cwd - Project root directory
+ * @param dbRoot - Directory containing mail.db
  * @param agentName - Agent name
  */
-async function recordMailCheck(cwd: string, agentName: string): Promise<void> {
-	const statePath = mailCheckStatePath(cwd);
+async function recordMailCheck(dbRoot: string, agentName: string): Promise<void> {
+	const statePath = mailCheckStatePath(dbRoot);
 	let state: Record<string, number> = {};
 	const file = Bun.file(statePath);
 	if (await file.exists()) {
@@ -218,12 +235,11 @@ async function recordMailCheck(cwd: string, agentName: string): Promise<void> {
 }
 
 /**
- * Open a mail client connected to the project's mail.db.
- * The cwd must already be resolved to the canonical project root.
+ * Open a mail client connected to mail.db under dbRoot.
  */
-function openClient(cwd: string) {
-	const store = openStore(cwd);
-	const client = createMailClient(store);
+function openClient(dbRoot: string, defaultProjectId?: string) {
+	const store = openStore(dbRoot);
+	const client = createMailClient(store, defaultProjectId);
 	return client;
 }
 
@@ -271,7 +287,13 @@ interface PurgeOpts {
 }
 
 /** overstory mail send */
-async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
+async function handleSend(
+	opts: SendOpts,
+	root: string,
+	dbRoot: string,
+	projectId: string,
+): Promise<void> {
+	const cwd = root;
 	const { to, subject, body } = opts;
 	const from = opts.agent ?? opts.from ?? "orchestrator";
 	const rawPayload = opts.payload;
@@ -312,25 +334,34 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 
 	// Handle broadcast messages (group addresses)
 	if (isGroupAddress(to)) {
-		const overstoryDir = join(cwd, ".overstory");
-		const { store: sessionStore } = openSessionStore(overstoryDir);
+		const { store: sessionStore } = openSessionStore(dbRoot);
 
 		try {
 			const activeSessions = sessionStore.getActive();
-			const recipients = resolveGroupAddress(to, activeSessions, from);
-
-			const client = openClient(cwd);
+			const recipients = resolveGroupAddress(to, activeSessions, from, projectId);
+			const broadcastStore = openStore(dbRoot);
 			const messageIds: string[] = [];
 
 			try {
-				// Fan out: send individual message to each recipient
+				// Fan out: send individual message to each recipient using recipient's projectId
 				for (const recipient of recipients) {
-					const id = client.send({ from, to: recipient, subject, body, type, priority, payload });
+					const recipientSession = activeSessions.find((s) => s.agentName === recipient);
+					const recipientProjectId = recipientSession?.projectId ?? projectId;
+					const perClient = createMailClient(broadcastStore, recipientProjectId);
+					const id = perClient.send({
+						from,
+						to: recipient,
+						subject,
+						body,
+						type,
+						priority,
+						payload,
+					});
 					messageIds.push(id);
 
 					// Record mail_sent event for each individual message (fire-and-forget)
 					try {
-						const eventsDbPath = join(cwd, ".overstory", "events.db");
+						const eventsDbPath = join(dbRoot, "events.db");
 						const eventStore = createEventStore(eventsDbPath);
 						try {
 							let runId: string | null = null;
@@ -352,6 +383,7 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 								toolArgs: null,
 								toolDurationMs: null,
 								level: "info",
+								projectId,
 								data: JSON.stringify({
 									to: recipient,
 									subject,
@@ -382,7 +414,7 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 					}
 				}
 			} finally {
-				client.close();
+				broadcastStore.close();
 			}
 
 			// Output broadcast summary
@@ -406,13 +438,13 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 	}
 
 	// Single-recipient message (existing logic)
-	const client = openClient(cwd);
+	const client = openClient(dbRoot, projectId);
 	try {
 		const id = client.send({ from, to, subject, body, type, priority, payload });
 
 		// Record mail_sent event to EventStore (fire-and-forget)
 		try {
-			const eventsDbPath = join(cwd, ".overstory", "events.db");
+			const eventsDbPath = join(dbRoot, "events.db");
 			const eventStore = createEventStore(eventsDbPath);
 			try {
 				let runId: string | null = null;
@@ -434,6 +466,7 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 					toolArgs: null,
 					toolDurationMs: null,
 					level: "info",
+					projectId,
 					data: JSON.stringify({ to, subject, type, priority, messageId: id }),
 				});
 			} finally {
@@ -491,8 +524,7 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 		// Reviewer coverage check for merge_ready (advisory warning)
 		if (type === "merge_ready") {
 			try {
-				const overstoryDir = join(cwd, ".overstory");
-				const { store: sessionStore } = openSessionStore(overstoryDir);
+				const { store: sessionStore } = openSessionStore(dbRoot);
 				try {
 					const allSessions = sessionStore.getAll();
 					const myBuilders = allSessions.filter(
@@ -525,7 +557,7 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 }
 
 /** overstory mail check */
-async function handleCheck(opts: CheckOpts, cwd: string): Promise<void> {
+async function handleCheck(opts: CheckOpts, dbRoot: string, projectId: string): Promise<void> {
 	const agent = opts.agent ?? "orchestrator";
 	const inject = opts.inject ?? false;
 	const json = opts.json ?? false;
@@ -546,14 +578,14 @@ async function handleCheck(opts: CheckOpts, cwd: string): Promise<void> {
 
 	// Check debounce if enabled
 	if (debounceMs !== undefined) {
-		const debounced = await isMailCheckDebounced(cwd, agent, debounceMs);
+		const debounced = await isMailCheckDebounced(dbRoot, agent, debounceMs);
 		if (debounced) {
 			// Silent skip — no output when debounced
 			return;
 		}
 	}
 
-	const client = openClient(cwd);
+	const client = openClient(dbRoot, projectId);
 	try {
 		if (inject) {
 			// Check for pending nudge markers (written by auto-nudge instead of tmux keys)
@@ -588,7 +620,7 @@ async function handleCheck(opts: CheckOpts, cwd: string): Promise<void> {
 
 		// Record this check for debounce tracking (only if debounce is enabled)
 		if (debounceMs !== undefined) {
-			await recordMailCheck(cwd, agent);
+			await recordMailCheck(dbRoot, agent);
 		}
 	} finally {
 		client.close();
@@ -596,14 +628,14 @@ async function handleCheck(opts: CheckOpts, cwd: string): Promise<void> {
 }
 
 /** overstory mail list */
-function handleList(opts: ListOpts, cwd: string): void {
+function handleList(opts: ListOpts, dbRoot: string, projectId: string): void {
 	const from = opts.from;
 	// --to takes precedence over --agent (agent is an alias for recipient filtering)
 	const to = opts.to ?? opts.agent;
 	const unread = opts.unread ? true : undefined;
 	const json = opts.json ?? false;
 
-	const client = openClient(cwd);
+	const client = openClient(dbRoot, projectId);
 	try {
 		const messages = client.list({ from, to, unread });
 
@@ -625,8 +657,8 @@ function handleList(opts: ListOpts, cwd: string): void {
 }
 
 /** overstory mail read */
-function handleRead(id: string, cwd: string): void {
-	const client = openClient(cwd);
+function handleRead(id: string, dbRoot: string): void {
+	const client = openClient(dbRoot);
 	try {
 		const { alreadyRead } = client.markRead(id);
 		if (alreadyRead) {
@@ -640,11 +672,11 @@ function handleRead(id: string, cwd: string): void {
 }
 
 /** overstory mail reply */
-function handleReply(id: string, opts: ReplyOpts, cwd: string): void {
+function handleReply(id: string, opts: ReplyOpts, dbRoot: string, projectId: string): void {
 	const body = opts.body;
 	const from = opts.agent ?? opts.from ?? "orchestrator";
 
-	const client = openClient(cwd);
+	const client = openClient(dbRoot, projectId);
 	try {
 		const replyId = client.reply(id, body, from);
 
@@ -659,7 +691,7 @@ function handleReply(id: string, opts: ReplyOpts, cwd: string): void {
 }
 
 /** overstory mail purge */
-function handlePurge(opts: PurgeOpts, cwd: string): void {
+function handlePurge(opts: PurgeOpts, dbRoot: string): void {
 	const all = opts.all ?? false;
 	const daysStr = opts.days;
 	const agent = opts.agent;
@@ -684,7 +716,7 @@ function handlePurge(opts: PurgeOpts, cwd: string): void {
 		olderThanMs = days * 24 * 60 * 60 * 1000;
 	}
 
-	const store = openStore(cwd);
+	const store = openStore(dbRoot);
 	try {
 		const purged = store.purge({ all, olderThanMs, agent });
 
@@ -705,10 +737,14 @@ function handlePurge(opts: PurgeOpts, cwd: string): void {
  * Uses Commander.js for subcommand routing and option parsing.
  */
 export async function mailCommand(args: string[]): Promise<void> {
-	// Resolve the actual project root (handles git worktrees).
-	// Mail commands may run from agent worktrees via hooks, so we must
-	// resolve up to the main project root where .overstory/mail.db lives.
-	const root = await resolveProjectRoot(process.cwd());
+	// Resolve project root + shared DB root for single-repo/workspace modes.
+	// In workspace mode, dbRoot points to .overstory-workspace while root
+	// remains the selected project root.
+	const projectFlag = extractProjectFlag();
+	const ctx = await resolveContext({ project: projectFlag });
+	const root = ctx.projectRoot;
+	const dbRoot = ctx.dbRoot;
+	const projectId = ctx.projectId;
 
 	const program = new Command();
 	program.name("ov mail").description("Agent messaging system").exitOverride();
@@ -727,7 +763,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--json", "Output as JSON")
 		.exitOverride()
 		.action(async (opts: SendOpts) => {
-			await handleSend(opts, root);
+			await handleSend(opts, root, dbRoot, projectId);
 		});
 
 	program
@@ -739,7 +775,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--debounce <ms>", "Debounce interval in milliseconds")
 		.exitOverride()
 		.action(async (opts: CheckOpts) => {
-			await handleCheck(opts, root);
+			await handleCheck(opts, dbRoot, projectId);
 		});
 
 	program
@@ -752,7 +788,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--json", "Output as JSON")
 		.exitOverride()
 		.action((opts: ListOpts) => {
-			handleList(opts, root);
+			handleList(opts, dbRoot, projectId);
 		});
 
 	program
@@ -761,7 +797,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.argument("<message-id>", "Message ID")
 		.exitOverride()
 		.action((id: string) => {
-			handleRead(id, root);
+			handleRead(id, dbRoot);
 		});
 
 	program
@@ -774,7 +810,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--json", "Output as JSON")
 		.exitOverride()
 		.action((id: string, opts: ReplyOpts) => {
-			handleReply(id, opts, root);
+			handleReply(id, opts, dbRoot, projectId);
 		});
 
 	program
@@ -786,7 +822,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--json", "Output as JSON")
 		.exitOverride()
 		.action((opts: PurgeOpts) => {
-			handlePurge(opts, root);
+			handlePurge(opts, dbRoot);
 		});
 
 	await program.parseAsync(["node", "overstory-mail", ...args]);

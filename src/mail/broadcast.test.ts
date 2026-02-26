@@ -201,4 +201,49 @@ describe("resolveGroupAddress", () => {
 			);
 		});
 	});
+
+	describe("@all vs @workspace project isolation", () => {
+		function createSessionWithProject(
+			agentName: string,
+			capability: string,
+			projectId: string,
+		): AgentSession {
+			return {
+				...createSession(agentName, capability),
+				projectId,
+			};
+		}
+
+		const multiProjectSessions: AgentSession[] = [
+			createSessionWithProject("orch", "coordinator", "frontend"),
+			createSessionWithProject("builder-fe", "builder", "frontend"),
+			createSessionWithProject("builder-be", "builder", "backend"),
+			createSessionWithProject("scout-be", "scout", "backend"),
+		];
+
+		test("@all with senderProjectId filters to same project only", () => {
+			const recipients = resolveGroupAddress("@all", multiProjectSessions, "orch", "frontend");
+			expect(recipients).toEqual(["builder-fe"]);
+			expect(recipients).not.toContain("builder-be");
+			expect(recipients).not.toContain("scout-be");
+		});
+
+		test("@all without senderProjectId returns all agents (backward compat)", () => {
+			const recipients = resolveGroupAddress("@all", multiProjectSessions, "orch");
+			expect(recipients).toHaveLength(3); // all except sender
+		});
+
+		test("@workspace returns all agents across all projects regardless of senderProjectId", () => {
+			const recipients = resolveGroupAddress(
+				"@workspace",
+				multiProjectSessions,
+				"orch",
+				"frontend",
+			);
+			expect(recipients).toHaveLength(3); // all except sender, regardless of project
+			expect(recipients).toContain("builder-fe");
+			expect(recipients).toContain("builder-be");
+			expect(recipients).toContain("scout-be");
+		});
+	});
 });

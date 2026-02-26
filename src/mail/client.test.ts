@@ -773,3 +773,108 @@ describe("createMailClient", () => {
 		});
 	});
 });
+
+describe("createMailClient projectId filtering", () => {
+	let tempDir: string;
+	let store: MailStore;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-mail-projectid-test-"));
+		store = createMailStore(join(tempDir, "mail.db"));
+	});
+
+	afterEach(async () => {
+		store.close();
+		await rm(tempDir, { recursive: true, force: true });
+	});
+
+	describe("check() projectId filtering", () => {
+		test("returns only same-project messages when defaultProjectId is set", () => {
+			const frontendClient = createMailClient(store, "frontend");
+			const backendClient = createMailClient(store, "backend");
+			frontendClient.send({
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "frontend msg",
+				body: "body",
+			});
+			backendClient.send({
+				from: "agent-b",
+				to: "orchestrator",
+				subject: "backend msg",
+				body: "body",
+			});
+
+			const messages = frontendClient.check("orchestrator");
+			expect(messages).toHaveLength(1);
+			expect(messages[0]?.subject).toBe("frontend msg");
+		});
+
+		test("returns all messages when no defaultProjectId set", () => {
+			const noProjectClient = createMailClient(store);
+			const projectClient = createMailClient(store, "frontend");
+			projectClient.send({ from: "agent-a", to: "orchestrator", subject: "msg1", body: "body" });
+			noProjectClient.send({ from: "agent-b", to: "orchestrator", subject: "msg2", body: "body" });
+
+			const messages = noProjectClient.check("orchestrator");
+			expect(messages).toHaveLength(2);
+		});
+	});
+
+	describe("checkInject() projectId filtering", () => {
+		test("returns only same-project messages when defaultProjectId is set", () => {
+			const frontendClient = createMailClient(store, "frontend");
+			const backendClient = createMailClient(store, "backend");
+			frontendClient.send({
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "frontend msg",
+				body: "body",
+			});
+			backendClient.send({
+				from: "agent-b",
+				to: "orchestrator",
+				subject: "backend msg",
+				body: "body",
+			});
+
+			const result = frontendClient.checkInject("orchestrator");
+			expect(result).toContain("frontend msg");
+			expect(result).not.toContain("backend msg");
+		});
+	});
+
+	describe("list() projectId filtering", () => {
+		test("filters by defaultProjectId", () => {
+			const frontendClient = createMailClient(store, "frontend");
+			const backendClient = createMailClient(store, "backend");
+			frontendClient.send({
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "frontend",
+				body: "body",
+			});
+			backendClient.send({ from: "agent-b", to: "orchestrator", subject: "backend", body: "body" });
+
+			const messages = frontendClient.list();
+			expect(messages).toHaveLength(1);
+			expect(messages[0]?.subject).toBe("frontend");
+		});
+
+		test("explicit projectId in filters overrides defaultProjectId", () => {
+			const frontendClient = createMailClient(store, "frontend");
+			const backendClient = createMailClient(store, "backend");
+			frontendClient.send({
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "frontend",
+				body: "body",
+			});
+			backendClient.send({ from: "agent-b", to: "orchestrator", subject: "backend", body: "body" });
+
+			const messages = frontendClient.list({ projectId: "backend" });
+			expect(messages).toHaveLength(1);
+			expect(messages[0]?.subject).toBe("backend");
+		});
+	});
+});

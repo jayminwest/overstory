@@ -36,13 +36,18 @@ export interface MailClient {
 	}): string;
 
 	/** Get unread messages for an agent. Marks them as read. */
-	check(agentName: string): MailMessage[];
+	check(agentName: string, projectId?: string): MailMessage[];
 
 	/** Get unread messages formatted for hook injection (human-readable string). */
-	checkInject(agentName: string): string;
+	checkInject(agentName: string, projectId?: string): string;
 
 	/** List messages with optional filters. */
-	list(filters?: { from?: string; to?: string; unread?: boolean }): MailMessage[];
+	list(filters?: {
+		from?: string;
+		to?: string;
+		unread?: boolean;
+		projectId?: string;
+	}): MailMessage[];
 
 	/** Mark a message as read by ID. Returns whether the message was already read. */
 	markRead(id: string): { alreadyRead: boolean };
@@ -121,7 +126,7 @@ function formatForInjection(messages: MailMessage[]): string {
  * @param store - The underlying MailStore for persistence
  * @returns A MailClient with send, check, checkInject, list, markRead, reply
  */
-export function createMailClient(store: MailStore): MailClient {
+export function createMailClient(store: MailStore, defaultProjectId?: string): MailClient {
 	return {
 		send(msg): string {
 			const message = store.insert({
@@ -153,16 +158,18 @@ export function createMailClient(store: MailStore): MailClient {
 			return message.id;
 		},
 
-		check(agentName): MailMessage[] {
-			const messages = store.getUnread(agentName);
+		check(agentName, projectId): MailMessage[] {
+			const resolvedProjectId = projectId ?? defaultProjectId;
+			const messages = store.getUnread(agentName, resolvedProjectId);
 			for (const msg of messages) {
 				store.markRead(msg.id);
 			}
 			return messages;
 		},
 
-		checkInject(agentName): string {
-			const messages = store.getUnread(agentName);
+		checkInject(agentName, projectId): string {
+			const resolvedProjectId = projectId ?? defaultProjectId;
+			const messages = store.getUnread(agentName, resolvedProjectId);
 			for (const msg of messages) {
 				store.markRead(msg.id);
 			}
@@ -170,7 +177,8 @@ export function createMailClient(store: MailStore): MailClient {
 		},
 
 		list(filters): MailMessage[] {
-			return store.getAll(filters);
+			const projectId = filters?.projectId ?? defaultProjectId;
+			return store.getAll({ ...filters, projectId });
 		},
 
 		markRead(id): { alreadyRead: boolean } {

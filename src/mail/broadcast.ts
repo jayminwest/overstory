@@ -52,12 +52,19 @@ export function resolveGroupAddress(
 	groupAddress: string,
 	activeSessions: AgentSession[],
 	senderName: string,
+	senderProjectId?: string,
 ): string[] {
 	const normalized = groupAddress.toLowerCase();
 
-	// Handle @all — all active agents except sender
+	// Handle @all — same-project agents only when senderProjectId is provided, else all agents
 	if (normalized === "@all") {
-		const recipients = activeSessions.map((s) => s.agentName).filter((name) => name !== senderName);
+		const recipients = activeSessions
+			.filter((s) => {
+				if (s.agentName === senderName) return false;
+				if (senderProjectId !== undefined) return s.projectId === senderProjectId;
+				return true;
+			})
+			.map((s) => s.agentName);
 
 		if (recipients.length === 0) {
 			throw new Error(
@@ -68,6 +75,16 @@ export function resolveGroupAddress(
 		return recipients;
 	}
 
+	// Handle @workspace — all active agents across all projects except sender
+	if (normalized === "@workspace") {
+		const recipients = activeSessions.map((s) => s.agentName).filter((name) => name !== senderName);
+		if (recipients.length === 0) {
+			throw new Error(
+				`Group address "${groupAddress}" resolved to zero recipients (sender excluded)`,
+			);
+		}
+		return recipients;
+	}
 	// Handle capability groups
 	const capability = CAPABILITY_GROUPS[normalized];
 	if (capability !== undefined) {
@@ -87,6 +104,6 @@ export function resolveGroupAddress(
 
 	// Unknown group
 	throw new Error(
-		`Unknown group address: "${groupAddress}". Valid groups: @all, ${Object.keys(CAPABILITY_GROUPS).join(", ")}`,
+		`Unknown group address: "${groupAddress}". Valid groups: @all, @workspace, ${Object.keys(CAPABILITY_GROUPS).join(", ")}`,
 	);
 }
