@@ -81,8 +81,8 @@ function openStore(cwd: string) {
 // clears these markers, prepending a priority banner to the injected output.
 
 /** Directory where pending nudge markers are stored. */
-function pendingNudgeDir(cwd: string): string {
-	return join(cwd, ".overstory", "pending-nudges");
+function pendingNudgeDir(dbRoot: string): string {
+	return join(dbRoot, "pending-nudges");
 }
 
 /** Shape of a pending nudge marker file. */
@@ -102,11 +102,11 @@ interface PendingNudge {
  * Overwrites any existing marker (only the latest nudge matters).
  */
 async function writePendingNudge(
-	cwd: string,
+	dbRoot: string,
 	agentName: string,
 	nudge: Omit<PendingNudge, "createdAt">,
 ): Promise<void> {
-	const dir = pendingNudgeDir(cwd);
+	const dir = pendingNudgeDir(dbRoot);
 	const { mkdir } = await import("node:fs/promises");
 	await mkdir(dir, { recursive: true });
 
@@ -125,10 +125,10 @@ async function writePendingNudge(
  * Called by `mail check --inject` to prepend a priority banner.
  */
 async function readAndClearPendingNudge(
-	cwd: string,
+	dbRoot: string,
 	agentName: string,
 ): Promise<PendingNudge | null> {
-	const filePath = join(pendingNudgeDir(cwd), `${agentName}.json`);
+	const filePath = join(pendingNudgeDir(dbRoot), `${agentName}.json`);
 	const file = Bun.file(filePath);
 	if (!(await file.exists())) {
 		return null;
@@ -373,7 +373,7 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 						priority === "urgent" || priority === "high" || AUTO_NUDGE_TYPES.has(type);
 					if (shouldNudge) {
 						const nudgeReason = AUTO_NUDGE_TYPES.has(type) ? type : `${priority} priority`;
-						await writePendingNudge(cwd, recipient, {
+						await writePendingNudge(dbRoot, recipient, {
 							from,
 							reason: nudgeReason,
 							subject,
@@ -458,7 +458,7 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 		const shouldNudge = priority === "urgent" || priority === "high" || AUTO_NUDGE_TYPES.has(type);
 		if (shouldNudge) {
 			const nudgeReason = AUTO_NUDGE_TYPES.has(type) ? type : `${priority} priority`;
-			await writePendingNudge(cwd, to, {
+			await writePendingNudge(dbRoot, to, {
 				from,
 				reason: nudgeReason,
 				subject,
@@ -557,7 +557,7 @@ async function handleCheck(opts: CheckOpts, cwd: string): Promise<void> {
 	try {
 		if (inject) {
 			// Check for pending nudge markers (written by auto-nudge instead of tmux keys)
-			const pendingNudge = await readAndClearPendingNudge(cwd, agent);
+			const pendingNudge = await readAndClearPendingNudge(dbRoot, agent);
 			const output = client.checkInject(agent);
 
 			// Prepend a priority banner if there's a pending nudge
