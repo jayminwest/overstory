@@ -23,6 +23,7 @@ const NON_IMPLEMENTATION_CAPABILITIES = new Set([
 	"coordinator",
 	"supervisor",
 	"monitor",
+	"workspace",
 ]);
 
 /**

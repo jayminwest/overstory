@@ -7,7 +7,7 @@
 
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { Command } from "commander";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
@@ -181,6 +181,9 @@ pending-nudges/
 	await Bun.write(join(workspaceDir, ".gitignore"), gitignore);
 	process.stdout.write(`  \u2713 Created ${WORKSPACE_DIR}/.gitignore\n`);
 
+	await Bun.write(join(workspaceDir, "mail-check-state.json"), "{}");
+	process.stdout.write(`  \u2713 Created mail-check-state.json\n`);
+
 	process.stdout.write("\nDone.\n");
 	process.stdout.write("  Next: run `ov workspace add <path>` to register projects.\n");
 }
@@ -263,6 +266,27 @@ export async function workspaceRemoveCommand(name: string): Promise<void> {
 	const idx = config.projects.findIndex((p) => p.name === name);
 	if (idx === -1) {
 		throw new ValidationError(`Project not found: '${name}'`, { field: "name" });
+	}
+
+	// C4: Guard against removing a project with active agents
+	const project = config.projects[idx];
+	if (project && existsSync(join(project.root, ".overstory"))) {
+		const projectOvDir = join(project.root, ".overstory");
+		const { store } = openSessionStore(projectOvDir);
+		try {
+			const sessions = store.getAll();
+			const activeSessions = sessions.filter(
+				(s) => s.state !== "completed" && s.state !== "zombie",
+			);
+			if (activeSessions.length > 0) {
+				throw new ValidationError(
+					`Cannot remove project "${name}": ${activeSessions.length} active agent(s). Stop them first.`,
+					{ field: "name" },
+				);
+			}
+		} finally {
+			store.close();
+		}
 	}
 
 	const updated = config.projects.filter((_, i) => i !== idx);
@@ -411,7 +435,7 @@ export function buildWorkspaceBeacon(): string {
  * workspace agent overlay. The workspace orchestrator can then dispatch
  * per-project coordinators via `ov coordinator start --project <name>`.
  */
-async function startWorkspace(
+export async function startWorkspace(
 	opts: { json: boolean; attach: boolean },
 	deps: WorkspaceDeps = {},
 ): Promise<void> {
@@ -465,6 +489,27 @@ async function startWorkspace(
 
 		// Deploy hooks to workspace root
 		await deployHooks(wsRoot, WORKSPACE_AGENT_NAME, "workspace");
+
+		// H3: Render workspace-overlay.md.tmpl to .claude/CLAUDE.md
+		const templatePath = join(
+			dirname(dirname(import.meta.dir)),
+			"templates",
+			"workspace-overlay.md.tmpl",
+		);
+		const templateFile = Bun.file(templatePath);
+		if (await templateFile.exists()) {
+			let tmpl = await templateFile.text();
+			const { projects } = await loadConfigOrEmpty(wsRoot);
+			const projectsList =
+				projects.length === 0
+					? "(no projects registered)"
+					: projects.map((p) => `- **${p.name}**: ${p.root} [${p.canonicalBranch}]`).join("\n");
+			tmpl = tmpl.replace(/\{\{WORKSPACE_ROOT\}\}/g, wsRoot);
+			tmpl = tmpl.replace(/\{\{PROJECTS_LIST\}\}/g, projectsList);
+			const claudeDir = join(wsRoot, ".claude");
+			await mkdir(claudeDir, { recursive: true });
+			await Bun.write(join(claudeDir, "CLAUDE.md"), tmpl);
+		}
 
 		// Create workspace agent identity if first run
 		const identityBaseDir = join(wsDir, "agents");
