@@ -202,9 +202,49 @@ describe("workspaceAddCommand", () => {
 		await workspaceAddCommand(repo, { name: "proj" });
 
 		expect(existsSync(join(repo, ".overstory"))).toBe(true);
+		expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(true);
 		const content = await Bun.file(join(wsDir, WORKSPACE_DIR, WORKSPACE_CONFIG_FILENAME)).text();
 		expect(content).toContain("name: proj");
 		expect(content).toContain(`root: ${repo}`);
+	});
+
+	it("auto-installs hooks when project has .overstory/hooks.json", async () => {
+		const wsDir = await makeTempDir();
+		const repo = await makeTempGitRepo();
+
+		await mkdir(join(repo, ".overstory"), { recursive: true });
+		await Bun.write(
+			join(repo, ".overstory", "hooks.json"),
+			`${JSON.stringify({ hooks: { SessionStart: [] } }, null, "\t")}\n`,
+		);
+
+		await setupWorkspace(wsDir);
+		process.chdir(wsDir);
+
+		await workspaceAddCommand(repo, { name: "proj-hooks" });
+
+		const settingsPath = join(repo, ".claude", "settings.local.json");
+		expect(existsSync(settingsPath)).toBe(true);
+		const settings = await Bun.file(settingsPath).text();
+		expect(settings).toContain('"hooks"');
+	});
+
+	it("skips hooks auto-install when --no-hooks is set", async () => {
+		const wsDir = await makeTempDir();
+		const repo = await makeTempGitRepo();
+
+		await mkdir(join(repo, ".overstory"), { recursive: true });
+		await Bun.write(
+			join(repo, ".overstory", "hooks.json"),
+			`${JSON.stringify({ hooks: { SessionStart: [] } }, null, "\t")}\n`,
+		);
+
+		await setupWorkspace(wsDir);
+		process.chdir(wsDir);
+
+		await workspaceAddCommand(repo, { name: "proj-no-hooks", hooks: false });
+
+		expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(false);
 	});
 
 	it("errors when path has no .overstory and --no-init is set", async () => {

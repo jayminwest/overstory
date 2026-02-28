@@ -73,10 +73,9 @@ export function mergeHooksByEventType(
  * .claude/settings.local.json where Claude Code discovers it. Preserves any
  * existing non-hooks keys in the target file.
  */
-async function installHooks(force: boolean): Promise<void> {
+async function installHooks(force: boolean, projectRootOverride?: string): Promise<void> {
 	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const projectRoot = config.project.root;
+	const projectRoot = projectRootOverride ?? (await loadConfig(cwd)).project.root;
 
 	// Read source hooks from .overstory/hooks.json
 	const sourcePath = join(projectRoot, ".overstory", "hooks.json");
@@ -124,6 +123,13 @@ async function installHooks(force: boolean): Promise<void> {
 
 	printSuccess("Installed orchestrator hooks");
 	printHint("Source: .overstory/hooks.json");
+}
+
+/**
+ * Install hooks for a specific project root without relying on process.cwd().
+ */
+export async function installHooksForProject(projectRoot: string, force = false): Promise<void> {
+	await installHooks(force, projectRoot);
 }
 
 /**

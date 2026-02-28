@@ -13,6 +13,7 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { installHooksForProject } from "./hooks.ts";
 import { initCommand } from "./init.ts";
 import type { ReadyState } from "../runtimes/types.ts";
 import { createMetricsStore } from "../metrics/store.ts";
@@ -221,6 +222,8 @@ export interface WorkspaceAddOptions {
 	name?: string;
 	/** Auto-run `ov init` in target project when .overstory is missing. */
 	init?: boolean;
+	/** Auto-run `ov hooks install` in target project when hooks.json is present. */
+	hooks?: boolean;
 }
 
 /**
@@ -270,6 +273,18 @@ export async function workspaceAddCommand(
 				`Path is not an overstory project (auto-init failed to create .overstory): '${absPath}'`,
 				{ field: "path" },
 			);
+		}
+	}
+
+	if (opts.hooks !== false) {
+		const hooksPath = join(absPath, ".overstory", "hooks.json");
+		if (existsSync(hooksPath)) {
+			try {
+				await installHooksForProject(absPath);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				process.stdout.write(`  - Warning: hooks install skipped for ${absPath}: ${message}\n`);
+			}
 		}
 	}
 
@@ -795,6 +810,7 @@ export function createWorkspaceCommand(deps: WorkspaceDeps = {}): Command {
 		.argument("<path>", "Path to project root")
 		.option("--name <name>", "Project name (default: directory basename)")
 		.option("--no-init", "Do not auto-run ov init when .overstory is missing")
+		.option("--no-hooks", "Do not auto-run ov hooks install when hooks.json is present")
 		.action(async (path: string, opts: WorkspaceAddOptions) => {
 			await workspaceAddCommand(path, opts);
 		});
