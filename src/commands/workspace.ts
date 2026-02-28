@@ -6,7 +6,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { Command } from "commander";
 import { deployHooks } from "../agents/hooks-deployer.ts";
@@ -188,6 +188,20 @@ export async function workspaceInitCommand(opts: WorkspaceInitOptions): Promise<
 	for (const dir of dirs) {
 		await mkdir(join(cwd, dir), { recursive: true });
 		process.stdout.write(`  \u2713 Created ${dir}/\n`);
+	}
+
+	// Seed workspace agent definitions from the installed overstory agents.
+	// Without this, workspace orchestrators may start without guardrail prompts.
+	const overstoryAgentsDir = join(import.meta.dir, "..", "..", "agents");
+	const workspaceAgentDefsDir = join(workspaceDir, "agent-defs");
+	const agentDefFiles = await readdir(overstoryAgentsDir);
+	for (const fileName of agentDefFiles) {
+		if (!fileName.endsWith(".md")) continue;
+		if (fileName === "supervisor.md") continue; // Deprecated in current manifest
+		const source = Bun.file(join(overstoryAgentsDir, fileName));
+		const content = await source.text();
+		await Bun.write(join(workspaceAgentDefsDir, fileName), content);
+		process.stdout.write(`  \u2713 Created ${WORKSPACE_DIR}/agent-defs/${fileName}\n`);
 	}
 
 	// Write workspace.yaml skeleton
@@ -489,6 +503,7 @@ export function buildWorkspaceBeacon(): string {
 		`[OVERSTORY] ${WORKSPACE_AGENT_NAME} (workspace) ${timestamp}`,
 		"Depth: 0 | Parent: none | Role: workspace orchestrator",
 		`Startup: run ov prime, check mail (ov mail check --agent ${WORKSPACE_AGENT_NAME}), check workspace status (ov workspace status), then begin work`,
+		"Delegation: for project work, spawn coordinators via ov coordinator start --project <name>; never use Task/Agent delegation tools.",
 	];
 	return parts.join(" — ");
 }
@@ -628,12 +643,20 @@ export async function startWorkspace(
 		// Preflight: verify tmux is installed
 		await tmux.ensureTmuxAvailable();
 
-		// Build claude command with optional system prompt from agent-defs
+		// Build claude command with workspace prompt. Fall back to bundled
+		// agents/workspace.md for older workspaces that have no copied agent-defs.
 		const agentDefPath = join(wsDir, "agent-defs", "workspace.md");
-		const agentDefFile = Bun.file(agentDefPath);
+		const fallbackAgentDefPath = join(import.meta.dir, "..", "..", "agents", "workspace.md");
 		let claudeCmd = `claude --model ${model} --dangerously-skip-permissions`;
-		if (await agentDefFile.exists()) {
-			const agentDef = await agentDefFile.text();
+		const agentDefFile = Bun.file(agentDefPath);
+		const fallbackAgentDefFile = Bun.file(fallbackAgentDefPath);
+		const agentDefContent = (await agentDefFile.exists())
+			? await agentDefFile.text()
+			: (await fallbackAgentDefFile.exists())
+				? await fallbackAgentDefFile.text()
+				: null;
+		if (agentDefContent !== null) {
+			const agentDef = agentDefContent;
 			const escaped = agentDef.replace(/'/g, "'\\''");
 			claudeCmd += ` --append-system-prompt '${escaped}'`;
 		}

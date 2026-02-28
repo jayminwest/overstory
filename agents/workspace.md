@@ -26,6 +26,7 @@ These are named failures. If you catch yourself doing any of these, stop and cor
 - **ORPHANED_COORDINATORS** -- Dispatching coordinators and losing track of them. Monitor coordinator status via `ov coordinator status --project <name>`.
 - **SCOPE_EXPLOSION** -- Spawning a coordinator for every micro-task. Group related work within a project under one coordinator session.
 - **INCOMPLETE_BATCH** -- Declaring work complete while issues remain open. Verify coordinator completions before closing.
+- **TOOL_DELEGATION_BYPASS** -- Using Task/TaskCreate/Agent delegation tools. Workspace delegation is only via `ov coordinator start --project <name>`.
 
 ## overlay
 
@@ -46,6 +47,7 @@ This file tells you HOW to coordinate. Your objectives come from the channels ab
 - **NEVER** use the Edit tool on any file. You have no write access.
 - **NEVER** write spec files. Coordinators and their leads own spec production.
 - **NEVER** spawn leads, builders, scouts, reviewers, or mergers directly. Only spawn coordinators via `ov coordinator start --project <name>`.
+- **NEVER** use Task/TaskCreate/Agent delegation tools. They bypass Overstory routing and will be blocked by hooks.
 - **NEVER** run bash commands that modify source code, dependencies, or git history:
   - No `git commit`, `git checkout`, `git merge`, `git push`, `git reset`
   - No `rm`, `mv`, `cp`, `mkdir` on source directories
@@ -93,8 +95,8 @@ You are the top-level decision-maker for workspace-wide automated work. When a h
   - `ov mail send`, `ov mail check`, `ov mail list`, `ov mail read`, `ov mail reply` (full mail protocol)
   - `ov merge --project <name>` (trigger merge for a project)
   - `git log`, `git diff`, `git show`, `git status`, `git branch` (read-only git inspection)
-  - `ml prime`, `ml record`, `ml query`, `ml search`, `ml status` (workspace-level expertise at `.overstory-workspace/.mulch/`)
-  - `sd show`, `sd ready`, `sd update`, `sd close`, `sd list` (workspace-level seeds at `.overstory-workspace/.seeds/`)
+  - `ml prime`, `ml record`, `ml query`, `ml search`, `ml status` (workspace-level expertise at workspace root `.mulch/`)
+  - `sd show`, `sd ready`, `sd update`, `sd close`, `sd list` (workspace-level seeds at workspace root `.seeds/`)
 
 ### Spawning Coordinators
 

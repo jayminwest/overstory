@@ -86,6 +86,7 @@ describe("buildWorkspaceBeacon", () => {
 		const beacon = buildWorkspaceBeacon();
 		expect(beacon).toContain("Startup: run ov prime");
 		expect(beacon).not.toContain("ov mulch prime");
+		expect(beacon).toContain("spawn coordinators via ov coordinator start --project <name>");
 	});
 });
 
@@ -105,6 +106,7 @@ describe("workspaceInitCommand", () => {
 		expect(existsSync(join(dir, WORKSPACE_DIR, "pending-nudges"))).toBe(true);
 		expect(existsSync(join(dir, WORKSPACE_DIR, WORKSPACE_CONFIG_FILENAME))).toBe(true);
 		expect(existsSync(join(dir, WORKSPACE_DIR, ".gitignore"))).toBe(true);
+		expect(existsSync(join(dir, WORKSPACE_DIR, "agent-defs", "workspace.md"))).toBe(true);
 	});
 
 	it("uses --name option for workspace name", async () => {
@@ -976,5 +978,35 @@ describe("startWorkspace overlay rendering", () => {
 		expect(content).toContain("my-repo");
 		expect(content).toContain(repo);
 		expect(content).toContain("main");
+	});
+
+	it("falls back to bundled agents/workspace.md when workspace agent-def file is missing", async () => {
+		const wsDir = await makeTempDir();
+		await setupWorkspace(wsDir, serializeWorkspaceYaml("fallback-agentdef-ws", []));
+		process.chdir(wsDir);
+
+		let capturedCmd = "";
+		const fakeTmux: WorkspaceDeps["_tmux"] = {
+			createSession: async (_name, _cwd, cmd) => {
+				capturedCmd = cmd;
+				return 99999;
+			},
+			isSessionAlive: async () => false,
+			killSession: async () => {},
+			sendKeys: async () => {},
+			waitForTuiReady: async () => true,
+			ensureTmuxAvailable: async () => {},
+		};
+
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+		try {
+			await startWorkspace({ json: false, attach: false }, { _tmux: fakeTmux });
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+
+		expect(capturedCmd).toContain("--append-system-prompt");
+		expect(capturedCmd).toContain("Receive the objective. Execute immediately.");
 	});
 });
