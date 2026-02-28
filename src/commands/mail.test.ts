@@ -6,6 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdir, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -249,7 +250,7 @@ describe("mailCommand", () => {
 		});
 	});
 
-	describe("auto-nudge (pending nudge markers)", () => {
+		describe("auto-nudge (pending nudge markers)", () => {
 		test("urgent message writes pending nudge marker instead of tmux keys", async () => {
 			await mailCommand([
 				"send",
@@ -390,7 +391,7 @@ describe("mailCommand", () => {
 			expect(output).not.toContain("PRIORITY");
 		});
 
-		test("json output for auto-nudge send does not include nudge banner", async () => {
+			test("json output for auto-nudge send does not include nudge banner", async () => {
 			await mailCommand([
 				"send",
 				"--to",
@@ -407,9 +408,90 @@ describe("mailCommand", () => {
 			// JSON output should just have the message ID, not the nudge banner text
 			const parsed = JSON.parse(output.trim());
 			expect(parsed.id).toBeTruthy();
-			expect(output).not.toContain("Queued nudge");
+				expect(output).not.toContain("Queued nudge");
+			});
+
+			test("SLA nudge: unread mail older than 30 minutes queues nudge marker", async () => {
+				// Mark seeded messages as read to isolate this scenario
+				{
+					const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+					const client = createMailClient(store);
+					for (const msg of client.list({ unread: true })) {
+						client.markRead(msg.id);
+					}
+					client.close();
+				}
+
+				// Send a normal-priority message (does not auto-nudge immediately)
+				await mailCommand([
+					"send",
+					"--to",
+					"scout-1",
+					"--subject",
+					"SLA target",
+					"--body",
+					"Please review this",
+				]);
+
+				const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+				const client = createMailClient(store);
+				const sent = client.list({ to: "scout-1", unread: true }).find((m) => m.subject === "SLA target");
+				client.close();
+				expect(sent?.id).toBeTruthy();
+				if (!sent?.id) return;
+
+				// Age message to 31 minutes old
+				const db = new Database(join(tempDir, ".overstory", "mail.db"));
+				try {
+					db.prepare("UPDATE messages SET created_at = datetime('now', '-31 minutes') WHERE id = ?").run(
+						sent.id,
+					);
+				} finally {
+					db.close();
+				}
+
+				// Any agent check should run SLA scan and queue nudge for stale unread mail
+				output = "";
+				await mailCommand(["check", "--agent", "builder-1"]);
+
+				const markerPath = join(tempDir, ".overstory", "pending-nudges", "scout-1.json");
+				const markerFile = Bun.file(markerPath);
+				expect(await markerFile.exists()).toBe(true);
+				const marker = JSON.parse(await markerFile.text());
+				expect(marker.reason).toBe("unread >30m SLA");
+				expect(marker.subject).toBe("SLA target");
+			});
+
+			test("SLA nudge: fresh unread mail does not queue SLA marker", async () => {
+				// Mark seeded messages as read to isolate this scenario
+				{
+					const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+					const client = createMailClient(store);
+					for (const msg of client.list({ unread: true })) {
+						client.markRead(msg.id);
+					}
+					client.close();
+				}
+
+				await mailCommand([
+					"send",
+					"--to",
+					"scout-1",
+					"--subject",
+					"Fresh message",
+					"--body",
+					"Recent note",
+				]);
+
+				output = "";
+				await mailCommand(["check", "--agent", "builder-1"]);
+
+				const markerPath = join(tempDir, ".overstory", "pending-nudges", "scout-1.json");
+				const markerFile = Bun.file(markerPath);
+				// No auto-nudge (normal priority), and no SLA nudge yet (<30m)
+				expect(await markerFile.exists()).toBe(false);
+			});
 		});
-	});
 
 	describe("mail_sent event recording", () => {
 		test("mail send records mail_sent event to events.db", async () => {

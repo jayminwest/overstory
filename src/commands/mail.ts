@@ -19,7 +19,7 @@ import { openSessionStore } from "../sessions/compat.ts";
 import type { MailMessage, MailMessageType } from "../types.ts";
 import { MAIL_MESSAGE_TYPES } from "../types.ts";
 import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
-import { resolveContext } from "../workspace/resolver.ts";
+import { resolveContext, type ResolvedContext } from "../workspace/resolver.ts";
 
 /**
  * Protocol message types that require immediate recipient attention.
@@ -112,6 +112,9 @@ interface PendingNudge {
 	messageId: string;
 	createdAt: string;
 }
+
+const MAIL_SLA_UNREAD_MS = 30 * 60 * 1000;
+const MAIL_SLA_RENUDGE_MS = 30 * 60 * 1000;
 
 /**
  * Write a pending nudge marker for an agent.
@@ -234,6 +237,109 @@ async function recordMailCheck(dbRoot: string, agentName: string): Promise<void>
 	}
 	state[agentName] = Date.now();
 	await Bun.write(statePath, `${JSON.stringify(state, null, "\t")}\n`);
+}
+
+function mailSlaStatePath(dbRoot: string): string {
+	return join(dbRoot, "mail-sla-state.json");
+}
+
+async function loadMailSlaState(dbRoot: string): Promise<Record<string, number>> {
+	const file = Bun.file(mailSlaStatePath(dbRoot));
+	if (!(await file.exists())) {
+		return {};
+	}
+	try {
+		const text = await file.text();
+		return JSON.parse(text) as Record<string, number>;
+	} catch {
+		return {};
+	}
+}
+
+async function saveMailSlaState(dbRoot: string, state: Record<string, number>): Promise<void> {
+	await Bun.write(mailSlaStatePath(dbRoot), `${JSON.stringify(state, null, "\t")}\n`);
+}
+
+function resolveProjectRootForMessage(message: MailMessage, ctx: ResolvedContext, root: string): string {
+	if (ctx.mode !== "workspace") {
+		return root;
+	}
+	if (message.projectId === WORKSPACE_PROJECT_ID) {
+		return ctx.workspaceRoot ?? root;
+	}
+	const match = ctx.workspaceConfig?.projects.find((p) => p.name === message.projectId);
+	return match?.root ?? root;
+}
+
+async function processUnreadSlaNudges(
+	agentName: string,
+	root: string,
+	dbRoot: string,
+	projectId: string | undefined,
+	ctx: ResolvedContext,
+): Promise<void> {
+	const client = openClient(dbRoot, projectId);
+	let unread: MailMessage[] = [];
+	try {
+		unread = client.list({ unread: true });
+	} finally {
+		client.close();
+	}
+	if (unread.length === 0) {
+		return;
+	}
+
+	const now = Date.now();
+	const state = await loadMailSlaState(dbRoot);
+	const unreadIds = new Set(unread.map((m) => m.id));
+	let stateChanged = false;
+
+	for (const id of Object.keys(state)) {
+		if (!unreadIds.has(id)) {
+			delete state[id];
+			stateChanged = true;
+		}
+	}
+
+	for (const msg of unread) {
+		if (msg.to === agentName) continue;
+		const createdMs = Date.parse(msg.createdAt);
+		if (!Number.isFinite(createdMs)) continue;
+		const ageMs = now - createdMs;
+		if (ageMs < MAIL_SLA_UNREAD_MS) continue;
+
+		const lastNudgeMs = state[msg.id] ?? 0;
+		if (lastNudgeMs > 0 && now - lastNudgeMs < MAIL_SLA_RENUDGE_MS) continue;
+
+		await writePendingNudge(dbRoot, msg.to, {
+			from: "mail-sla",
+			reason: "unread >30m SLA",
+			subject: msg.subject,
+			messageId: msg.id,
+		});
+		state[msg.id] = now;
+		stateChanged = true;
+
+		try {
+			const messageRoot = resolveProjectRootForMessage(msg, ctx, root);
+			const { nudgeAgent } = await import("./nudge.ts");
+			const staleMins = Math.floor(ageMs / (60 * 1000));
+			await nudgeAgent(
+				messageRoot,
+				msg.to,
+				`[MAIL SLA] ${staleMins}m unread: "${msg.subject}". Run ov mail check --agent ${msg.to}`,
+				false,
+				dbRoot,
+				msg.projectId,
+			);
+		} catch {
+			// Non-fatal: pending-nudge marker remains as fallback
+		}
+	}
+
+	if (stateChanged) {
+		await saveMailSlaState(dbRoot, state);
+	}
 }
 
 /**
@@ -560,8 +666,10 @@ async function handleSend(
 /** overstory mail check */
 async function handleCheck(
 	opts: CheckOpts,
+	root: string,
 	dbRoot: string,
 	projectId: string | undefined,
+	ctx: ResolvedContext,
 ): Promise<void> {
 	const agent = opts.agent ?? "orchestrator";
 	const inject = opts.inject ?? false;
@@ -623,13 +731,17 @@ async function handleCheck(
 			}
 		}
 
-		// Record this check for debounce tracking (only if debounce is enabled)
-		if (debounceMs !== undefined) {
-			await recordMailCheck(dbRoot, agent);
+			// Record this check for debounce tracking (only if debounce is enabled)
+			if (debounceMs !== undefined) {
+				await recordMailCheck(dbRoot, agent);
+			}
+
+			// SLA monitor: nudge recipients when unread mail sits >30 minutes.
+			// Best-effort only; should never block normal mail check behavior.
+			await processUnreadSlaNudges(agent, root, dbRoot, projectId, ctx);
+		} finally {
+			client.close();
 		}
-	} finally {
-		client.close();
-	}
 }
 
 /** overstory mail list */
@@ -785,11 +897,11 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--agent <name>", "Agent name")
 		.option("--inject", "Inject format for hook context")
 		.option("--json", "Output as JSON")
-		.option("--debounce <ms>", "Debounce interval in milliseconds")
-		.exitOverride()
-		.action(async (opts: CheckOpts) => {
-			await handleCheck(opts, dbRoot, resolvedProjectId);
-		});
+			.option("--debounce <ms>", "Debounce interval in milliseconds")
+			.exitOverride()
+			.action(async (opts: CheckOpts) => {
+				await handleCheck(opts, root, dbRoot, resolvedProjectId, ctx);
+			});
 
 	program
 		.command("list")
