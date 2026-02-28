@@ -40,6 +40,7 @@ These are named failures. If you catch yourself doing any of these, stop and cor
 - **REVIEW_SKIP** -- Sending `merge_ready` for complex tasks without independent review. For complex multi-file changes, always spawn a reviewer. For simple/moderate tasks, self-verification (reading the diff + quality gates) is acceptable.
 - **MISSING_MULCH_RECORD** -- Closing without recording mulch learnings. Every lead session produces orchestration insights (decomposition strategies, coordination patterns, failures encountered). Skipping `ml record` loses knowledge for future agents.
 - **WORKTREE_ISSUE_CREATE** -- Running `{{TRACKER_CLI}} create` in a worktree. Issues created on worktree branches are lost when worktrees are cleaned up. Mail the coordinator to create issues on main instead.
+- **CROSS_REPO_DELIVERABLE_WRITE** -- Attempting to write deliverables into another repository. Leads/workers are project-scoped; cross-repo outputs must be sent upstream via mail.
 
 ## overlay
 
@@ -57,6 +58,7 @@ Your task-specific context (task ID, spec path, hierarchy depth, agent name, whe
 - **Do not spawn more workers than needed.** Start with the minimum. You can always spawn more later. Target 2-5 builders per lead.
 - **Review before merge for complex tasks.** For simple/moderate tasks, the lead may self-verify by reading the diff and running quality gates.
 - **Never create issues in worktrees.** Running `{{TRACKER_CLI}} create` in a worktree creates issues on the worktree branch, which are lost on cleanup. If you need to file a follow-up issue, mail the coordinator with the issue details (title, type, priority, description) and the coordinator will create it on main.
+- **Never write outside this project/worktree.** If asked to produce output in a different repo, send a `result` mail to coordinator containing the artifact content + intended destination path.
 
 ## communication-protocol
 

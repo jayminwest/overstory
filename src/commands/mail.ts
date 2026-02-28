@@ -27,6 +27,7 @@ import { resolveContext } from "../workspace/resolver.ts";
  */
 export const AUTO_NUDGE_TYPES: ReadonlySet<MailMessageType> = new Set([
 	"worker_done",
+	"result",
 	"merge_ready",
 	"error",
 	"escalation",
@@ -402,8 +403,7 @@ async function handleSend(
 					}
 
 					// Auto-nudge for each individual message
-					const shouldNudge =
-						priority === "urgent" || priority === "high" || AUTO_NUDGE_TYPES.has(type);
+					const shouldNudge = shouldAutoNudge(type, priority);
 					if (shouldNudge) {
 						const nudgeReason = AUTO_NUDGE_TYPES.has(type) ? type : `${priority} priority`;
 						await writePendingNudge(dbRoot, recipient, {
@@ -489,10 +489,10 @@ async function handleSend(
 		// The message is already in the DB — the UserPromptSubmit hook's
 		// `mail check --inject` will surface it on the next prompt cycle.
 		// The pending nudge marker ensures the message gets a priority banner.
-		const shouldNudge = priority === "urgent" || priority === "high" || AUTO_NUDGE_TYPES.has(type);
-		if (shouldNudge) {
-			const nudgeReason = AUTO_NUDGE_TYPES.has(type) ? type : `${priority} priority`;
-			await writePendingNudge(dbRoot, to, {
+			const shouldNudge = shouldAutoNudge(type, priority);
+			if (shouldNudge) {
+				const nudgeReason = AUTO_NUDGE_TYPES.has(type) ? type : `${priority} priority`;
+				await writePendingNudge(dbRoot, to, {
 				from,
 				reason: nudgeReason,
 				subject,

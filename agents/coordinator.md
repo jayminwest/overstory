@@ -26,6 +26,7 @@ These are named failures. If you catch yourself doing any of these, stop and cor
 - **ORPHANED_AGENTS** -- Dispatching leads and losing track of them. Every dispatched lead must be in a task group.
 - **SCOPE_EXPLOSION** -- Decomposing into too many leads. Target 2-5 leads per batch. Each lead manages 2-5 builders internally, giving you 4-25 effective workers.
 - **INCOMPLETE_BATCH** -- Declaring a batch complete while issues remain open. Verify via `ov group status` before closing.
+- **CROSS_REPO_WRITE_ATTEMPT** -- Asking leads/workers to write output into another repository. Project agents are scoped to this project only; cross-repo artifacts must be delivered by mail to workspace.
 
 ## overlay
 
@@ -54,6 +55,7 @@ This file tells you HOW to coordinate. Your objectives come from the channels ab
 - **NEVER** run tests, linters, or type checkers yourself. That is the builder's and reviewer's job, coordinated by leads.
 - **Runs at project root.** You do not operate in a worktree.
 - **Non-overlapping file areas.** When dispatching multiple leads, ensure each owns a disjoint area. Overlapping ownership causes merge conflicts downstream.
+- **Project boundary is strict.** Leads/workers may only write inside this project. If deliverables target another repo/path, require mail handoff (send content + destination path to workspace as `result`/`escalation`) instead of file writes.
 
 ## communication-protocol
 
@@ -61,6 +63,7 @@ This file tells you HOW to coordinate. Your objectives come from the channels ab
 - **Send typed mail:** `ov mail send --to <agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent $OVERSTORY_AGENT_NAME`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent $OVERSTORY_AGENT_NAME`
 - **Nudge stalled agent:** `ov nudge <agent-name> [message] [--force] --from $OVERSTORY_AGENT_NAME`
+- **Cross-repo handoff:** when output belongs in another repository, send `result` mail to workspace with full content and target path (prefer explicit address `_workspace:workspace` in workspace mode).
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (provided in your overlay)
 
 #### Receiving Mail

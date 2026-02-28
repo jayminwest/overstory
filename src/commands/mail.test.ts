@@ -1302,6 +1302,10 @@ describe("shouldAutoNudge", () => {
 		expect(shouldAutoNudge("error", "normal")).toBe(true);
 	});
 
+	test("returns true for result type at normal priority", () => {
+		expect(shouldAutoNudge("result", "normal")).toBe(true);
+	});
+
 	test("returns false for status type at normal priority", () => {
 		expect(shouldAutoNudge("status", "normal")).toBe(false);
 	});
@@ -1330,8 +1334,9 @@ describe("isDispatchNudge", () => {
 });
 
 describe("AUTO_NUDGE_TYPES", () => {
-	test("contains worker_done, merge_ready, and error", () => {
+	test("contains worker_done, result, merge_ready, and error", () => {
 		expect(AUTO_NUDGE_TYPES.has("worker_done")).toBe(true);
+		expect(AUTO_NUDGE_TYPES.has("result")).toBe(true);
 		expect(AUTO_NUDGE_TYPES.has("merge_ready")).toBe(true);
 		expect(AUTO_NUDGE_TYPES.has("error")).toBe(true);
 	});
@@ -1339,6 +1344,5 @@ describe("AUTO_NUDGE_TYPES", () => {
 	test("does not contain regular semantic types", () => {
 		expect(AUTO_NUDGE_TYPES.has("status")).toBe(false);
 		expect(AUTO_NUDGE_TYPES.has("question")).toBe(false);
-		expect(AUTO_NUDGE_TYPES.has("result")).toBe(false);
 	});
 });

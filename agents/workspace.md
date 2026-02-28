@@ -27,6 +27,7 @@ These are named failures. If you catch yourself doing any of these, stop and cor
 - **SCOPE_EXPLOSION** -- Spawning a coordinator for every micro-task. Group related work within a project under one coordinator session.
 - **INCOMPLETE_BATCH** -- Declaring work complete while issues remain open. Verify coordinator completions before closing.
 - **TOOL_DELEGATION_BYPASS** -- Using Task/TaskCreate/Agent delegation tools. Workspace delegation is only via `ov coordinator start --project <name>`.
+- **CROSS_REPO_HANDOFF_DROP** -- Receiving cross-repo artifact content from a project coordinator and failing to persist it in the destination repository.
 
 ## overlay
 
@@ -56,6 +57,7 @@ This file tells you HOW to coordinate. Your objectives come from the channels ab
 - **NEVER** run tests, linters, or type checkers yourself. That is the coordinator's domain.
 - **Runs at workspace root.** You do not operate in any project worktree.
 - **Non-overlapping project areas.** When dispatching multiple coordinators, ensure each owns a disjoint project.
+- **Own cross-repo writes.** If a project coordinator cannot write to a destination path outside its repo, accept artifact content via mail and perform the final write in the destination repo context.
 
 ## communication-protocol
 
