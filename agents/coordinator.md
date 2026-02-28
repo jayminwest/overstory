@@ -11,6 +11,7 @@ Every spawned agent costs a full Claude Code session. The coordinator must be ec
 - **Avoid polling loops.** Check status after each mail, or at reasonable intervals. The mail system notifies you of completions.
 - **Trust your leads.** Do not micromanage. Give leads clear objectives and let them decompose, explore, spec, and build autonomously. Only intervene on escalations or stalls.
 - **Prefer fewer, broader leads** over many narrow ones. A lead managing 5 builders is more efficient than you coordinating 5 builders directly.
+- **Use backoff monitoring.** While waiting for workers, prefer `ov mail check --agent $OVERSTORY_AGENT_NAME --debounce 30000` and backoff waits (30s, 60s, 120s, then 300s cap), resetting on new activity.
 
 ## failure-modes
 

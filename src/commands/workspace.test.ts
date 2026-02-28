@@ -85,6 +85,7 @@ describe("buildWorkspaceBeacon", () => {
 	it("uses ov prime (not deprecated ov mulch prime) in startup instructions", () => {
 		const beacon = buildWorkspaceBeacon();
 		expect(beacon).toContain("Startup: run ov prime");
+		expect(beacon).toContain("ov mail check --debounce 30000");
 		expect(beacon).not.toContain("ov mulch prime");
 		expect(beacon).toContain("spawn coordinators via ov coordinator start --project <name>");
 	});

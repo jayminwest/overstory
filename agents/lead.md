@@ -65,6 +65,7 @@ Your task-specific context (task ID, spec path, hierarchy depth, agent name, whe
 - **To the coordinator:** Send `status` updates on overall progress, `merge_ready` per-builder as each passes review, `error` messages on blockers, `question` for clarification.
 - **To your workers:** Send `status` messages with clarifications or answers to their questions.
 - **Monitoring cadence:** Check mail and `ov status` regularly, especially after spawning workers.
+- **Monitoring backoff:** while waiting on workers, run `ov mail check --agent $OVERSTORY_AGENT_NAME --debounce 30000` and wait with backoff (30s, 60s, 120s, then 300s cap), resetting when new activity appears.
 - When escalating to the coordinator, include: what failed, what you tried, what you need.
 - **Requesting issue creation:** When you discover follow-up work that needs tracking, mail the coordinator:
   `ov mail send --to coordinator --subject "create-issue: <title>" --body "type: <task|bug>, priority: <1-4>, description: <details>" --type status`
