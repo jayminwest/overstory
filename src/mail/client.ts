@@ -139,6 +139,7 @@ export function createMailClient(store: MailStore, defaultProjectId?: string): M
 				priority: msg.priority ?? "normal",
 				threadId: msg.threadId ?? null,
 				payload: msg.payload ?? null,
+				projectId: defaultProjectId,
 			});
 			return message.id;
 		},
@@ -154,6 +155,7 @@ export function createMailClient(store: MailStore, defaultProjectId?: string): M
 				priority: msg.priority ?? "normal",
 				threadId: msg.threadId ?? null,
 				payload: JSON.stringify(msg.payload),
+				projectId: defaultProjectId,
 			});
 			return message.id;
 		},
@@ -220,6 +222,7 @@ export function createMailClient(store: MailStore, defaultProjectId?: string): M
 				priority: original.priority,
 				threadId,
 				payload: null,
+				projectId: original.projectId ?? defaultProjectId,
 			});
 			return reply.id;
 		},

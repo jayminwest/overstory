@@ -249,7 +249,7 @@ export async function workspaceAddCommand(
 
 	if (!existsSync(join(absPath, ".overstory"))) {
 		throw new ValidationError(
-			`Path is not an overstory project (no .overstory found): '${absPath}'`,
+			`Path is not an overstory project (no .overstory found): '${absPath}'. Run ov init there first.`,
 			{ field: "path" },
 		);
 	}
@@ -521,15 +521,29 @@ export async function startWorkspace(
 		// Deploy hooks to workspace root
 		await deployHooks(wsRoot, WORKSPACE_AGENT_NAME, "workspace");
 
-		// H3: Render workspace-overlay.md.tmpl to .claude/CLAUDE.md
-		const templatePath = join(
-			dirname(dirname(import.meta.dir)),
-			"templates",
-			"workspace-overlay.md.tmpl",
-		);
-		const templateFile = Bun.file(templatePath);
-		if (await templateFile.exists()) {
-			let tmpl = await templateFile.text();
+			// H3: Render workspace overlay to .claude/CLAUDE.md.
+			// Prefer workspace-overlay.md.tmpl when present; fall back to a built-in
+			// template so workspace startup still produces a usable overlay.
+			const templatePath = join(
+				dirname(dirname(import.meta.dir)),
+				"templates",
+				"workspace-overlay.md.tmpl",
+			);
+			const templateFile = Bun.file(templatePath);
+			let tmpl: string;
+			if (await templateFile.exists()) {
+				tmpl = await templateFile.text();
+			} else {
+				tmpl = [
+					"# Overstory Workspace",
+					"",
+					"Workspace root: {{WORKSPACE_ROOT}}",
+					"",
+					"Projects:",
+					"{{PROJECTS_LIST}}",
+					"",
+				].join("\n");
+			}
 			const { projects } = await loadConfigOrEmpty(wsRoot);
 			const projectsList =
 				projects.length === 0
@@ -540,7 +554,6 @@ export async function startWorkspace(
 			const claudeDir = join(wsRoot, ".claude");
 			await mkdir(claudeDir, { recursive: true });
 			await Bun.write(join(claudeDir, "CLAUDE.md"), tmpl);
-		}
 
 		// Create workspace agent identity if first run
 		const identityBaseDir = join(wsDir, "agents");

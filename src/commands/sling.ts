@@ -114,6 +114,7 @@ export interface SlingOptions {
 	name?: string;
 	spec?: string;
 	files?: string;
+	project?: string;
 	parent?: string;
 	depth?: string;
 	skipScout?: boolean;

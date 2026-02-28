@@ -496,7 +496,7 @@ describe("workspaceRemoveCommand active session guard", () => {
 		// second arg to upsert() so it is stored with the correct project_id.
 		const { store } = openSessionStore(join(wsDir, WORKSPACE_DIR));
 		try {
-			const activeSession: AgentSession = {
+				const activeSession: AgentSession = {
 				id: "session-123-builder",
 				agentName: "builder",
 				capability: "builder",
@@ -512,9 +512,10 @@ describe("workspaceRemoveCommand active session guard", () => {
 				projectId: "active-project",
 				startedAt: new Date().toISOString(),
 				lastActivity: new Date().toISOString(),
-				escalationLevel: 0,
-				stalledSince: null,
-			};
+					escalationLevel: 0,
+					stalledSince: null,
+					transcriptPath: null,
+				};
 			store.upsert(activeSession, "active-project");
 		} finally {
 			store.close();
@@ -540,7 +541,7 @@ describe("workspaceRemoveCommand active session guard", () => {
 		// Seed a completed session into the shared workspace session store
 		const { store } = openSessionStore(join(wsDir, WORKSPACE_DIR));
 		try {
-			const completedSession: AgentSession = {
+				const completedSession: AgentSession = {
 				id: "session-1-builder",
 				agentName: "builder",
 				capability: "builder",
@@ -556,9 +557,10 @@ describe("workspaceRemoveCommand active session guard", () => {
 				projectId: "done-project",
 				startedAt: new Date().toISOString(),
 				lastActivity: new Date().toISOString(),
-				escalationLevel: 0,
-				stalledSince: null,
-			};
+					escalationLevel: 0,
+					stalledSince: null,
+					transcriptPath: null,
+				};
 			store.upsert(completedSession, "done-project");
 		} finally {
 			store.close();
