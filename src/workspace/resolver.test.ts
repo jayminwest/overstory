@@ -123,7 +123,7 @@ describe("resolveContext - workspace mode", () => {
 		expect(ctx.projectRoot).toBe(projectDir);
 	});
 
-	test("returns _workspace when cwd is not inside any project", async () => {
+		test("returns _workspace when cwd is not inside any project", async () => {
 		const workspaceRoot = await trackTemp("overstory-ws-");
 		const projectDir = join(workspaceRoot, "frontend");
 		await mkdir(projectDir, { recursive: true });
@@ -135,8 +135,36 @@ describe("resolveContext - workspace mode", () => {
 		expect(ctx.mode).toBe("workspace");
 		expect(ctx.projectId).toBe("_workspace");
 		expect(ctx.projectRoot).toBe(workspaceRoot);
-		expect(ctx.dbRoot).toBe(join(workspaceRoot, ".overstory-workspace"));
-	});
+			expect(ctx.dbRoot).toBe(join(workspaceRoot, ".overstory-workspace"));
+		});
+
+		test("accepts explicit --project _workspace for workspace-scoped commands", async () => {
+			const workspaceRoot = await trackTemp("overstory-ws-");
+			const projectDir = join(workspaceRoot, "frontend");
+			await mkdir(projectDir, { recursive: true });
+			await initGitRepo(projectDir);
+			await mkdir(join(projectDir, ".overstory"), { recursive: true });
+			await createWorkspace(workspaceRoot, [{ name: "frontend", root: projectDir }]);
+
+			const ctx = await resolveContext({ cwd: workspaceRoot, project: "_workspace" });
+			expect(ctx.mode).toBe("workspace");
+			expect(ctx.projectId).toBe("_workspace");
+			expect(ctx.projectRoot).toBe(workspaceRoot);
+			expect(ctx.dbRoot).toBe(join(workspaceRoot, ".overstory-workspace"));
+		});
+
+		test("rejects --project _workspace when requireProject=true", async () => {
+			const workspaceRoot = await trackTemp("overstory-ws-");
+			const projectDir = join(workspaceRoot, "frontend");
+			await mkdir(projectDir, { recursive: true });
+			await initGitRepo(projectDir);
+			await mkdir(join(projectDir, ".overstory"), { recursive: true });
+			await createWorkspace(workspaceRoot, [{ name: "frontend", root: projectDir }]);
+
+			await expect(
+				resolveContext({ cwd: workspaceRoot, project: "_workspace", requireProject: true }),
+			).rejects.toThrow("Command requires a project. --project _workspace is workspace scope.");
+		});
 
 	test("throws with available project names when requireProject=true", async () => {
 		const workspaceRoot = await trackTemp("overstory-ws-");

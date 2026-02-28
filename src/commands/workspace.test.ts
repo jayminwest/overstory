@@ -8,6 +8,7 @@ import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import type { AgentSession } from "../types.ts";
 import { WORKSPACE_CONFIG_FILENAME, WORKSPACE_DIR } from "../workspace/config.ts";
 import {
+	buildWorkspaceBeacon,
 	createWorkspaceCommand,
 	serializeWorkspaceYaml,
 	startWorkspace,
@@ -77,6 +78,14 @@ describe("serializeWorkspaceYaml", () => {
 		expect(yaml).toContain("  - name: frontend");
 		expect(yaml).toContain("    root: /home/user/frontend");
 		expect(yaml).toContain("    canonicalBranch: main");
+	});
+});
+
+describe("buildWorkspaceBeacon", () => {
+	it("uses ov prime (not deprecated ov mulch prime) in startup instructions", () => {
+		const beacon = buildWorkspaceBeacon();
+		expect(beacon).toContain("Startup: run ov prime");
+		expect(beacon).not.toContain("ov mulch prime");
 	});
 });
 

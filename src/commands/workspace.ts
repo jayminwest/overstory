@@ -488,7 +488,7 @@ export function buildWorkspaceBeacon(): string {
 	const parts = [
 		`[OVERSTORY] ${WORKSPACE_AGENT_NAME} (workspace) ${timestamp}`,
 		"Depth: 0 | Parent: none | Role: workspace orchestrator",
-		`Startup: run mulch prime, check mail (ov mail check --agent ${WORKSPACE_AGENT_NAME}), check workspace status (ov workspace status), then begin work`,
+		`Startup: run ov prime, check mail (ov mail check --agent ${WORKSPACE_AGENT_NAME}), check workspace status (ov workspace status), then begin work`,
 	];
 	return parts.join(" — ");
 }

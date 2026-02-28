@@ -50,6 +50,23 @@ async function resolveWorkspaceContext(
 	let projectId: string;
 
 	if (opts?.project !== undefined) {
+		if (opts.project === WORKSPACE_PROJECT_ID) {
+			if (opts.requireProject) {
+				throw new ValidationError(
+					`Command requires a project. --project ${WORKSPACE_PROJECT_ID} is workspace scope. Available: ${available}`,
+					{ field: "project", value: opts.project },
+				);
+			}
+			return {
+				mode: "workspace",
+				projectId: WORKSPACE_PROJECT_ID,
+				projectRoot: workspaceRoot,
+				overstoryDir: join(workspaceRoot, ".overstory"),
+				dbRoot: join(workspaceRoot, WORKSPACE_DIR),
+				workspaceRoot,
+				workspaceConfig,
+			};
+		}
 		const found = workspaceConfig.projects.find((p) => p.name === opts.project);
 		if (!found) {
 			throw new ValidationError(`Unknown project: "${opts.project}". Available: ${available}`, {
