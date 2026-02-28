@@ -574,6 +574,43 @@ export const COMMANDS: readonly CommandDef[] = [
 		],
 	},
 	{
+		name: "workspace",
+		desc: "Workspace management for multi-repo orchestration",
+		subcommands: [
+			{
+				name: "init",
+				desc: "Initialize a workspace",
+				flags: [{ name: "--name", desc: "Workspace name", takesValue: true }],
+			},
+			{
+				name: "add",
+				desc: "Register a project",
+				flags: [{ name: "--name", desc: "Project name", takesValue: true }],
+			},
+			{ name: "remove", desc: "Unregister a project" },
+			{ name: "list", desc: "List registered projects" },
+			{
+				name: "status",
+				desc: "Show workspace status",
+				flags: [{ name: "--json", desc: "JSON output" }],
+			},
+			{
+				name: "start",
+				desc: "Start workspace orchestrator",
+				flags: [
+					{ name: "--attach", desc: "Attach after start" },
+					{ name: "--no-attach", desc: "Never attach after start" },
+					{ name: "--json", desc: "JSON output" },
+				],
+			},
+			{
+				name: "stop",
+				desc: "Stop workspace orchestrator",
+				flags: [{ name: "--json", desc: "JSON output" }],
+			},
+		],
+	},
+	{
 		name: "worktree",
 		desc: "Manage worktrees",
 		flags: [
@@ -660,7 +697,7 @@ export function generateBash(): string {
 		"  local cur prev words cword",
 		"  _init_completion || return",
 		"",
-		"  local commands='agents init sling prime stop status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run ecosystem upgrade completions'",
+		"  local commands='agents init sling prime stop status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group workspace worktree run ecosystem upgrade completions'",
 		"",
 		"  # Top-level completion",
 		"  if [[ $cword -eq 1 ]]; then",

@@ -12,8 +12,8 @@ import {
 } from "./completions.ts";
 
 describe("COMMANDS array", () => {
-	it("should have exactly 33 commands", () => {
-		expect(COMMANDS).toHaveLength(33);
+	it("should have exactly 34 commands", () => {
+		expect(COMMANDS).toHaveLength(34);
 	});
 
 	it("should include all expected command names", () => {
@@ -43,6 +43,7 @@ describe("COMMANDS array", () => {
 		expect(names).toContain("monitor");
 		expect(names).toContain("mail");
 		expect(names).toContain("group");
+		expect(names).toContain("workspace");
 		expect(names).toContain("worktree");
 		expect(names).toContain("run");
 		expect(names).toContain("feed");
@@ -62,7 +63,7 @@ describe("generateBash", () => {
 		expect(script).toContain("_init_completion");
 	});
 
-	it("should include all 33 command names", () => {
+	it("should include all command names", () => {
 		const script = generateBash();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);
@@ -96,7 +97,7 @@ describe("generateZsh", () => {
 		expect(script).toContain("_arguments");
 	});
 
-	it("should include all 33 command names", () => {
+	it("should include all command names", () => {
 		const script = generateZsh();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);

@@ -40,6 +40,7 @@ import { createSupervisorCommand } from "./commands/supervisor.ts";
 import { traceCommand } from "./commands/trace.ts";
 import { createUpgradeCommand } from "./commands/upgrade.ts";
 import { createWatchCommand } from "./commands/watch.ts";
+import { createWorkspaceCommand } from "./commands/workspace.ts";
 import { createWorktreeCommand } from "./commands/worktree.ts";
 import { OverstoryError, WorktreeError } from "./errors.ts";
 import { jsonError } from "./json.ts";
@@ -83,6 +84,7 @@ const COMMANDS = [
 	"merge",
 	"nudge",
 	"group",
+	"workspace",
 	"worktree",
 	"log",
 	"logs",
@@ -223,6 +225,7 @@ program.addCommand(createWorktreeCommand());
 program.addCommand(createLogCommand());
 program.addCommand(createWatchCommand());
 program.addCommand(createGroupCommand());
+program.addCommand(createWorkspaceCommand());
 program.addCommand(createCompletionsCommand());
 
 // Unmigrated commands — passthrough pattern
