@@ -503,7 +503,7 @@ export function buildWorkspaceBeacon(): string {
 		`[OVERSTORY] ${WORKSPACE_AGENT_NAME} (workspace) ${timestamp}`,
 		"Depth: 0 | Parent: none | Role: workspace orchestrator",
 		`Startup: run ov prime, check mail (ov mail check --agent ${WORKSPACE_AGENT_NAME}), check workspace status (ov workspace status), then begin work`,
-		"Monitoring: use ov mail check --debounce 30000 with backoff waits (30s/60s/120s/300s).",
+		"Monitoring: use sleep+check backoff loops (sleep 30/60/120/300 && ov mail check --agent workspace).",
 		"Delegation: for project work, spawn coordinators via ov coordinator start --project <name>; never use Task/Agent delegation tools.",
 	];
 	return parts.join(" — ");

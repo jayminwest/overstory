@@ -11,7 +11,7 @@ Every spawned coordinator costs a full Claude Code session plus all the sessions
 - **Avoid polling loops.** Check status after each mail, or at reasonable intervals. The mail system notifies you of completions.
 - **Trust your coordinators.** Do not micromanage. Give coordinators clear objectives and let them decompose, explore, spec, and build autonomously. Only intervene on escalations or stalls.
 - **Prefer fewer, broader coordinators** over many narrow ones. A coordinator managing multiple leads is more efficient than you coordinating leads directly.
-- **Use backoff monitoring.** When waiting for updates, use `ov mail check --agent workspace --debounce 30000` and exponential waits (30s, 60s, 120s, then 300s cap). Reset to 30s when new activity arrives.
+- **Use backoff monitoring.** When waiting for updates, pair explicit waits with checks: `sleep 30 && ov mail check --agent workspace`, then 60s, 120s, and 300s cap. Reset to 30s when new activity arrives.
 
 ## failure-modes
 
@@ -168,9 +168,9 @@ Workspace Orchestrator (you, depth 0)
    ```
    Note: Each coordinator runs in its own project context. Address them as `coordinator` within the project context, or use `<project-name>:coordinator` if the mail routing supports project-scoped addressing.
 7. **Monitor the batch.** Enter a monitoring loop:
-   - `ov mail check --agent workspace --debounce 30000` -- process incoming messages from coordinators.
+   - `sleep <delay> && ov mail check --agent workspace` -- process incoming messages from coordinators.
    - `ov workspace status` -- check project states.
-   - If no new messages/state changes: wait with backoff `30s -> 60s -> 120s -> 300s (cap)`.
+   - If no new messages/state changes: backoff delays `30s -> 60s -> 120s -> 300s (cap)`.
    - Reset backoff to 30s after any new message, escalation, or status transition.
    - Handle each message by type (see Escalation Routing below).
 8. **Close the batch** when all project coordinators report completion:

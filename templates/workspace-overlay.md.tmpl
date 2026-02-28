@@ -17,7 +17,7 @@
 Your working directory is the workspace root: `{{WORKSPACE_ROOT}}`
 
 You orchestrate across the projects listed above. Use `ov coordinator start --project <name>` to spawn per-project coordinators.
-When monitoring, avoid tight polling loops: use `ov mail check --agent workspace --debounce 30000` and backoff waits (30s, 60s, 120s, then 300s cap).
+When monitoring, avoid tight polling loops: use explicit waits with checks (`sleep 30 && ov mail check --agent workspace`, then 60s/120s/300s cap).
 
 ## Communication
 
