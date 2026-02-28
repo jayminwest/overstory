@@ -194,6 +194,76 @@ export function computeAgentPanelHeight(height: number, agentCount: number): num
 	return Math.max(8, Math.min(Math.floor(height * 0.35), agentCount + 4));
 }
 
+const DASHBOARD_LAYOUT = {
+	headerHeight: 2,
+	agentToMiddleGap: 1,
+	compactPanelHeight: 5,
+	metricsHeight: 3,
+	minMiddleHeight: 6,
+	maxMiddleHeight: 14,
+	minAgentHeight: 8,
+	minRenderablePanelHeight: 3,
+} as const;
+
+/**
+ * Compute dashboard panel heights with a hard cap on middle panels (Feed/Tasks).
+ * This prevents the feed from taking over tall terminals and preserves agent space.
+ */
+export function computeDashboardLayout(
+	height: number,
+	agentCount: number,
+): {
+	agentPanelHeight: number;
+	middleHeight: number;
+	compactPanelHeight: number;
+	metricsHeight: number;
+} {
+	const {
+		headerHeight,
+		agentToMiddleGap,
+		compactPanelHeight,
+		metricsHeight,
+		minMiddleHeight,
+		maxMiddleHeight,
+		minAgentHeight,
+		minRenderablePanelHeight,
+	} = DASHBOARD_LAYOUT;
+
+	const reserved = headerHeight + agentToMiddleGap + compactPanelHeight + metricsHeight;
+	const available = Math.max(minRenderablePanelHeight * 2, height - reserved);
+
+	// Keep enough room for middle panels, then grow agents from remaining space.
+	let agentPanelHeight = Math.min(
+		computeAgentPanelHeight(height, agentCount),
+		Math.max(minRenderablePanelHeight, available - minMiddleHeight),
+	);
+	let middleHeight = available - agentPanelHeight;
+
+	// Hard cap middle panels so feed/tasks don't crowd out the agent table.
+	if (middleHeight > maxMiddleHeight) {
+		const reclaimed = middleHeight - maxMiddleHeight;
+		middleHeight = maxMiddleHeight;
+		agentPanelHeight = Math.min(
+			available - minRenderablePanelHeight,
+			agentPanelHeight + reclaimed,
+		);
+	}
+
+	// Prefer at least minAgentHeight where the terminal has room.
+	if (agentPanelHeight < minAgentHeight && available - minAgentHeight >= minRenderablePanelHeight) {
+		const needed = minAgentHeight - agentPanelHeight;
+		agentPanelHeight = minAgentHeight;
+		middleHeight = Math.max(minRenderablePanelHeight, middleHeight - needed);
+	}
+
+	return {
+		agentPanelHeight,
+		middleHeight: Math.max(minRenderablePanelHeight, middleHeight),
+		compactPanelHeight,
+		metricsHeight,
+	};
+}
+
 /**
  * Filter agents by run ID. When run-scoped, also includes sessions with null
  * runId (e.g. coordinator) because SQL WHERE run_id = ? never matches NULL.
@@ -1109,17 +1179,18 @@ function renderDashboard(data: DashboardData, interval: number): void {
 	// Header (rows 1-2)
 	output += renderHeader(width, interval, data.currentRunId);
 
-	// Agent panel: full width, capped at 35% of height
+	// Agent panel: full width, expanded when feed/tasks hit max height.
 	const agentPanelStart = 3;
 	const agentCount = data.status.agents.length;
-	const agentPanelHeight = computeAgentPanelHeight(height, agentCount);
+	const layout = computeDashboardLayout(height, agentCount);
+	const agentPanelHeight = layout.agentPanelHeight;
 	output += renderAgentPanel(data, width, agentPanelHeight, agentPanelStart);
 
 	// Middle zone: Feed (left 60%) | Tasks (right 40%)
 	const middleStart = agentPanelStart + agentPanelHeight + 1;
-	const compactPanelHeight = 5; // fixed for mail/merge panels
-	const metricsHeight = 3; // separator + data + border
-	const middleHeight = Math.max(6, height - middleStart - compactPanelHeight - metricsHeight);
+	const compactPanelHeight = layout.compactPanelHeight;
+	const metricsHeight = layout.metricsHeight;
+	const middleHeight = layout.middleHeight;
 
 	const feedWidth = Math.floor(width * 0.6);
 	output += renderFeedPanel(data, 1, feedWidth, middleHeight, middleStart);

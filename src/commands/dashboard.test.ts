@@ -20,6 +20,7 @@ import type { DashboardStores } from "./dashboard.ts";
 import {
 	closeDashboardStores,
 	computeAgentPanelHeight,
+	computeDashboardLayout,
 	dashboardCommand,
 	dimBox,
 	EventBuffer,
@@ -307,6 +308,21 @@ describe("computeAgentPanelHeight", () => {
 	test("small height: respects 35% cap", () => {
 		// height=20: max(8, min(floor(20*0.35)=7, 24)) = max(8,7) = 8
 		expect(computeAgentPanelHeight(20, 20)).toBe(8);
+	});
+});
+
+describe("computeDashboardLayout", () => {
+	test("caps middle panel height to preserve agent area on tall terminals", () => {
+		const layout = computeDashboardLayout(60, 5);
+		expect(layout.middleHeight).toBeLessThanOrEqual(14);
+		// Agent panel should get more than its basic 35% sizing due to reclaimed rows.
+		expect(layout.agentPanelHeight).toBeGreaterThan(computeAgentPanelHeight(60, 5));
+	});
+
+	test("keeps non-zero panel heights on small terminals", () => {
+		const layout = computeDashboardLayout(18, 2);
+		expect(layout.agentPanelHeight).toBeGreaterThanOrEqual(3);
+		expect(layout.middleHeight).toBeGreaterThanOrEqual(3);
 	});
 });
 
