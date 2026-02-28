@@ -267,6 +267,7 @@ program
 	.option("--no-scout-check", "Suppress the parentHasScouts scout-before-build warning")
 	.option("--dispatch-max-agents <n>", "Per-lead max agents ceiling (injected into overlay)")
 	.option("--runtime <name>", "Runtime adapter (default: config or claude)")
+	.option("--base-branch <name>", "Base branch for worktree (default: current HEAD)")
 	.option("--json", "Output result as JSON")
 	.action(async (taskId, opts) => {
 		await slingCommand(taskId, opts);
