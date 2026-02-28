@@ -465,7 +465,7 @@ export function createMetricsStore(dbPath: string): MetricsStore {
 					.get({ $project_id: projectId });
 				return row?.cnt ?? 0;
 			}
-			const row = countSessionsStmt.get();
+			const row = countSessionsStmt.get({});
 			return row?.cnt ?? 0;
 		},
 

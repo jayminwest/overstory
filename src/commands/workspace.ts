@@ -13,6 +13,7 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import type { ReadyState } from "../runtimes/types.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, WorkspaceProject } from "../types.ts";
 import {
@@ -381,6 +382,7 @@ export interface WorkspaceDeps {
 		sendKeys: (name: string, keys: string) => Promise<void>;
 		waitForTuiReady: (
 			name: string,
+			detectReady: (paneContent: string) => ReadyState,
 			timeoutMs?: number,
 			pollIntervalMs?: number,
 		) => Promise<boolean>;
@@ -521,10 +523,10 @@ async function startWorkspace(
 		});
 
 		// Record session BEFORE sending the beacon
-		const session: AgentSession = {
-			id: `session-${Date.now()}-${WORKSPACE_AGENT_NAME}`,
-			agentName: WORKSPACE_AGENT_NAME,
-			capability: "workspace",
+			const session: AgentSession = {
+				id: `session-${Date.now()}-${WORKSPACE_AGENT_NAME}`,
+				agentName: WORKSPACE_AGENT_NAME,
+				capability: "workspace",
 			worktreePath: wsRoot,
 			branchName: "",
 			taskId: "",
@@ -536,15 +538,20 @@ async function startWorkspace(
 			runId: null,
 			projectId: WORKSPACE_PROJECT_ID,
 			startedAt: new Date().toISOString(),
-			lastActivity: new Date().toISOString(),
-			escalationLevel: 0,
-			stalledSince: null,
-		};
+				lastActivity: new Date().toISOString(),
+				escalationLevel: 0,
+				stalledSince: null,
+				transcriptPath: null,
+			};
 
 		store.upsert(session);
 
 		// Wait for Claude Code TUI to render before sending input
-		const tuiReady = await tmux.waitForTuiReady(WORKSPACE_TMUX_SESSION);
+			const tuiReady = await tmux.waitForTuiReady(WORKSPACE_TMUX_SESSION, (content) => {
+				if (content.includes("Press Enter to continue")) return { phase: "dialog", action: "Enter" };
+				if (content.includes("❯") || content.includes(">")) return { phase: "ready" };
+				return { phase: "loading" };
+			});
 		if (!tuiReady) {
 			const alive = await tmux.isSessionAlive(WORKSPACE_TMUX_SESSION);
 			if (!alive) {

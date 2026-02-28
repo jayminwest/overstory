@@ -296,8 +296,6 @@ export function createSessionStore(dbPath: string): SessionStore {
 			 $tmux_session, $state, $pid, $parent_agent, $depth, $run_id,
 			 $started_at, $last_activity, $escalation_level, $stalled_since, $transcript_path)
 		ON CONFLICT(project_id, agent_name) DO UPDATE SET
-			 $started_at, $last_activity, $escalation_level, $stalled_since, $transcript_path)
-		ON CONFLICT(project_id, agent_name) DO UPDATE SET
 			id = excluded.id,
 			capability = excluded.capability,
 			worktree_path = excluded.worktree_path,

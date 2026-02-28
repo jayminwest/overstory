@@ -16,6 +16,10 @@ import type {
 	ToolStats,
 } from "../types.ts";
 
+// Backward-compatible aliases used by tests and older callsites.
+export type StoredEventWithProject = StoredEvent;
+export type InsertEventWithProject = InsertEvent;
+
 /** EventQueryOptions extended with optional project_id filter. */
 export interface EventQueryOptionsWithProject extends EventQueryOptions {
 	projectId?: string;
