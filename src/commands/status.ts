@@ -18,6 +18,7 @@ import { createMetricsStore } from "../metrics/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { evaluateHealth } from "../watchdog/health.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import { resolveContext } from "../workspace/resolver.ts";
 import { listWorktrees } from "../worktree/manager.ts";
 import { listSessions } from "../worktree/tmux.ts";
@@ -112,6 +113,7 @@ export async function gatherStatus(
 	verbose = false,
 	runId?: string | null,
 	dbRoot?: string,
+	projectId?: string,
 ): Promise<StatusData> {
 	const overstoryDir = dbRoot ?? join(root, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
@@ -121,8 +123,11 @@ export async function gatherStatus(
 		// When run-scoped, also include sessions with null runId (e.g. coordinator)
 		// because SQL WHERE run_id = $run_id never matches NULL rows.
 		sessions = runId
-			? [...store.getByRun(runId), ...store.getAll().filter((s) => s.runId === null)]
-			: store.getAll();
+			? [
+					...store.getByRun(runId, projectId),
+					...store.getAll(projectId).filter((s) => s.runId === null),
+				]
+			: store.getAll(projectId);
 
 		const worktrees = await getCachedWorktrees(root);
 
@@ -141,7 +146,7 @@ export async function gatherStatus(
 			const check = evaluateHealth(session, tmuxAlive, healthThresholds);
 			if (check.state !== session.state) {
 				try {
-					store.updateState(session.agentName, check.state);
+					store.updateState(session.agentName, check.state, projectId);
 					session.state = check.state;
 				} catch {
 					// Best effort: don't fail status display if update fails
@@ -156,17 +161,17 @@ export async function gatherStatus(
 				const mailFile = Bun.file(mailDbPath);
 			if (await mailFile.exists()) {
 				mailStore = createMailStore(mailDbPath);
-				const unread = mailStore.getAll({ to: agentName, unread: true });
+				const unread = mailStore.getAll({ to: agentName, unread: true, projectId });
 				unreadMailCount = unread.length;
 			}
 		} catch {
 			// mail db might not exist
 		}
 
-			let mergeQueueCount = 0;
-			try {
-				const queuePath = join(overstoryDir, "merge-queue.db");
-				const queue = createMergeQueue(queuePath);
+		let mergeQueueCount = 0;
+		try {
+			const queuePath = join(root, ".overstory", "merge-queue.db");
+			const queue = createMergeQueue(queuePath);
 			mergeQueueCount = queue.list("pending").length;
 			queue.close();
 		} catch {
@@ -179,7 +184,7 @@ export async function gatherStatus(
 				const metricsFile = Bun.file(metricsDbPath);
 			if (await metricsFile.exists()) {
 				const metricsStore = createMetricsStore(metricsDbPath);
-				recentMetricsCount = metricsStore.countSessions();
+				recentMetricsCount = metricsStore.countSessions(projectId);
 				metricsStore.close();
 			}
 		} catch {
@@ -196,11 +201,11 @@ export async function gatherStatus(
 				let lastMailReceived: string | null = null;
 				if (mailStore) {
 					try {
-						const sent = mailStore.getAll({ from: session.agentName });
+						const sent = mailStore.getAll({ from: session.agentName, projectId });
 						if (sent.length > 0 && sent[0]) {
 							lastMailSent = sent[0].createdAt;
 						}
-						const received = mailStore.getAll({ to: session.agentName });
+						const received = mailStore.getAll({ to: session.agentName, projectId });
 						if (received.length > 0 && received[0]) {
 							lastMailReceived = received[0].createdAt;
 						}
@@ -333,11 +338,12 @@ async function executeStatus(opts: StatusOpts): Promise<void> {
 	const ctx = await resolveContext({ project: opts.project });
 	const root = ctx.projectRoot;
 	const dbRoot = ctx.dbRoot;
+	const activeProjectId =
+		ctx.mode === "workspace" && ctx.projectId !== WORKSPACE_PROJECT_ID ? ctx.projectId : undefined;
 
 	let runId: string | null | undefined;
 	if (!all) {
-		const overstoryDir = join(root, ".overstory");
-		runId = await readCurrentRunId(overstoryDir);
+		runId = await readCurrentRunId(ctx.overstoryDir);
 	}
 
 	if (watch) {
@@ -345,7 +351,7 @@ async function executeStatus(opts: StatusOpts): Promise<void> {
 		while (true) {
 			// Clear screen
 			process.stdout.write("\x1b[2J\x1b[H");
-			const data = await gatherStatus(root, agentName, verbose, runId, dbRoot);
+			const data = await gatherStatus(root, agentName, verbose, runId, dbRoot, activeProjectId);
 			if (json) {
 				jsonOutput("status", data as unknown as Record<string, unknown>);
 			} else {
@@ -354,7 +360,7 @@ async function executeStatus(opts: StatusOpts): Promise<void> {
 			await Bun.sleep(interval);
 		}
 	} else {
-		const data = await gatherStatus(root, agentName, verbose, runId, dbRoot);
+		const data = await gatherStatus(root, agentName, verbose, runId, dbRoot, activeProjectId);
 		if (json) {
 			jsonOutput("status", data as unknown as Record<string, unknown>);
 		} else {

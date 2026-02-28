@@ -320,7 +320,7 @@ export function createEventStore(dbPath: string): EventStoreWithProject {
 			return rows.map(rowToEvent);
 		},
 
-		getToolStats(opts?: { agentName?: string; since?: string }): ToolStats[] {
+		getToolStats(opts?: { agentName?: string; since?: string; projectId?: string }): ToolStats[] {
 			const conditions: string[] = ["tool_name IS NOT NULL", "event_type = 'tool_start'"];
 			const params: Record<string, string> = {};
 
@@ -331,6 +331,10 @@ export function createEventStore(dbPath: string): EventStoreWithProject {
 			if (opts?.since !== undefined) {
 				conditions.push("created_at >= $since");
 				params.$since = opts.since;
+			}
+			if (opts?.projectId !== undefined) {
+				conditions.push("project_id = $project_id");
+				params.$project_id = opts.projectId;
 			}
 
 			const whereClause = `WHERE ${conditions.join(" AND ")}`;

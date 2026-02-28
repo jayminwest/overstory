@@ -66,14 +66,13 @@ export async function stopCommand(
 	const tmux = deps._tmux ?? { isSessionAlive, killSession };
 	const worktree = deps._worktree ?? { remove: removeWorktree };
 
-	const cwd = process.cwd();
-	await loadConfig(cwd);
-	const ctx = await resolveContext({ project: opts.project });
+	const ctx = await resolveContext({ project: opts.project, requireProject: true });
+	await loadConfig(ctx.projectRoot);
 	const projectRoot = ctx.projectRoot;
 
 	const { store } = openSessionStore(ctx.dbRoot);
 	try {
-		const session = store.getByName(agentName);
+		const session = store.getByName(agentName, ctx.projectId);
 		if (!session) {
 			throw new AgentError(`Agent "${agentName}" not found`, { agentName });
 		}
@@ -93,8 +92,8 @@ export async function stopCommand(
 		}
 
 		// Mark session as completed
-		store.updateState(agentName, "completed");
-		store.updateLastActivity(agentName);
+		store.updateState(agentName, "completed", ctx.projectId);
+		store.updateLastActivity(agentName, ctx.projectId);
 
 		// Optionally remove worktree (best-effort, non-fatal)
 		let worktreeRemoved = false;

@@ -15,6 +15,7 @@ import { accent, color } from "../logging/color.ts";
 import { buildEventDetail, formatAbsoluteTime, formatDate } from "../logging/format.ts";
 import { separator } from "../logging/theme.ts";
 import type { StoredEvent } from "../types.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import { resolveContext } from "../workspace/resolver.ts";
 
 /**
@@ -133,7 +134,7 @@ function printErrorsWorkspace(
 				const time = formatAbsoluteTime(event.createdAt);
 				const timestamp = date ? `${date} ${time}` : time;
 
-				const detail = buildErrorDetail(event);
+				const detail = buildEventDetail(event);
 				const detailSuffix = detail ? ` ${color.dim(detail)}` : "";
 
 				w(`    ${color.dim(timestamp)} ${color.red(color.bold("ERROR"))}${detailSuffix}\n`);
@@ -183,6 +184,8 @@ async function executeErrors(opts: ErrorsOpts): Promise<void> {
 	}
 
 	const ctx = await resolveContext({ project: opts.project });
+	const activeProjectId =
+		ctx.mode === "workspace" && ctx.projectId !== WORKSPACE_PROJECT_ID ? ctx.projectId : undefined;
 
 	// Workspace-aggregate mode: no --project flag in workspace context
 	const isWorkspaceAggregate =
@@ -190,28 +193,44 @@ async function executeErrors(opts: ErrorsOpts): Promise<void> {
 
 	if (isWorkspaceAggregate) {
 		const projects = ctx.workspaceConfig!.projects;
+		const eventsDbPath = join(ctx.dbRoot, "events.db");
+		const eventsFile = Bun.file(eventsDbPath);
+		if (!(await eventsFile.exists())) {
+			if (json) {
+				jsonOutput("errors", { events: [] });
+			} else {
+				process.stdout.write("No events data yet.\n");
+			}
+			return;
+		}
+		const store = createEventStore(eventsDbPath);
 		const allTagged: Array<{ event: StoredEvent; projectName: string }> = [];
 		const queryOpts = { since: sinceStr, until: untilStr, limit };
 
-		for (const project of projects) {
-			const eventsDbPath = join(project.root, ".overstory", "events.db");
-			if (!(await Bun.file(eventsDbPath).exists())) continue;
-			const store = createEventStore(eventsDbPath);
-			try {
+		try {
+			for (const project of projects) {
 				let events: StoredEvent[];
 				if (agentName !== undefined) {
-					events = store.getByAgent(agentName, { ...queryOpts, level: "error" });
+					events = store.getByAgent(agentName, {
+						...queryOpts,
+						level: "error",
+						projectId: project.name,
+					});
 				} else if (runId !== undefined) {
-					events = store.getByRun(runId, { ...queryOpts, level: "error" });
+					events = store.getByRun(runId, {
+						...queryOpts,
+						level: "error",
+						projectId: project.name,
+					});
 				} else {
-					events = store.getErrors(queryOpts);
+					events = store.getErrors({ ...queryOpts, projectId: project.name });
 				}
 				for (const event of events) {
 					allTagged.push({ event, projectName: project.name });
 				}
-			} finally {
-				store.close();
 			}
+		} finally {
+			store.close();
 		}
 
 		// Sort by timestamp and apply limit
@@ -230,7 +249,7 @@ async function executeErrors(opts: ErrorsOpts): Promise<void> {
 	}
 
 	// Single-project mode (single-repo or workspace with --project)
-	const eventsDbPath = join(ctx.overstoryDir, "events.db");
+	const eventsDbPath = join(ctx.dbRoot, "events.db");
 	const eventsFile = Bun.file(eventsDbPath);
 	if (!(await eventsFile.exists())) {
 		if (json) {
@@ -254,13 +273,21 @@ async function executeErrors(opts: ErrorsOpts): Promise<void> {
 
 		if (agentName !== undefined) {
 			// Filter by agent: use getByAgent with level filter
-			events = eventStore.getByAgent(agentName, { ...queryOpts, level: "error" });
+			events = eventStore.getByAgent(agentName, {
+				...queryOpts,
+				level: "error",
+				projectId: activeProjectId,
+			});
 		} else if (runId !== undefined) {
 			// Filter by run: use getByRun with level filter
-			events = eventStore.getByRun(runId, { ...queryOpts, level: "error" });
+			events = eventStore.getByRun(runId, {
+				...queryOpts,
+				level: "error",
+				projectId: activeProjectId,
+			});
 		} else {
 			// Global errors: use getErrors (already filters level='error')
-			events = eventStore.getErrors(queryOpts);
+			events = eventStore.getErrors({ ...queryOpts, projectId: activeProjectId });
 		}
 
 		if (json) {

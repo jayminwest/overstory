@@ -290,18 +290,18 @@ async function startCoordinator(
 		);
 	}
 
-	const ctx = await resolveContext({ project: opts.project });
+	const ctx = await resolveContext({ project: opts.project, requireProject: true });
 	const projectRoot = ctx.projectRoot;
+	const dbRoot = ctx.dbRoot;
 	const config = await loadConfig(projectRoot);
 	const watchdog = deps._watchdog ?? createDefaultWatchdog(projectRoot);
 	const monitor = deps._monitor ?? createDefaultMonitor(projectRoot);
 	const tmuxSession = coordinatorTmuxSession(config.project.name);
 
 	// Check for existing coordinator
-	const overstoryDir = join(projectRoot, ".overstory");
-	const { store } = openSessionStore(overstoryDir);
+	const { store } = openSessionStore(dbRoot);
 	try {
-		const existing = store.getByName(COORDINATOR_NAME);
+		const existing = store.getByName(COORDINATOR_NAME, ctx.projectId);
 
 		if (
 			existing &&
@@ -317,7 +317,7 @@ async function startCoordinator(
 				);
 			}
 			// Session recorded but tmux is dead — mark as completed and continue
-			store.updateState(COORDINATOR_NAME, "completed");
+			store.updateState(COORDINATOR_NAME, "completed", ctx.projectId);
 		}
 
 		// Resolve model and runtime early (needed for deployConfig and spawn)
@@ -414,7 +414,7 @@ async function startCoordinator(
 			transcriptPath: null,
 		};
 
-		store.upsert(session);
+		store.upsert(session, ctx.projectId);
 
 		// Wait for Claude Code TUI to render before sending input
 		const tuiReady = await tmux.waitForTuiReady(tmuxSession, (content) =>
@@ -425,7 +425,7 @@ async function startCoordinator(
 			const alive = await tmux.isSessionAlive(tmuxSession);
 			if (!alive) {
 				// Clean up the stale session record
-				store.updateState(COORDINATOR_NAME, "completed");
+				store.updateState(COORDINATOR_NAME, "completed", ctx.projectId);
 				throw new AgentError(
 					`Coordinator tmux session "${tmuxSession}" died during startup. The Claude Code process may have crashed or exited immediately. Check tmux logs or try running the claude command manually.`,
 					{ agentName: COORDINATOR_NAME },
@@ -525,15 +525,16 @@ async function stopCoordinator(
 	};
 
 	const { json } = opts;
-	const ctx = await resolveContext({ project: opts.project });
+	const ctx = await resolveContext({ project: opts.project, requireProject: true });
 	const projectRoot = ctx.projectRoot;
+	const dbRoot = ctx.dbRoot;
 	const watchdog = deps._watchdog ?? createDefaultWatchdog(projectRoot);
 	const monitor = deps._monitor ?? createDefaultMonitor(projectRoot);
 
 	const overstoryDir = join(projectRoot, ".overstory");
-	const { store } = openSessionStore(overstoryDir);
+	const { store } = openSessionStore(dbRoot);
 	try {
-		const session = store.getByName(COORDINATOR_NAME);
+		const session = store.getByName(COORDINATOR_NAME, ctx.projectId);
 
 		if (
 			!session ||
@@ -559,8 +560,8 @@ async function stopCoordinator(
 		const monitorStopped = await monitor.stop();
 
 		// Update session state
-		store.updateState(COORDINATOR_NAME, "completed");
-		store.updateLastActivity(COORDINATOR_NAME);
+		store.updateState(COORDINATOR_NAME, "completed", ctx.projectId);
+		store.updateLastActivity(COORDINATOR_NAME, ctx.projectId);
 
 		// Auto-complete the current run
 		let runCompleted = false;
@@ -570,7 +571,7 @@ async function stopCoordinator(
 			if (await currentRunFile.exists()) {
 				const runId = (await currentRunFile.text()).trim();
 				if (runId.length > 0) {
-					const runStore = createRunStore(join(overstoryDir, "sessions.db"));
+					const runStore = createRunStore(join(dbRoot, "sessions.db"));
 					try {
 						runStore.completeRun(runId, "completed");
 						runCompleted = true;
@@ -638,15 +639,15 @@ async function statusCoordinator(
 	};
 
 	const { json } = opts;
-	const ctx = await resolveContext({ project: opts.project });
+	const ctx = await resolveContext({ project: opts.project, requireProject: true });
 	const projectRoot = ctx.projectRoot;
+	const dbRoot = ctx.dbRoot;
 	const watchdog = deps._watchdog ?? createDefaultWatchdog(projectRoot);
 	const monitor = deps._monitor ?? createDefaultMonitor(projectRoot);
 
-	const overstoryDir = join(projectRoot, ".overstory");
-	const { store } = openSessionStore(overstoryDir);
+	const { store } = openSessionStore(dbRoot);
 	try {
-		const session = store.getByName(COORDINATOR_NAME);
+		const session = store.getByName(COORDINATOR_NAME, ctx.projectId);
 		const watchdogRunning = await watchdog.isRunning();
 		const monitorRunning = await monitor.isRunning();
 
@@ -676,8 +677,8 @@ async function statusCoordinator(
 		// We already filtered out completed/zombie states above, so if tmux is dead
 		// this session needs to be marked as zombie.
 		if (!alive) {
-			store.updateState(COORDINATOR_NAME, "zombie");
-			store.updateLastActivity(COORDINATOR_NAME);
+			store.updateState(COORDINATOR_NAME, "zombie", ctx.projectId);
+			store.updateLastActivity(COORDINATOR_NAME, ctx.projectId);
 			session.state = "zombie";
 		}
 

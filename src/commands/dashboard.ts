@@ -21,6 +21,7 @@ import { Command } from "commander";
 import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
+import { jsonOutput } from "../json.ts";
 import { accent, brand, color, visibleLength } from "../logging/color.ts";
 import {
 	buildAgentColorMap,
@@ -40,8 +41,9 @@ import { openSessionStore } from "../sessions/compat.ts";
 import type { SessionStore } from "../sessions/store.ts";
 import { createTrackerClient, resolveBackend } from "../tracker/factory.ts";
 import type { TrackerIssue } from "../tracker/types.ts";
-import type { EventStore, MailMessage, StoredEvent } from "../types.ts";
+import type { AgentSession, EventStore, MailMessage, StoredEvent, WorkspaceConfig } from "../types.ts";
 import { evaluateHealth } from "../watchdog/health.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import { resolveContext } from "../workspace/resolver.ts";
 import { getCachedTmuxSessions, getCachedWorktrees, type StatusData } from "./status.ts";
 
@@ -128,6 +130,62 @@ function dimHorizontalLine(width: number, left: string, right: string): string {
 
 export { pad, truncate, horizontalLine };
 
+export interface WorkspaceSection<T> {
+	projectId: string;
+	label: string;
+	items: T[];
+	isWorkspace: boolean;
+}
+
+/**
+ * Group workspace-mode items into deterministic section order:
+ * configured projects (workspace.yaml order), unknown projects (sorted),
+ * then workspace-level items (_workspace) last.
+ */
+export function groupWorkspaceSections<T extends { projectId?: string }>(
+	items: T[],
+	projectOrder: string[],
+): { sections: WorkspaceSection<T>[]; projectCount: number } {
+	const byProject = new Map<string, T[]>();
+	for (const item of items) {
+		const pid = item.projectId ?? "_default";
+		if (!byProject.has(pid)) byProject.set(pid, []);
+		byProject.get(pid)?.push(item);
+	}
+
+	const workspaceItems = byProject.get(WORKSPACE_PROJECT_ID) ?? [];
+	byProject.delete(WORKSPACE_PROJECT_ID);
+
+	const sections: WorkspaceSection<T>[] = [];
+	const configuredSet = new Set(projectOrder);
+
+	for (const projectId of projectOrder) {
+		const projectItems = byProject.get(projectId);
+		if (!projectItems || projectItems.length === 0) continue;
+		sections.push({ projectId, label: projectId, items: projectItems, isWorkspace: false });
+		byProject.delete(projectId);
+	}
+
+	const unknownProjectIds = [...byProject.keys()].filter((pid) => !configuredSet.has(pid)).sort();
+	for (const projectId of unknownProjectIds) {
+		const projectItems = byProject.get(projectId);
+		if (!projectItems || projectItems.length === 0) continue;
+		sections.push({ projectId, label: projectId, items: projectItems, isWorkspace: false });
+	}
+
+	if (workspaceItems.length > 0) {
+		sections.push({
+			projectId: WORKSPACE_PROJECT_ID,
+			label: "Workspace",
+			items: workspaceItems,
+			isWorkspace: true,
+		});
+	}
+
+	const projectCount = sections.filter((s) => !s.isWorkspace).length;
+	return { sections, projectCount };
+}
+
 /**
  * Compute agent panel height from screen height and agent count.
  * min 8 rows, max floor(height * 0.35), grows with agent count (+4 for chrome).
@@ -181,7 +239,8 @@ export function openDashboardStores(root: string, dbRoot?: string): DashboardSto
 
 	let mergeQueue: MergeQueue | null = null;
 	try {
-		const queuePath = join(overstoryDir, "merge-queue.db");
+		// Merge queue is project-local state under project .overstory (not workspace-shared dbRoot).
+		const queuePath = join(root, ".overstory", "merge-queue.db");
 		if (existsSync(queuePath)) {
 			mergeQueue = createMergeQueue(queuePath);
 		}
@@ -300,7 +359,7 @@ interface DashboardData {
 	currentRunId?: string | null;
 	status: StatusData;
 	recentMail: MailMessage[];
-	mergeQueue: Array<{ branchName: string; agentName: string; status: string }>;
+	mergeQueue: Array<{ branchName: string; agentName: string; status: string; projectId?: string }>;
 	metrics: {
 		totalSessions: number;
 		avgDuration: number;
@@ -309,6 +368,8 @@ interface DashboardData {
 	tasks: TrackerIssue[];
 	recentEvents: StoredEvent[];
 	feedColorMap: Map<string, (s: string) => string>;
+	workspaceConfig: WorkspaceConfig | null;
+	activeProjectId: string | null;
 }
 
 /**
@@ -336,7 +397,8 @@ async function loadDashboardData(
 	runId?: string | null,
 	thresholds?: { staleMs: number; zombieMs: number },
 	eventBuffer?: EventBuffer,
-	activeProjectId?: string,
+	workspaceConfig?: WorkspaceConfig | null,
+	activeProjectId?: string | null,
 ): Promise<DashboardData> {
 	// Get all sessions from the pre-opened session store
 	const allSessions = stores.sessionStore.getAll();
@@ -347,7 +409,24 @@ async function loadDashboardData(
 		: allSessions;
 
 	// Get worktrees and tmux sessions via cached subprocess helpers
-	const worktrees = await getCachedWorktrees(root);
+	let worktrees: Array<{ path: string; branch: string; head: string }> = [];
+	if (workspaceConfig && activeProjectId === null) {
+		for (const project of workspaceConfig.projects) {
+			try {
+				const projectWorktrees = await getCachedWorktrees(project.root);
+				worktrees.push(...projectWorktrees);
+			} catch {
+				// best effort in aggregate view
+			}
+		}
+	} else {
+		try {
+			worktrees = await getCachedWorktrees(root);
+		} catch {
+			// best effort for non-git directories in tests
+			worktrees = [];
+		}
+	}
 	const tmuxSessions = await getCachedTmuxSessions();
 
 	// Evaluate health for active agents using the same logic as the watchdog.
@@ -384,7 +463,22 @@ async function loadDashboardData(
 
 	// Count merge queue pending entries
 	let mergeQueueCount = 0;
-	if (stores.mergeQueue) {
+	if (workspaceConfig && activeProjectId === null) {
+		for (const project of workspaceConfig.projects) {
+			const queuePath = join(project.root, ".overstory", "merge-queue.db");
+			if (!existsSync(queuePath)) continue;
+			try {
+				const queue = createMergeQueue(queuePath);
+				try {
+					mergeQueueCount += queue.list("pending").length;
+				} finally {
+					queue.close();
+				}
+			} catch {
+				// best effort
+			}
+		}
+	} else if (stores.mergeQueue) {
 		try {
 			mergeQueueCount = stores.mergeQueue.list("pending").length;
 		} catch {
@@ -431,18 +525,49 @@ async function loadDashboardData(
 	}
 
 	// Load merge queue entries from pre-opened merge queue
-	let mergeQueueEntries: Array<{ branchName: string; agentName: string; status: string }> = [];
-	if (stores.mergeQueue) {
+	let mergeQueueEntries: Array<{ branchName: string; agentName: string; status: string; projectId?: string }> =
+		[];
+	const runAgentNames =
+		runId && filteredAgents.length > 0
+			? new Set(filteredAgents.map((a) => a.agentName))
+			: null;
+	if (workspaceConfig && activeProjectId === null) {
+		for (const project of workspaceConfig.projects) {
+			const queuePath = join(project.root, ".overstory", "merge-queue.db");
+			if (!existsSync(queuePath)) continue;
+			try {
+				const queue = createMergeQueue(queuePath);
+				try {
+					let entries = queue.list();
+					if (runAgentNames) {
+						entries = entries.filter((e) => runAgentNames.has(e.agentName));
+					}
+					mergeQueueEntries.push(
+						...entries.map((e) => ({
+							branchName: e.branchName,
+							agentName: e.agentName,
+							status: e.status,
+							projectId: project.name,
+						})),
+					);
+				} finally {
+					queue.close();
+				}
+			} catch {
+				// best effort
+			}
+		}
+	} else if (stores.mergeQueue) {
 		try {
 			let entries = stores.mergeQueue.list();
-			if (runId && filteredAgents.length > 0) {
-				const agentNames = new Set(filteredAgents.map((a) => a.agentName));
-				entries = entries.filter((e) => agentNames.has(e.agentName));
+			if (runAgentNames) {
+				entries = entries.filter((e) => runAgentNames.has(e.agentName));
 			}
 			mergeQueueEntries = entries.map((e) => ({
 				branchName: e.branchName,
 				agentName: e.agentName,
 				status: e.status,
+				projectId: activeProjectId ?? undefined,
 			}));
 		} catch {
 			// best effort
@@ -526,6 +651,8 @@ async function loadDashboardData(
 		tasks,
 		recentEvents,
 		feedColorMap,
+		workspaceConfig: workspaceConfig ?? null,
+		activeProjectId: activeProjectId ?? null,
 	};
 }
 
@@ -554,16 +681,26 @@ export function renderAgentPanel(
 ): string {
 	const leftWidth = fullWidth;
 	let output = "";
+	const workspaceMode = data.workspaceConfig !== null;
+	const workspaceAggregate = workspaceMode && data.activeProjectId === null;
 
 	// Panel header
-	const headerLine = `${dimBox.vertical} ${brand.bold("Agents")} (${data.status.agents.length})`;
+	let headerLabel = `${dimBox.vertical} ${brand.bold("Agents")} (${data.status.agents.length})`;
+	if (workspaceMode) {
+		const projectLabel = data.activeProjectId
+			? `project: ${data.activeProjectId}`
+			: `${data.workspaceConfig?.projects.length ?? 0} projects`;
+		headerLabel += ` [workspace: ${projectLabel}]`;
+	}
+	const headerLine = headerLabel;
 	const headerPadding = " ".repeat(
 		Math.max(0, leftWidth - visibleLength(headerLine) - visibleLength(dimBox.vertical)),
 	);
 	output += `${CURSOR.cursorTo(startRow, 1)}${headerLine}${headerPadding}${dimBox.vertical}\n`;
 
 	// Column headers
-	const colStr = `${dimBox.vertical} St Name            Capability    State      Task ID          Duration  Tmux `;
+	const nameColumn = workspaceMode ? "Name (project)    " : "Name            ";
+	const colStr = `${dimBox.vertical} St ${nameColumn}Capability    State      Task ID          Duration  Tmux `;
 	const colPadding = " ".repeat(
 		Math.max(0, leftWidth - visibleLength(colStr) - visibleLength(dimBox.vertical)),
 	);
@@ -574,26 +711,22 @@ export function renderAgentPanel(
 	output += `${CURSOR.cursorTo(startRow + 2, 1)}${separator}\n`;
 
 	// Sort agents: active first, then completed, then zombie
-	const agents = [...data.status.agents].sort((a, b) => {
-		const activeStates = ["working", "booting", "stalled"];
-		const aActive = activeStates.includes(a.state);
-		const bActive = activeStates.includes(b.state);
-		if (aActive && !bActive) return -1;
-		if (!aActive && bActive) return 1;
-		return 0;
-	});
+	const sortAgents = (agents: AgentSession[]): AgentSession[] =>
+		[...agents].sort((a, b) => {
+			const activeStates = ["working", "booting", "stalled"];
+			const aActive = activeStates.includes(a.state);
+			const bActive = activeStates.includes(b.state);
+			if (aActive && !bActive) return -1;
+			if (!aActive && bActive) return 1;
+			return 0;
+		});
 
-	const now = Date.now();
-	const maxRows = panelHeight - 4; // header + col headers + separator + border
-	const visibleAgents = agents.slice(0, maxRows);
-
-	for (let i = 0; i < visibleAgents.length; i++) {
-		const agent = visibleAgents[i];
-		if (!agent) continue;
-
+	const renderAgentRow = (agent: AgentSession, rowOffset: number): string => {
 		const icon = stateIcon(agent.state);
 		const stateColorFn = stateColor(agent.state);
-		const name = accent(pad(truncate(agent.agentName, 15), 15));
+		const projectLabel = agent.projectId === WORKSPACE_PROJECT_ID ? "workspace" : agent.projectId;
+		const displayName = workspaceMode ? `[${projectLabel ?? "_default"}] ${agent.agentName}` : agent.agentName;
+		const name = accent(pad(truncate(displayName, 18), 18));
 		const capability = pad(truncate(agent.capability, 12), 12);
 		const state = pad(agent.state, 10);
 		const taskId = accent(pad(truncate(agent.taskId, 16), 16));
@@ -605,16 +738,57 @@ export function renderAgentPanel(
 		const durationPadded = pad(duration, 9);
 		const tmuxAlive = data.status.tmuxSessions.some((s) => s.name === agent.tmuxSession);
 		const tmuxDot = tmuxAlive ? color.green(">") : color.red("x");
-
 		const lineContent = `${dimBox.vertical} ${stateColorFn(icon)}  ${name} ${capability} ${stateColorFn(state)} ${taskId} ${durationPadded} ${tmuxDot}    `;
 		const linePadding = " ".repeat(
 			Math.max(0, leftWidth - visibleLength(lineContent) - visibleLength(dimBox.vertical)),
 		);
-		output += `${CURSOR.cursorTo(startRow + 3 + i, 1)}${lineContent}${linePadding}${dimBox.vertical}\n`;
+		return `${CURSOR.cursorTo(startRow + 3 + rowOffset, 1)}${lineContent}${linePadding}${dimBox.vertical}\n`;
+	};
+
+	const maxRows = panelHeight - 4; // header + col headers + separator + border
+	const now = Date.now();
+	let rowIndex = 0;
+
+	if (workspaceAggregate) {
+		const projectOrder = data.workspaceConfig?.projects.map((p) => p.name) ?? [];
+		const grouped = groupWorkspaceSections(data.status.agents, projectOrder);
+
+		const summaryLine = `${dimBox.vertical}  Workspace total: ${data.status.agents.length} agents across ${grouped.projectCount} project(s)`;
+		const summaryPadding = " ".repeat(
+			Math.max(0, leftWidth - visibleLength(summaryLine) - visibleLength(dimBox.vertical)),
+		);
+		if (rowIndex < maxRows) {
+			output += `${CURSOR.cursorTo(startRow + 3 + rowIndex, 1)}${summaryLine}${summaryPadding}${dimBox.vertical}\n`;
+			rowIndex++;
+		}
+
+		for (const section of grouped.sections) {
+			if (rowIndex >= maxRows) break;
+			const sectionHeader = `${dimBox.vertical}  ${brand.bold(accent(section.label))} (${section.items.length})`;
+			const sectionPadding = " ".repeat(
+				Math.max(0, leftWidth - visibleLength(sectionHeader) - visibleLength(dimBox.vertical)),
+			);
+			output += `${CURSOR.cursorTo(startRow + 3 + rowIndex, 1)}${sectionHeader}${sectionPadding}${dimBox.vertical}\n`;
+			rowIndex++;
+
+			for (const agent of sortAgents(section.items)) {
+				if (rowIndex >= maxRows) break;
+				output += renderAgentRow(agent, rowIndex);
+				rowIndex++;
+			}
+		}
+	} else {
+		const agents = sortAgents(data.status.agents);
+		const visibleAgents = agents.slice(0, maxRows);
+		for (const agent of visibleAgents) {
+			if (!agent) continue;
+			output += renderAgentRow(agent, rowIndex);
+			rowIndex++;
+		}
 	}
 
 	// Fill remaining rows with empty lines
-	for (let i = visibleAgents.length; i < maxRows; i++) {
+	for (let i = rowIndex; i < maxRows; i++) {
 		const emptyLine = `${dimBox.vertical}${" ".repeat(Math.max(0, leftWidth - 2))}${dimBox.vertical}`;
 		output += `${CURSOR.cursorTo(startRow + 3 + i, 1)}${emptyLine}\n`;
 	}
@@ -848,6 +1022,7 @@ function renderMergeQueuePanel(
 	startCol: number,
 ): string {
 	let output = "";
+	const workspaceAggregate = data.workspaceConfig !== null && data.activeProjectId === null;
 
 	const headerLine = `${dimBox.vertical} ${brand.bold("Merge Queue")} (${data.mergeQueue.length})`;
 	const headerPadding = " ".repeat(
@@ -868,7 +1043,11 @@ function renderMergeQueuePanel(
 		const statusColorFn = mergeStatusColor(entry.status);
 		const status = pad(entry.status, 10);
 		const agent = accent(truncate(entry.agentName, 15));
-		const branch = truncate(entry.branchName, panelWidth - 30);
+		const branchLabel =
+			workspaceAggregate && entry.projectId
+				? `[${entry.projectId}] ${entry.branchName}`
+				: entry.branchName;
+		const branch = truncate(branchLabel, panelWidth - 30);
 
 		const lineContent = `${dimBox.vertical} ${statusColorFn(status)} ${agent} ${branch}`;
 		const padding = " ".repeat(
@@ -975,6 +1154,7 @@ interface DashboardOpts {
 	interval?: string;
 	all?: boolean;
 	project?: string;
+	json?: boolean;
 }
 
 async function executeDashboard(opts: DashboardOpts): Promise<void> {
@@ -1003,7 +1183,7 @@ async function executeDashboard(opts: DashboardOpts): Promise<void> {
 	} catch {
 		// best effort
 	}
-	const activeProjectId = ctx.projectId === "_workspace" ? undefined : ctx.projectId;
+	const activeProjectId = ctx.projectId === WORKSPACE_PROJECT_ID ? null : ctx.projectId;
 
 	// Read current run ID unless --all flag is set
 	let runId: string | null | undefined;
@@ -1014,6 +1194,35 @@ async function executeDashboard(opts: DashboardOpts): Promise<void> {
 
 	// Open stores once for the entire poll loop lifetime
 	const stores = openDashboardStores(root, ctx.dbRoot);
+
+	// JSON mode: single snapshot output and exit.
+	if (opts.json) {
+		try {
+			const data = await loadDashboardData(
+				root,
+				stores,
+				runId,
+				thresholds,
+				undefined,
+				ctx.workspaceConfig,
+				activeProjectId,
+			);
+			jsonOutput("dashboard", {
+				currentRunId: data.currentRunId,
+				workspaceMode: data.workspaceConfig !== null,
+				activeProjectId: data.activeProjectId,
+				status: data.status,
+				recentMail: data.recentMail,
+				mergeQueue: data.mergeQueue,
+				metrics: data.metrics,
+				tasks: data.tasks,
+				recentEvents: data.recentEvents,
+			});
+		} finally {
+			closeDashboardStores(stores);
+		}
+		return;
+	}
 
 	// Create rolling event buffer (persisted across poll ticks)
 	const eventBuffer = new EventBuffer(100);
@@ -1039,6 +1248,7 @@ async function executeDashboard(opts: DashboardOpts): Promise<void> {
 			runId,
 			thresholds,
 			eventBuffer,
+			ctx.workspaceConfig,
 			activeProjectId,
 		);
 		renderDashboard(data, interval);
@@ -1051,9 +1261,14 @@ export function createDashboardCommand(): Command {
 		.description("Live TUI dashboard for agent monitoring (Ctrl+C to stop)")
 		.option("--interval <ms>", "Poll interval in milliseconds (default: 2000, min: 500)")
 		.option("--all", "Show data from all runs (default: current run only)")
+		.option("--json", "Output a single JSON snapshot and exit")
 		.action(async (opts: DashboardOpts, cmd: Command) => {
 			const globalOpts = cmd.optsWithGlobals();
-			await executeDashboard({ ...opts, project: globalOpts.project as string | undefined });
+			await executeDashboard({
+				...opts,
+				project: globalOpts.project as string | undefined,
+				json: (globalOpts.json as boolean | undefined) ?? opts.json,
+			});
 		});
 }
 

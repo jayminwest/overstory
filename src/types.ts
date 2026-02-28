@@ -561,7 +561,7 @@ export interface EventStore {
 	/** Get a timeline of events with required options. */
 	getTimeline(opts: EventQueryOptions & { since: string }): StoredEvent[];
 	/** Get aggregated tool usage statistics. */
-	getToolStats(opts?: { agentName?: string; since?: string }): ToolStats[];
+	getToolStats(opts?: { agentName?: string; since?: string; projectId?: string }): ToolStats[];
 	/** Delete events matching criteria. Returns number of rows deleted. */
 	purge(opts: { all?: boolean; olderThanMs?: number; agentName?: string }): number;
 	/** Close the database connection. */

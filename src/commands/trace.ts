@@ -20,6 +20,7 @@ import {
 import { eventLabel, renderHeader } from "../logging/theme.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { StoredEvent } from "../types.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import { resolveContext } from "../workspace/resolver.ts";
 
 /**
@@ -126,6 +127,8 @@ async function executeTrace(target: string, opts: TraceOpts): Promise<void> {
 	}
 
 	const ctx = await resolveContext({ project: opts.project });
+	const activeProjectId =
+		ctx.mode === "workspace" && ctx.projectId !== WORKSPACE_PROJECT_ID ? ctx.projectId : undefined;
 
 	// Workspace-aggregate mode: no --project flag in workspace context
 	const isWorkspaceAggregate =
@@ -135,83 +138,83 @@ async function executeTrace(target: string, opts: TraceOpts): Promise<void> {
 		// In workspace mode without --project: search all projects for the target agent
 		// If target is a task ID, try to resolve it across all projects' session stores
 		const projects = ctx.workspaceConfig!.projects;
+		const eventsDbPath = join(ctx.dbRoot, "events.db");
+		const eventsFile = Bun.file(eventsDbPath);
+		if (!(await eventsFile.exists())) {
+			if (json) {
+				jsonOutput("trace", { events: [] });
+			} else {
+				process.stdout.write("No events data yet.\n");
+			}
+			return;
+		}
+		const eventStore = createEventStore(eventsDbPath);
+		const { store: sessionStore } = openSessionStore(ctx.dbRoot);
 		let agentName = target;
 		let foundProjectName: string | undefined;
 
-		if (looksLikeTaskId(target)) {
-			// Search all projects' session stores
-			for (const project of projects) {
-				const overstoryDir = join(project.root, ".overstory");
-				const sessionsDbPath = join(overstoryDir, "sessions.db");
-				if (!(await Bun.file(sessionsDbPath).exists())) continue;
-				try {
-					const { store: sessionStore } = openSessionStore(overstoryDir);
-					try {
-						const allSessions = sessionStore.getAll();
-						const matchingSession = allSessions.find((s) => s.taskId === target);
-						if (matchingSession) {
-							agentName = matchingSession.agentName;
-							foundProjectName = project.name;
-							break;
-						}
-					} finally {
-						sessionStore.close();
+		try {
+			if (looksLikeTaskId(target)) {
+				// Search all projects' session records in shared sessions.db
+				for (const project of projects) {
+					const allSessions = sessionStore.getAll(project.name);
+					const matchingSession = allSessions.find((s) => s.taskId === target);
+					if (matchingSession) {
+						agentName = matchingSession.agentName;
+						foundProjectName = project.name;
+						break;
 					}
-				} catch {
-					// Non-fatal: continue to next project
 				}
 			}
-		}
 
-		// Query the first project that has events for this agent, or aggregate
-		const allTagged: Array<{ event: StoredEvent; projectName: string }> = [];
-		for (const project of projects) {
-			const eventsDbPath = join(project.root, ".overstory", "events.db");
-			if (!(await Bun.file(eventsDbPath).exists())) continue;
-			// If we found the project via task ID, only query that project
-			if (foundProjectName !== undefined && project.name !== foundProjectName) continue;
-			const store = createEventStore(eventsDbPath);
-			try {
-				const events = store.getByAgent(agentName, { since: sinceStr, until: untilStr, limit });
+			// Query the first project that has events for this agent, or aggregate
+			const allTagged: Array<{ event: StoredEvent; projectName: string }> = [];
+			for (const project of projects) {
+				// If we found the project via task ID, only query that project
+				if (foundProjectName !== undefined && project.name !== foundProjectName) continue;
+				const events = eventStore.getByAgent(agentName, {
+					since: sinceStr,
+					until: untilStr,
+					limit,
+					projectId: project.name,
+				});
 				for (const event of events) {
 					allTagged.push({ event, projectName: project.name });
 				}
-			} finally {
-				store.close();
 			}
+
+			// Sort and limit
+			allTagged.sort((a, b) => a.event.createdAt.localeCompare(b.event.createdAt));
+			const limited = allTagged.slice(0, limit);
+
+			if (json) {
+				process.stdout.write(
+					`${JSON.stringify(limited.map((t) => ({ ...t.event, projectName: t.projectName })))}\n`,
+				);
+				return;
+			}
+
+			const events = limited.map((t) => t.event);
+			// Use the project name if there's a single project in results
+			const uniqueProjects = new Set(limited.map((t) => t.projectName));
+			const displayProjectName = uniqueProjects.size === 1 ? [...uniqueProjects][0] : undefined;
+			const useAbsoluteTime = sinceStr !== undefined;
+			printTimeline(events, agentName, useAbsoluteTime, displayProjectName);
+		} finally {
+			sessionStore.close();
+			eventStore.close();
 		}
-
-		// Sort and limit
-		allTagged.sort((a, b) => a.event.createdAt.localeCompare(b.event.createdAt));
-		const limited = allTagged.slice(0, limit);
-
-		if (json) {
-			process.stdout.write(
-				`${JSON.stringify(limited.map((t) => ({ ...t.event, projectName: t.projectName })))}\n`,
-			);
-			return;
-		}
-
-		const events = limited.map((t) => t.event);
-		// Use the project name if there's a single project in results
-		const uniqueProjects = new Set(limited.map((t) => t.projectName));
-		const displayProjectName = uniqueProjects.size === 1 ? [...uniqueProjects][0] : undefined;
-		const useAbsoluteTime = sinceStr !== undefined;
-		printTimeline(events, agentName, useAbsoluteTime, displayProjectName);
 		return;
 	}
-
-	// Single-project mode (single-repo or workspace with --project)
-	const overstoryDir = ctx.overstoryDir;
 
 	// Resolve target to agent name
 	let agentName = target;
 
 	if (looksLikeTaskId(target)) {
 		// Try to resolve task ID to agent name via SessionStore
-		const { store: sessionStore } = openSessionStore(overstoryDir);
+		const { store: sessionStore } = openSessionStore(ctx.dbRoot);
 		try {
-			const allSessions = sessionStore.getAll();
+			const allSessions = sessionStore.getAll(activeProjectId);
 			const matchingSession = allSessions.find((s) => s.taskId === target);
 			if (matchingSession) {
 				agentName = matchingSession.agentName;
@@ -226,7 +229,7 @@ async function executeTrace(target: string, opts: TraceOpts): Promise<void> {
 	}
 
 	// Open event store and query events
-	const eventsDbPath = join(overstoryDir, "events.db");
+	const eventsDbPath = join(ctx.dbRoot, "events.db");
 	const eventsFile = Bun.file(eventsDbPath);
 	if (!(await eventsFile.exists())) {
 		if (json) {
@@ -244,6 +247,7 @@ async function executeTrace(target: string, opts: TraceOpts): Promise<void> {
 			since: sinceStr,
 			until: untilStr,
 			limit,
+			projectId: activeProjectId,
 		});
 
 		if (json) {

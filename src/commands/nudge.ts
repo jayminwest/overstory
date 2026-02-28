@@ -17,6 +17,7 @@ import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { EventStore } from "../types.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import { resolveContext } from "../workspace/resolver.ts";
 import { isSessionAlive, sendKeys } from "../worktree/tmux.ts";
 
@@ -75,10 +76,11 @@ async function resolveTargetSession(
 	projectRoot: string,
 	agentName: string,
 	dbRoot: string,
+	projectId?: string,
 ): Promise<string | null> {
 	const { store } = openSessionStore(dbRoot);
 	try {
-		const session = store.getByName(agentName);
+		const session = store.getByName(agentName, projectId);
 		if (session && session.state !== "zombie" && session.state !== "completed") {
 			return session.tmuxSession;
 		}
@@ -185,6 +187,7 @@ async function readCurrentRunId(overstoryDir: string): Promise<string | null> {
 function recordNudgeEvent(
 	eventStore: EventStore,
 	opts: {
+		projectId?: string;
 		runId: string | null;
 		agentName: string;
 		from: string;
@@ -194,7 +197,7 @@ function recordNudgeEvent(
 ): void {
 	try {
 		eventStore.insert({
-			projectId: "_default",
+			projectId: opts.projectId ?? "_default",
 			runId: opts.runId,
 			agentName: opts.agentName,
 			sessionId: null,
@@ -231,14 +234,21 @@ export async function nudgeAgent(
 	message: string = DEFAULT_MESSAGE,
 	force = false,
 	dbRoot?: string,
+	projectId?: string,
 ): Promise<{ delivered: boolean; reason?: string }> {
 	let result: { delivered: boolean; reason?: string };
 
 	const effectiveDbRoot = dbRoot ?? join(projectRoot, ".overstory");
-	const overstoryDir = join(projectRoot, ".overstory");
+	const overstoryDir =
+		projectId === WORKSPACE_PROJECT_ID ? effectiveDbRoot : join(projectRoot, ".overstory");
 
 	// Resolve tmux session (SessionStore for agents, orchestrator-tmux.json for orchestrator)
-	const tmuxSessionName = await resolveTargetSession(projectRoot, agentName, effectiveDbRoot);
+	const tmuxSessionName = await resolveTargetSession(
+		projectRoot,
+		agentName,
+		effectiveDbRoot,
+		projectId,
+	);
 
 	if (!tmuxSessionName) {
 		result = { delivered: false, reason: `No active session for agent "${agentName}"` };
@@ -286,6 +296,7 @@ export async function nudgeAgent(
 		try {
 			const runId = await readCurrentRunId(overstoryDir);
 			recordNudgeEvent(eventStore, {
+				projectId,
 				runId,
 				agentName,
 				from: "orchestrator",
@@ -336,6 +347,7 @@ export async function nudgeCommand(args: string[]): Promise<void> {
 					message,
 					opts.force ?? false,
 					ctx.dbRoot,
+					ctx.projectId,
 				);
 
 				if (opts.json) {

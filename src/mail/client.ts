@@ -77,6 +77,24 @@ export function parsePayload<T extends MailProtocolType>(
 	}
 }
 
+/**
+ * Parse an address in optional "project:agent" form.
+ * Group addresses and invalid separator forms are returned unchanged.
+ */
+export function parseAddress(address: string): { projectId: string | null; agentName: string } {
+	if (address.startsWith("@")) {
+		return { projectId: null, agentName: address };
+	}
+	const sep = address.indexOf(":");
+	if (sep <= 0 || sep === address.length - 1) {
+		return { projectId: null, agentName: address };
+	}
+	return {
+		projectId: address.slice(0, sep),
+		agentName: address.slice(sep + 1),
+	};
+}
+
 /** Protocol types that represent structured coordination messages. */
 const PROTOCOL_TYPES = new Set<string>([
 	"worker_done",
@@ -129,33 +147,41 @@ function formatForInjection(messages: MailMessage[]): string {
 export function createMailClient(store: MailStore, defaultProjectId?: string): MailClient {
 	return {
 		send(msg): string {
+			const fromParsed = parseAddress(msg.from);
+			const toParsed = parseAddress(msg.to);
+			const resolvedProjectId =
+				toParsed.projectId ?? fromParsed.projectId ?? defaultProjectId ?? "_default";
 			const message = store.insert({
 				id: "",
-				from: msg.from,
-				to: msg.to,
+				from: fromParsed.agentName,
+				to: toParsed.agentName,
 				subject: msg.subject,
 				body: msg.body,
 				type: msg.type ?? "status",
 				priority: msg.priority ?? "normal",
 				threadId: msg.threadId ?? null,
 				payload: msg.payload ?? null,
-				projectId: defaultProjectId,
+				projectId: resolvedProjectId,
 			});
 			return message.id;
 		},
 
 		sendProtocol(msg): string {
+			const fromParsed = parseAddress(msg.from);
+			const toParsed = parseAddress(msg.to);
+			const resolvedProjectId =
+				toParsed.projectId ?? fromParsed.projectId ?? defaultProjectId ?? "_default";
 			const message = store.insert({
 				id: "",
-				from: msg.from,
-				to: msg.to,
+				from: fromParsed.agentName,
+				to: toParsed.agentName,
 				subject: msg.subject,
 				body: msg.body,
 				type: msg.type,
 				priority: msg.priority ?? "normal",
 				threadId: msg.threadId ?? null,
 				payload: JSON.stringify(msg.payload),
-				projectId: defaultProjectId,
+				projectId: resolvedProjectId,
 			});
 			return message.id;
 		},

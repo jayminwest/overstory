@@ -38,7 +38,6 @@ import { createRunStore } from "../sessions/store.ts";
 import type { TrackerIssue } from "../tracker/factory.ts";
 import { createTrackerClient, resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession, OverlayConfig } from "../types.ts";
-import { resolveContext } from "../workspace/resolver.ts";
 import { createWorktree } from "../worktree/manager.ts";
 import {
 	capturePaneContent,
@@ -567,7 +566,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 	// 5. Check name uniqueness and concurrency limit against active sessions
 	const { store } = openSessionStore(ctx.dbRoot);
 	try {
-		const activeSessions = store.getActive();
+		const activeSessions = store.getActive(ctx.projectId);
 		if (activeSessions.length >= config.agents.maxConcurrent) {
 			throw new AgentError(
 				`Max concurrent agent limit reached: ${activeSessions.length}/${config.agents.maxConcurrent} active agents`,
@@ -575,7 +574,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			);
 		}
 
-		const existing = store.getByName(name);
+		const existing = store.getByName(name, ctx.projectId);
 		if (existing && existing.state !== "zombie" && existing.state !== "completed") {
 			throw new AgentError(`Agent name "${name}" is already in use (state: ${existing.state})`, {
 				agentName: name,
@@ -623,7 +622,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			shouldShowScoutWarning(
 				capability,
 				parentAgent,
-				store.getAll(),
+				store.getAll(ctx.projectId),
 				opts.noScoutCheck ?? false,
 				skipScout,
 			)
@@ -759,7 +758,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		});
 		const mailStore = createMailStore(join(ctx.dbRoot, "mail.db"));
 		try {
-			const mailClient = createMailClient(mailStore);
+			const mailClient = createMailClient(mailStore, ctx.projectId);
 			mailClient.send({
 				from: dispatch.from,
 				to: dispatch.to,

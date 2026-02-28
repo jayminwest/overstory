@@ -15,6 +15,7 @@ import { createEventStore } from "../events/store.ts";
 import { color } from "../logging/color.ts";
 import { createSessionStore } from "../sessions/store.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import type { DashboardStores } from "./dashboard.ts";
 import {
 	closeDashboardStores,
@@ -23,6 +24,7 @@ import {
 	dimBox,
 	EventBuffer,
 	filterAgentsByRun,
+	groupWorkspaceSections,
 	horizontalLine,
 	openDashboardStores,
 	pad,
@@ -118,11 +120,39 @@ describe("dashboardCommand", () => {
 		expect(out).toContain("--all");
 	});
 
+	test("help text includes --json flag", async () => {
+		await dashboardCommand(["--help"]);
+		const out = output();
+
+		expect(out).toContain("--json");
+	});
+
 	test("help text describes current run scoping", async () => {
 		await dashboardCommand(["--help"]);
 		const out = output();
 
 		expect(out).toContain("current run");
+	});
+
+	test("--json outputs single snapshot envelope and exits", async () => {
+		const originalCwd = process.cwd();
+		try {
+			const overstoryDir = join(tempDir, ".overstory");
+			await mkdir(overstoryDir, { recursive: true });
+			const seeder = createSessionStore(join(overstoryDir, "sessions.db"));
+			seeder.close();
+
+			process.chdir(tempDir);
+			await dashboardCommand(["--json", "--all"]);
+		} finally {
+			process.chdir(originalCwd);
+		}
+
+		const out = output();
+		expect(out).toContain('"success":true');
+		expect(out).toContain('"command":"dashboard"');
+		expect(out).toContain('"status"');
+		expect(out).not.toContain("\x1b[?25l");
 	});
 });
 
@@ -213,6 +243,18 @@ describe("filterAgentsByRun", () => {
 	});
 });
 
+describe("groupWorkspaceSections", () => {
+	test("puts configured projects first and workspace last", () => {
+		const items = [
+			{ projectId: "frontend", id: "a" },
+			{ projectId: WORKSPACE_PROJECT_ID, id: "b" },
+			{ projectId: "backend", id: "c" },
+		];
+		const result = groupWorkspaceSections(items, ["backend", "frontend"]);
+		expect(result.sections.map((s) => s.label)).toEqual(["backend", "frontend", "Workspace"]);
+	});
+});
+
 describe("dimBox", () => {
 	test("dimBox.vertical equals color.dim(│)", () => {
 		expect(dimBox.vertical).toBe(color.dim("│"));
@@ -269,6 +311,8 @@ describe("computeAgentPanelHeight", () => {
 });
 
 // Helper to build a minimal DashboardData for panel tests
+type PanelData = Parameters<typeof renderAgentPanel>[0];
+
 function makeDashboardData(
 	overrides: Partial<{
 		tasks: Array<{ id: string; title: string; priority: number; status: string; type: string }>;
@@ -286,7 +330,7 @@ function makeDashboardData(
 			data: null;
 		}>;
 	}> = {},
-) {
+): PanelData {
 	return {
 		currentRunId: null,
 		status: {
@@ -304,7 +348,9 @@ function makeDashboardData(
 		tasks: overrides.tasks ?? [],
 		recentEvents: (overrides.recentEvents as never[]) ?? [],
 		feedColorMap: new Map(),
-	};
+		workspaceConfig: null,
+		activeProjectId: null,
+	} as PanelData;
 }
 
 describe("renderTasksPanel", () => {
@@ -408,6 +454,48 @@ describe("renderAgentPanel", () => {
 		const out = renderAgentPanel(data, 100, 12, 3);
 		// dimBox.vertical is a dimmed ANSI string — present in output
 		expect(out).toContain(dimBox.vertical);
+	});
+
+	test("workspace aggregate renders summary and Workspace section header", () => {
+		const now = new Date().toISOString();
+		const data = makeDashboardData({});
+		data.workspaceConfig = {
+			name: "ws",
+			root: "/tmp/ws",
+			projects: [
+				{ name: "frontend", root: "/tmp/ws/frontend", canonicalBranch: "main" },
+				{ name: "backend", root: "/tmp/ws/backend", canonicalBranch: "main" },
+			],
+			maxConcurrentTotal: 10,
+			maxDepth: 4,
+		};
+		data.activeProjectId = null;
+		data.status.agents = [
+			{
+				id: "a",
+				agentName: "workspace",
+				capability: "workspace",
+				worktreePath: "/tmp/ws",
+				branchName: "main",
+				taskId: "w1",
+				tmuxSession: "tmux-ws",
+				state: "completed",
+				pid: null,
+				parentAgent: null,
+				depth: 0,
+				runId: null,
+				projectId: WORKSPACE_PROJECT_ID,
+				startedAt: now,
+				lastActivity: now,
+				escalationLevel: 0,
+				stalledSince: null,
+				transcriptPath: null,
+			},
+		];
+
+		const out = renderAgentPanel(data, 120, 12, 3);
+		expect(out).toContain("Workspace total:");
+		expect(out).toContain("Workspace");
 	});
 });
 

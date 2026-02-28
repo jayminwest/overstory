@@ -47,6 +47,7 @@ function makeSession(overrides: Partial<SessionMetrics> = {}): SessionMetrics {
 		estimatedCostUsd: null,
 		modelUsed: null,
 		runId: null,
+		projectId: "_default",
 		...overrides,
 	};
 }

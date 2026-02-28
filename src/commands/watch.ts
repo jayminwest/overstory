@@ -122,8 +122,8 @@ async function runWatch(opts: {
 	project?: string;
 }): Promise<void> {
 	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const ctx = await resolveContext({ project: opts.project });
+	const ctx = await resolveContext({ project: opts.project, requireProject: true });
+	const config = await loadConfig(ctx.projectRoot);
 
 	const intervalMs = opts.interval
 		? Number.parseInt(opts.interval, 10)
@@ -131,7 +131,7 @@ async function runWatch(opts: {
 
 	const staleThresholdMs = config.watchdog.staleThresholdMs;
 	const zombieThresholdMs = config.watchdog.zombieThresholdMs;
-	const pidFilePath = join(ctx.projectRoot, ".overstory", "watchdog.pid");
+	const pidFilePath = join(ctx.overstoryDir, "watchdog.pid");
 
 	if (opts.background) {
 		// Check if a watchdog is already running
@@ -153,6 +153,9 @@ async function runWatch(opts: {
 		const childArgs: string[] = ["watch"];
 		if (opts.interval) {
 			childArgs.push("--interval", opts.interval);
+		}
+		if (opts.project) {
+			childArgs.push("--project", opts.project);
 		}
 
 		// Resolve the overstory binary path
@@ -188,6 +191,9 @@ async function runWatch(opts: {
 
 	const { stop } = startDaemon({
 		root: ctx.projectRoot,
+		dbRoot: ctx.dbRoot,
+		overstoryDir: ctx.overstoryDir,
+		projectId: ctx.projectId,
 		intervalMs,
 		staleThresholdMs,
 		zombieThresholdMs,

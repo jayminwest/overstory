@@ -516,7 +516,7 @@ async function handleSend(
 				const nudgeMessage = `[DISPATCH] ${subject}: ${body.slice(0, 500)}`;
 				// Small delay to let the agent's TUI stabilize after sling
 				await Bun.sleep(3_000);
-				await nudgeAgent(cwd, to, nudgeMessage, true); // force=true to skip debounce
+					await nudgeAgent(cwd, to, nudgeMessage, true, dbRoot, projectId); // force=true to skip debounce
 			} catch {
 				// Non-fatal: the file-based nudge is the fallback
 			}
@@ -527,7 +527,7 @@ async function handleSend(
 			try {
 				const { store: sessionStore } = openSessionStore(dbRoot);
 				try {
-					const allSessions = sessionStore.getAll();
+						const allSessions = sessionStore.getAll(projectId);
 					const myBuilders = allSessions.filter(
 						(s) => s.parentAgent === from && s.capability === "builder",
 					);

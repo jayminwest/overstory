@@ -27,6 +27,24 @@ import { createMulchClient, type MulchClient } from "../mulch/client.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
 import type { AgentSession } from "../types.ts";
+import { resolveContext } from "../workspace/resolver.ts";
+
+/**
+ * Extract --project / -p flag from process.argv (global option parsed by parent Commander).
+ */
+function extractProjectFlag(): string | undefined {
+	const args = process.argv;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--project" || arg === "-p") {
+			return args[i + 1];
+		}
+		if (arg?.startsWith("--project=")) {
+			return arg.slice("--project=".length);
+		}
+	}
+	return undefined;
+}
 
 /**
  * Get or create a session timestamp directory for the agent.
@@ -57,16 +75,15 @@ async function getSessionDir(logsBase: string, agentName: string): Promise<strin
  * Update the lastActivity timestamp for an agent in the SessionStore.
  * Non-fatal: silently ignores errors to avoid breaking hook execution.
  */
-function updateLastActivity(projectRoot: string, agentName: string): void {
+function updateLastActivity(dbRoot: string, projectId: string, agentName: string): void {
 	try {
-		const overstoryDir = join(projectRoot, ".overstory");
-		const { store } = openSessionStore(overstoryDir);
+		const { store } = openSessionStore(dbRoot);
 		try {
-			const session = store.getByName(agentName);
+			const session = store.getByName(agentName, projectId);
 			if (session) {
-				store.updateLastActivity(agentName);
+				store.updateLastActivity(agentName, projectId);
 				if (session.state === "booting" || session.state === "zombie") {
-					store.updateState(agentName, "working");
+					store.updateState(agentName, "working", projectId);
 				}
 			}
 		} finally {
@@ -93,19 +110,18 @@ const PERSISTENT_CAPABILITIES = new Set(["coordinator", "monitor"]);
  *
  * Non-fatal: silently ignores errors to avoid breaking hook execution.
  */
-function transitionToCompleted(projectRoot: string, agentName: string): void {
+function transitionToCompleted(dbRoot: string, projectId: string, agentName: string): void {
 	try {
-		const overstoryDir = join(projectRoot, ".overstory");
-		const { store } = openSessionStore(overstoryDir);
+		const { store } = openSessionStore(dbRoot);
 		try {
-			const session = store.getByName(agentName);
+			const session = store.getByName(agentName, projectId);
 			if (session && PERSISTENT_CAPABILITIES.has(session.capability)) {
 				// Persistent agents: only update activity, don't mark completed
-				store.updateLastActivity(agentName);
+				store.updateLastActivity(agentName, projectId);
 				return;
 			}
-			store.updateState(agentName, "completed");
-			store.updateLastActivity(agentName);
+			store.updateState(agentName, "completed", projectId);
+			store.updateLastActivity(agentName, projectId);
 		} finally {
 			store.close();
 		}
@@ -118,12 +134,11 @@ function transitionToCompleted(projectRoot: string, agentName: string): void {
  * Look up an agent's session record.
  * Returns null if not found.
  */
-function getAgentSession(projectRoot: string, agentName: string): AgentSession | null {
+function getAgentSession(dbRoot: string, projectId: string, agentName: string): AgentSession | null {
 	try {
-		const overstoryDir = join(projectRoot, ".overstory");
-		const { store } = openSessionStore(overstoryDir);
+		const { store } = openSessionStore(dbRoot);
 		try {
-			return store.getByName(agentName);
+			return store.getByName(agentName, projectId);
 		} finally {
 			store.close();
 		}
@@ -172,15 +187,17 @@ async function readStdinJson(): Promise<Record<string, unknown> | null> {
  */
 async function resolveTranscriptPath(
 	projectRoot: string,
+	dbRoot: string,
+	projectId: string,
 	sessionId: string,
 	logsBase: string,
 	agentName: string,
 ): Promise<string | null> {
 	// Check SessionStore for a runtime-provided transcript path
 	try {
-		const { store } = openSessionStore(join(projectRoot, ".overstory"));
+		const { store } = openSessionStore(dbRoot);
 		try {
-			const session = store.getByName(agentName);
+			const session = store.getByName(agentName, projectId);
 			if (session?.transcriptPath) {
 				if (await Bun.file(session.transcriptPath).exists()) {
 					return session.transcriptPath;
@@ -213,9 +230,9 @@ async function resolveTranscriptPath(
 		await Bun.write(cachePath, directPath);
 		// Save discovered path to SessionStore for future lookups
 		try {
-			const { store: writeStore } = openSessionStore(join(projectRoot, ".overstory"));
+			const { store: writeStore } = openSessionStore(dbRoot);
 			try {
-				writeStore.updateTranscriptPath(agentName, directPath);
+				writeStore.updateTranscriptPath(agentName, directPath, projectId);
 			} finally {
 				writeStore.close();
 			}
@@ -232,15 +249,15 @@ async function resolveTranscriptPath(
 		for (const project of projects) {
 			const candidate = join(claudeProjectsDir, project, `${sessionId}.jsonl`);
 			if (await Bun.file(candidate).exists()) {
-				await Bun.write(cachePath, candidate);
-				// Save discovered path to SessionStore for future lookups
-				try {
-					const { store: writeStore } = openSessionStore(join(projectRoot, ".overstory"));
+					await Bun.write(cachePath, candidate);
+					// Save discovered path to SessionStore for future lookups
 					try {
-						writeStore.updateTranscriptPath(agentName, candidate);
-					} finally {
-						writeStore.close();
-					}
+						const { store: writeStore } = openSessionStore(dbRoot);
+						try {
+							writeStore.updateTranscriptPath(agentName, candidate, projectId);
+						} finally {
+							writeStore.close();
+						}
 				} catch {
 					// Non-fatal: cache write failure should not break transcript resolution
 				}
@@ -268,10 +285,13 @@ export async function autoRecordExpertise(params: {
 	capability: string;
 	taskId: string | null;
 	mailDbPath: string;
+	defaultProjectId?: string;
 	parentAgent: string | null;
-	projectRoot: string;
+	eventsDbPath?: string;
+	projectRoot?: string; // backward-compat for tests/callers
 	sessionStartedAt: string;
 }): Promise<string[]> {
+	const defaultProjectId = params.defaultProjectId ?? "_default";
 	const learnResult = await params.mulchClient.learn({ since: "HEAD~1" });
 	if (learnResult.suggestedDomains.length === 0) {
 		return [];
@@ -297,15 +317,22 @@ export async function autoRecordExpertise(params: {
 	// Analyze session events for deeper insights (tool usage, file edits, errors)
 	let insightSummary = "";
 	try {
-		const eventsDbPath = join(params.projectRoot, ".overstory", "events.db");
+		const eventsDbPath =
+			params.eventsDbPath ??
+			(params.projectRoot ? join(params.projectRoot, ".overstory", "events.db") : null);
+		if (!eventsDbPath) {
+			throw new Error("eventsDbPath not provided");
+		}
 		const eventStore = createEventStore(eventsDbPath);
 
 		const events = eventStore.getByAgent(params.agentName, {
 			since: params.sessionStartedAt,
+			projectId: defaultProjectId,
 		});
 		const toolStats = eventStore.getToolStats({
 			agentName: params.agentName,
 			since: params.sessionStartedAt,
+			projectId: defaultProjectId,
 		});
 
 		eventStore.close();
@@ -353,7 +380,7 @@ export async function autoRecordExpertise(params: {
 
 	if (recordedDomains.length > 0) {
 		const mailStore = createMailStore(params.mailDbPath);
-		const mailClient = createMailClient(mailStore);
+		const mailClient = createMailClient(mailStore, defaultProjectId);
 		const recipient = params.parentAgent ?? "orchestrator";
 		const domainsList = recordedDomains.join(", ");
 		mailClient.send({
@@ -391,11 +418,16 @@ export async function appendOutcomeToAppliedRecords(params: {
 	agentName: string;
 	capability: string;
 	taskId: string | null;
-	projectRoot: string;
+	overstoryDir?: string;
+	projectRoot?: string; // backward-compat for tests/callers
 }): Promise<number> {
+	const overstoryDir =
+		params.overstoryDir ??
+		(params.projectRoot ? join(params.projectRoot, ".overstory") : null);
+	if (!overstoryDir) return 0;
+
 	const appliedRecordsPath = join(
-		params.projectRoot,
-		".overstory",
+		overstoryDir,
 		"agents",
 		params.agentName,
 		"applied-records.json",
@@ -479,9 +511,13 @@ async function runLog(opts: {
 			? stdinPayload.transcript_path
 			: opts.transcript;
 
-	const cwd = process.cwd();
-	const config = await loadConfig(cwd);
-	const logsBase = join(config.project.root, ".overstory", "logs");
+	const ctx = await resolveContext({ project: extractProjectFlag() });
+	const projectRoot = ctx.projectRoot;
+	const overstoryDir = ctx.overstoryDir;
+	const dbRoot = ctx.dbRoot;
+	const projectId = ctx.projectId;
+	const config = await loadConfig(projectRoot);
+	const logsBase = join(overstoryDir, "logs");
 	const sessionDir = await getSessionDir(logsBase, opts.agent);
 
 	const logger = createLogger({
@@ -495,18 +531,18 @@ async function runLog(opts: {
 		case "tool-start": {
 			// Backward compatibility: always write to per-agent log files
 			logger.toolStart(toolName, toolInput ?? {});
-			updateLastActivity(config.project.root, opts.agent);
+			updateLastActivity(dbRoot, projectId, opts.agent);
 
 			// Always write to EventStore for structured observability
 			// (works for both Claude Code --stdin and Pi runtime --tool-name agents)
 			try {
-				const eventsDbPath = join(config.project.root, ".overstory", "events.db");
+				const eventsDbPath = join(dbRoot, "events.db");
 				const eventStore = createEventStore(eventsDbPath);
 				const filtered = toolInput
 					? filterToolArgs(toolName, toolInput)
 					: { args: {}, summary: toolName };
 				eventStore.insert({
-					projectId: "_default",
+					projectId,
 					runId: null,
 					agentName: opts.agent,
 					sessionId,
@@ -526,18 +562,18 @@ async function runLog(opts: {
 		case "tool-end": {
 			// Backward compatibility: always write to per-agent log files
 			logger.toolEnd(toolName, 0);
-			updateLastActivity(config.project.root, opts.agent);
+			updateLastActivity(dbRoot, projectId, opts.agent);
 
 			// Always write to EventStore for structured observability
 			// (works for both Claude Code --stdin and Pi runtime --tool-name agents)
 			try {
-				const eventsDbPath = join(config.project.root, ".overstory", "events.db");
+				const eventsDbPath = join(dbRoot, "events.db");
 				const eventStore = createEventStore(eventsDbPath);
 				const filtered = toolInput
 					? filterToolArgs(toolName, toolInput)
 					: { args: {}, summary: toolName };
 				eventStore.insert({
-					projectId: "_default",
+					projectId,
 					runId: null,
 					agentName: opts.agent,
 					sessionId,
@@ -573,20 +609,22 @@ async function runLog(opts: {
 						}
 					}
 
-					if (shouldSnapshot) {
-						const resolvedTranscriptPath = await resolveTranscriptPath(
-							config.project.root,
-							sessionId,
-							logsBase,
-							opts.agent,
-						);
-						if (resolvedTranscriptPath) {
-							const usage = await parseTranscriptUsage(resolvedTranscriptPath);
-							const cost = estimateCost(usage);
-							const metricsDbPath = join(config.project.root, ".overstory", "metrics.db");
-							const metricsStore = createMetricsStore(metricsDbPath);
-							metricsStore.recordSnapshot({
-								projectId: "_default",
+						if (shouldSnapshot) {
+							const resolvedTranscriptPath = await resolveTranscriptPath(
+								projectRoot,
+								dbRoot,
+								projectId,
+								sessionId,
+								logsBase,
+								opts.agent,
+							);
+							if (resolvedTranscriptPath) {
+								const usage = await parseTranscriptUsage(resolvedTranscriptPath);
+								const cost = estimateCost(usage);
+								const metricsDbPath = join(dbRoot, "metrics.db");
+								const metricsStore = createMetricsStore(metricsDbPath);
+								metricsStore.recordSnapshot({
+									projectId,
 								agentName: opts.agent,
 								inputTokens: usage.inputTokens,
 								outputTokens: usage.outputTokens,
@@ -609,14 +647,14 @@ async function runLog(opts: {
 		case "session-end":
 			logger.info("session.end", { agentName: opts.agent });
 			// Transition agent state to completed
-			transitionToCompleted(config.project.root, opts.agent);
+			transitionToCompleted(dbRoot, projectId, opts.agent);
 			// Look up agent session for identity update and metrics recording
 			{
-				const agentSession = getAgentSession(config.project.root, opts.agent);
+				const agentSession = getAgentSession(dbRoot, projectId, opts.agent);
 				const taskId = agentSession?.taskId ?? null;
 
 				// Update agent identity with completed session
-				const identityBaseDir = join(config.project.root, ".overstory", "agents");
+				const identityBaseDir = join(overstoryDir, "agents");
 				try {
 					await updateIdentity(identityBaseDir, opts.agent, {
 						sessionsCompleted: 1,
@@ -631,7 +669,7 @@ async function runLog(opts: {
 				// for user input (see decision mx-728f8d).
 				if (agentSession?.capability === "lead") {
 					try {
-						const nudgesDir = join(config.project.root, ".overstory", "pending-nudges");
+						const nudgesDir = join(dbRoot, "pending-nudges");
 						const { mkdir } = await import("node:fs/promises");
 						await mkdir(nudgesDir, { recursive: true });
 						const markerPath = join(nudgesDir, "coordinator.json");
@@ -653,16 +691,14 @@ async function runLog(opts: {
 					// Auto-complete the current run when the coordinator exits.
 					// This handles the case where the user closes the tmux window
 					// without running `ov coordinator stop`.
-					if (agentSession.capability === "coordinator") {
-						try {
-							const currentRunPath = join(config.project.root, ".overstory", "current-run.txt");
+						if (agentSession.capability === "coordinator") {
+							try {
+								const currentRunPath = join(overstoryDir, "current-run.txt");
 							const currentRunFile = Bun.file(currentRunPath);
 							if (await currentRunFile.exists()) {
 								const runId = (await currentRunFile.text()).trim();
-								if (runId.length > 0) {
-									const runStore = createRunStore(
-										join(config.project.root, ".overstory", "sessions.db"),
-									);
+									if (runId.length > 0) {
+										const runStore = createRunStore(join(dbRoot, "sessions.db"));
 									try {
 										runStore.completeRun(runId, "completed");
 									} finally {
@@ -682,7 +718,7 @@ async function runLog(opts: {
 					}
 
 					try {
-						const metricsDbPath = join(config.project.root, ".overstory", "metrics.db");
+						const metricsDbPath = join(dbRoot, "metrics.db");
 						const metricsStore = createMetricsStore(metricsDbPath);
 						const now = new Date().toISOString();
 						const durationMs = new Date(now).getTime() - new Date(agentSession.startedAt).getTime();
@@ -710,7 +746,7 @@ async function runLog(opts: {
 						}
 
 						metricsStore.recordSession({
-							projectId: "_default",
+							projectId,
 							agentName: opts.agent,
 							taskId: agentSession.taskId,
 							capability: agentSession.capability,
@@ -735,20 +771,22 @@ async function runLog(opts: {
 
 					// Auto-record expertise via mulch learn + record (post-session).
 					// Skip persistent agents whose Stop hook fires every turn.
-					if (!PERSISTENT_CAPABILITIES.has(agentSession.capability)) {
-						try {
-							const mulchClient = createMulchClient(config.project.root);
-							const mailDbPath = join(config.project.root, ".overstory", "mail.db");
-							await autoRecordExpertise({
-								mulchClient,
-								agentName: opts.agent,
-								capability: agentSession.capability,
-								taskId,
-								mailDbPath,
-								parentAgent: agentSession.parentAgent,
-								projectRoot: config.project.root,
-								sessionStartedAt: agentSession.startedAt,
-							});
+						if (!PERSISTENT_CAPABILITIES.has(agentSession.capability)) {
+							try {
+								const mulchClient = createMulchClient(projectRoot);
+								const mailDbPath = join(dbRoot, "mail.db");
+								const eventsDbPath = join(dbRoot, "events.db");
+								await autoRecordExpertise({
+									mulchClient,
+									agentName: opts.agent,
+									capability: agentSession.capability,
+									taskId,
+									mailDbPath,
+									defaultProjectId: projectId,
+									parentAgent: agentSession.parentAgent,
+									eventsDbPath,
+									sessionStartedAt: agentSession.startedAt,
+								});
 						} catch {
 							// Non-fatal: mulch learn/record should not break session-end handling
 						}
@@ -756,16 +794,16 @@ async function runLog(opts: {
 
 					// Append outcomes to applied mulch records (outcome feedback loop).
 					// Reads applied-records.json written by sling.ts at spawn time.
-					if (!PERSISTENT_CAPABILITIES.has(agentSession.capability)) {
-						try {
-							const mulchClient = createMulchClient(config.project.root);
-							await appendOutcomeToAppliedRecords({
-								mulchClient,
-								agentName: opts.agent,
-								capability: agentSession.capability,
-								taskId,
-								projectRoot: config.project.root,
-							});
+						if (!PERSISTENT_CAPABILITIES.has(agentSession.capability)) {
+							try {
+								const mulchClient = createMulchClient(projectRoot);
+								await appendOutcomeToAppliedRecords({
+									mulchClient,
+									agentName: opts.agent,
+									capability: agentSession.capability,
+									taskId,
+									overstoryDir,
+								});
 						} catch {
 							// Non-fatal
 						}
@@ -774,10 +812,10 @@ async function runLog(opts: {
 
 				// Always write session-end event to EventStore (not just when --stdin is used)
 				try {
-					const eventsDbPath = join(config.project.root, ".overstory", "events.db");
+					const eventsDbPath = join(dbRoot, "events.db");
 					const eventStore = createEventStore(eventsDbPath);
 					eventStore.insert({
-						projectId: "_default",
+						projectId,
 						runId: null,
 						agentName: opts.agent,
 						sessionId,

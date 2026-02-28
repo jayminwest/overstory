@@ -105,6 +105,7 @@ async function readCurrentRunId(overstoryDir: string): Promise<string | null> {
 function recordEvent(
 	eventStore: EventStore | null,
 	event: {
+		projectId?: string;
 		runId: string | null;
 		agentName: string;
 		eventType: "custom" | "mail_sent";
@@ -115,7 +116,7 @@ function recordEvent(
 	if (!eventStore) return;
 	try {
 		eventStore.insert({
-			projectId: "_default",
+			projectId: event.projectId ?? "_default",
 			runId: event.runId,
 			agentName: event.agentName,
 			sessionId: null,
@@ -174,8 +175,10 @@ export function buildCompletionMessage(
  * repeated nudges for the same run ID.
  */
 async function checkRunCompletion(ctx: {
-	store: { getByRun: (runId: string) => AgentSession[] };
+	store: { getByRun: (runId: string, projectId?: string) => AgentSession[] };
 	runId: string;
+	projectId?: string;
+	dbRoot: string;
 	overstoryDir: string;
 	root: string;
 	nudge: (
@@ -183,12 +186,13 @@ async function checkRunCompletion(ctx: {
 		agentName: string,
 		message: string,
 		force: boolean,
+		dbRoot?: string,
 	) => Promise<{ delivered: boolean; reason?: string }>;
 	eventStore: EventStore | null;
 }): Promise<void> {
-	const { store, runId, overstoryDir, root, nudge, eventStore } = ctx;
+	const { store, runId, projectId, dbRoot, overstoryDir, root, nudge, eventStore } = ctx;
 
-	const runSessions = store.getByRun(runId);
+	const runSessions = store.getByRun(runId, projectId);
 	const workerSessions = runSessions.filter((s) => !PERSISTENT_CAPABILITIES.has(s.capability));
 
 	if (workerSessions.length === 0) {
@@ -217,7 +221,7 @@ async function checkRunCompletion(ctx: {
 	// Nudge the coordinator
 	const message = buildCompletionMessage(workerSessions, runId);
 	try {
-		await nudge(root, "coordinator", message, true);
+		await nudge(root, "coordinator", message, true, dbRoot);
 	} catch {
 		// Nudge delivery failure is non-fatal
 	}
@@ -226,6 +230,7 @@ async function checkRunCompletion(ctx: {
 	const capabilitiesArr = Array.from(new Set(workerSessions.map((s) => s.capability))).sort();
 	const phase = capabilitiesArr.length === 1 ? capabilitiesArr[0] : "mixed";
 	recordEvent(eventStore, {
+		projectId,
 		runId,
 		agentName: "watchdog",
 		eventType: "custom",
@@ -250,6 +255,9 @@ async function checkRunCompletion(ctx: {
 /** Options shared between startDaemon and runDaemonTick. */
 export interface DaemonOptions {
 	root: string;
+	dbRoot?: string;
+	overstoryDir?: string;
+	projectId?: string;
 	staleThresholdMs: number;
 	zombieThresholdMs: number;
 	nudgeIntervalMs?: number;
@@ -272,6 +280,7 @@ export interface DaemonOptions {
 		agentName: string,
 		message: string,
 		force: boolean,
+		dbRoot?: string,
 	) => Promise<{ delivered: boolean; reason?: string }>;
 	/** Dependency injection for testing. Overrides EventStore creation. */
 	_eventStore?: EventStore | null;
@@ -347,8 +356,10 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 	const nudge = options._nudge ?? nudgeAgent;
 	const recordFailureFn = options._recordFailure ?? recordFailure;
 
-	const overstoryDir = join(root, ".overstory");
-	const { store } = openSessionStore(overstoryDir);
+	const overstoryDir = options.overstoryDir ?? join(root, ".overstory");
+	const dbRoot = options.dbRoot ?? overstoryDir;
+	const projectId = options.projectId;
+	const { store } = openSessionStore(dbRoot);
 
 	// Open EventStore for recording daemon events (fire-and-forget)
 	let eventStore: EventStore | null = null;
@@ -358,7 +369,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 		eventStore = options._eventStore ?? null;
 	} else {
 		try {
-			const eventsDbPath = join(overstoryDir, "events.db");
+			const eventsDbPath = join(dbRoot, "events.db");
 			eventStore = createEventStore(eventsDbPath);
 		} catch {
 			// EventStore creation failure is non-fatal for the daemon
@@ -376,7 +387,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 			zombieMs: zombieThresholdMs,
 		};
 
-		const sessions = store.getAll();
+		const sessions = store.getAll(projectId);
 
 		for (const session of sessions) {
 			// Skip completed sessions — they are terminal and don't need monitoring
@@ -393,7 +404,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 			// Transition state forward only (investigate action holds state)
 			const newState = transitionState(session.state, check);
 			if (newState !== session.state) {
-				store.updateState(session.agentName, newState);
+				store.updateState(session.agentName, newState, projectId);
 				session.state = newState;
 			}
 
@@ -414,9 +425,9 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 						// Session may have died between check and kill — not an error
 					}
 				}
-				store.updateState(session.agentName, "zombie");
+				store.updateState(session.agentName, "zombie", projectId);
 				// Reset escalation tracking on terminal state
-				store.updateEscalation(session.agentName, 0, null);
+				store.updateEscalation(session.agentName, 0, null, projectId);
 				session.state = "zombie";
 				session.escalationLevel = 0;
 				session.stalledSince = null;
@@ -433,7 +444,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 				if (session.stalledSince === null) {
 					session.stalledSince = new Date().toISOString();
 					session.escalationLevel = 0;
-					store.updateEscalation(session.agentName, 0, session.stalledSince);
+					store.updateEscalation(session.agentName, 0, session.stalledSince, projectId);
 				}
 
 				// Check if enough time has passed to advance to the next escalation level
@@ -445,7 +456,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 
 				if (expectedLevel > session.escalationLevel) {
 					session.escalationLevel = expectedLevel;
-					store.updateEscalation(session.agentName, expectedLevel, session.stalledSince);
+					store.updateEscalation(session.agentName, expectedLevel, session.stalledSince, projectId);
 				}
 
 				// Execute the action for the current escalation level
@@ -459,19 +470,21 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 					nudge,
 					eventStore,
 					runId,
+					projectId,
+					dbRoot,
 					recordFailure: recordFailureFn,
 				});
 
 				if (actionResult.terminated) {
-					store.updateState(session.agentName, "zombie");
-					store.updateEscalation(session.agentName, 0, null);
+					store.updateState(session.agentName, "zombie", projectId);
+					store.updateEscalation(session.agentName, 0, null, projectId);
 					session.state = "zombie";
 					session.escalationLevel = 0;
 					session.stalledSince = null;
 				}
 			} else if (check.action === "none" && session.stalledSince !== null) {
 				// Agent recovered — reset escalation tracking
-				store.updateEscalation(session.agentName, 0, null);
+				store.updateEscalation(session.agentName, 0, null, projectId);
 				session.stalledSince = null;
 				session.escalationLevel = 0;
 			}
@@ -483,6 +496,8 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 			await checkRunCompletion({
 				store,
 				runId,
+				projectId,
+				dbRoot,
 				overstoryDir,
 				root,
 				nudge,
@@ -531,9 +546,12 @@ async function executeEscalationAction(ctx: {
 		agentName: string,
 		message: string,
 		force: boolean,
+		dbRoot?: string,
 	) => Promise<{ delivered: boolean; reason?: string }>;
 	eventStore: EventStore | null;
 	runId: string | null;
+	projectId?: string;
+	dbRoot: string;
 	recordFailure: (
 		root: string,
 		session: AgentSession,
@@ -552,6 +570,8 @@ async function executeEscalationAction(ctx: {
 		nudge,
 		eventStore,
 		runId,
+		projectId,
+		dbRoot,
 		recordFailure,
 	} = ctx;
 
@@ -559,6 +579,7 @@ async function executeEscalationAction(ctx: {
 		case 0: {
 			// Level 0: warn — onHealthCheck callback already fired, no direct action
 			recordEvent(eventStore, {
+				projectId,
 				runId,
 				agentName: session.agentName,
 				eventType: "custom",
@@ -577,12 +598,14 @@ async function executeEscalationAction(ctx: {
 					session.agentName,
 					`[WATCHDOG] Agent "${session.agentName}" appears stalled. Please check your current task and report status.`,
 					true, // force — skip debounce for watchdog nudges
+					dbRoot,
 				);
 				delivered = result.delivered;
 			} catch {
 				// Nudge delivery failure is non-fatal for the watchdog
 			}
 			recordEvent(eventStore, {
+				projectId,
 				runId,
 				agentName: session.agentName,
 				eventType: "custom",
@@ -606,6 +629,7 @@ async function executeEscalationAction(ctx: {
 			});
 
 			recordEvent(eventStore, {
+				projectId,
 				runId,
 				agentName: session.agentName,
 				eventType: "custom",
@@ -636,6 +660,7 @@ async function executeEscalationAction(ctx: {
 						"[WATCHDOG] Triage suggests recovery is possible. " +
 							"Please retry your current operation or check for errors.",
 						true, // force — skip debounce
+						dbRoot,
 					);
 				} catch {
 					// Nudge delivery failure is non-fatal
@@ -649,6 +674,7 @@ async function executeEscalationAction(ctx: {
 		default: {
 			// Level 3+: terminate — kill the tmux session
 			recordEvent(eventStore, {
+				projectId,
 				runId,
 				agentName: session.agentName,
 				eventType: "custom",

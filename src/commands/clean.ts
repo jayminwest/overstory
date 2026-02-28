@@ -56,7 +56,7 @@ export interface CleanOptions {
  * an empty database file as a side effect (which would interfere with
  * the "Nothing to clean" detection later in the pipeline).
  */
-function loadActiveSessions(overstoryDir: string, dbRoot: string): AgentSession[] {
+function loadActiveSessions(overstoryDir: string, dbRoot: string, projectId?: string): AgentSession[] {
 	try {
 		const dbPath = join(dbRoot, "sessions.db");
 		const jsonPath = join(overstoryDir, "sessions.json");
@@ -65,7 +65,7 @@ function loadActiveSessions(overstoryDir: string, dbRoot: string): AgentSession[
 		}
 		const { store } = openSessionStore(dbRoot);
 		try {
-			return store.getActive();
+			return store.getActive(projectId);
 		} finally {
 			store.close();
 		}
@@ -81,10 +81,14 @@ function loadActiveSessions(overstoryDir: string, dbRoot: string): AgentSession[
  * because the process is killed externally. This function writes session_end events
  * to the EventStore with reason='clean' so observability records are complete.
  */
-async function logSyntheticSessionEndEvents(overstoryDir: string, dbRoot: string): Promise<number> {
+async function logSyntheticSessionEndEvents(
+	overstoryDir: string,
+	dbRoot: string,
+	projectId?: string,
+): Promise<number> {
 	let logged = 0;
 	try {
-		const activeSessions = loadActiveSessions(overstoryDir, dbRoot);
+		const activeSessions = loadActiveSessions(overstoryDir, dbRoot, projectId);
 		if (activeSessions.length === 0) {
 			return 0;
 		}
@@ -94,7 +98,7 @@ async function logSyntheticSessionEndEvents(overstoryDir: string, dbRoot: string
 		try {
 			for (const session of activeSessions) {
 				eventStore.insert({
-					projectId: "_default",
+					projectId: session.projectId ?? projectId ?? "_default",
 					runId: session.runId,
 					agentName: session.agentName,
 					sessionId: session.id,
@@ -153,6 +157,7 @@ async function killAllTmuxSessions(
 	overstoryDir: string,
 	dbRoot: string,
 	projectName: string,
+	projectId?: string,
 ): Promise<number> {
 	let killed = 0;
 	const projectPrefix = `overstory-${projectName}-`;
@@ -164,7 +169,7 @@ async function killAllTmuxSessions(
 		}
 
 		// Build a set of tmux session names registered in this project's SessionStore.
-		const registeredNames = loadRegisteredTmuxNames(overstoryDir, dbRoot);
+		const registeredNames = loadRegisteredTmuxNames(overstoryDir, dbRoot, projectId);
 
 		// If we got registered names, only kill those. Otherwise fall back to all
 		// overstory-{projectName}-* sessions.
@@ -193,7 +198,11 @@ async function killAllTmuxSessions(
  * Returns null if the SessionStore cannot be opened (signals the caller to
  * fall back to the legacy "kill all overstory-*" behavior).
  */
-function loadRegisteredTmuxNames(overstoryDir: string, dbRoot: string): Set<string> | null {
+function loadRegisteredTmuxNames(
+	overstoryDir: string,
+	dbRoot: string,
+	projectId?: string,
+): Set<string> | null {
 	try {
 		const dbPath = join(dbRoot, "sessions.db");
 		const jsonPath = join(overstoryDir, "sessions.json");
@@ -205,7 +214,7 @@ function loadRegisteredTmuxNames(overstoryDir: string, dbRoot: string): Set<stri
 		}
 		const { store } = openSessionStore(dbRoot);
 		try {
-			const allSessions = store.getAll();
+			const allSessions = store.getAll(projectId);
 			return new Set(allSessions.map((s) => s.tmuxSession));
 		} finally {
 			store.close();
@@ -435,6 +444,7 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 	const root = ctx.projectRoot;
 	const overstoryDir = ctx.overstoryDir;
 	const dbRoot = ctx.dbRoot;
+	const scopedProjectId = ctx.projectId;
 
 	const result: CleanResult = {
 		sessionEndEventsLogged: 0,
@@ -472,12 +482,21 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 	// When processes are killed externally, the Stop hook never fires,
 	// so session_end events would be lost without this step.
 	if (doWorktrees || all) {
-		result.sessionEndEventsLogged = await logSyntheticSessionEndEvents(overstoryDir, dbRoot);
+		result.sessionEndEventsLogged = await logSyntheticSessionEndEvents(
+			overstoryDir,
+			dbRoot,
+			scopedProjectId,
+		);
 	}
 
 	// 2. Kill tmux sessions (must happen before worktree removal)
 	if (doWorktrees || all) {
-		result.tmuxKilled = await killAllTmuxSessions(overstoryDir, dbRoot, config.project.name);
+		result.tmuxKilled = await killAllTmuxSessions(
+			overstoryDir,
+			dbRoot,
+			config.project.name,
+			scopedProjectId,
+		);
 	}
 
 	// 3. Remove worktrees
@@ -505,7 +524,7 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 		await resetJsonFile(join(overstoryDir, "sessions.json"));
 	}
 	if (all) {
-		result.mergeQueueCleared = await wipeSqliteDb(join(dbRoot, "merge-queue.db"));
+		result.mergeQueueCleared = await wipeSqliteDb(join(overstoryDir, "merge-queue.db"));
 	}
 
 	// 7. Clear directories
@@ -522,7 +541,7 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 	// 8. Delete nudge state + pending nudge markers + current-run.txt
 	if (all) {
 		result.nudgeStateCleared = await deleteFile(join(overstoryDir, "nudge-state.json"));
-		await clearDirectory(join(overstoryDir, "pending-nudges"));
+		await clearDirectory(join(dbRoot, "pending-nudges"));
 		result.currentRunCleared = await deleteFile(join(overstoryDir, "current-run.txt"));
 	}
 

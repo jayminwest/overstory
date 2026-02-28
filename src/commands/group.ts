@@ -7,7 +7,7 @@
  * Storage: `.overstory/groups.json` (array of TaskGroup objects).
  */
 
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Command } from "commander";
 import { loadConfig } from "../config.ts";
 import { GroupError, ValidationError } from "../errors.ts";
@@ -20,7 +20,11 @@ import { resolveContext } from "../workspace/resolver.ts";
 /**
  * Resolve the groups.json path from the overstory directory.
  */
-function groupsPath(overstoryDir: string): string {
+function groupsPath(pathOrOverstoryDir: string): string {
+	const overstoryDir =
+		basename(pathOrOverstoryDir) === ".overstory"
+			? pathOrOverstoryDir
+			: join(pathOrOverstoryDir, ".overstory");
 	return join(overstoryDir, "groups.json");
 }
 

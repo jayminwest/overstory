@@ -21,6 +21,7 @@ import {
 } from "../logging/format.ts";
 import { eventLabel, renderHeader } from "../logging/theme.ts";
 import type { StoredEvent } from "../types.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import { resolveContext } from "../workspace/resolver.ts";
 
 /**
@@ -126,6 +127,8 @@ async function executeReplay(opts: ReplayOpts): Promise<void> {
 	}
 
 	const ctx = await resolveContext({ project: opts.project });
+	const activeProjectId =
+		ctx.mode === "workspace" && ctx.projectId !== WORKSPACE_PROJECT_ID ? ctx.projectId : undefined;
 
 	// Workspace-aggregate mode: no --project flag in workspace context
 	const isWorkspaceAggregate =
@@ -133,34 +136,53 @@ async function executeReplay(opts: ReplayOpts): Promise<void> {
 
 	if (isWorkspaceAggregate) {
 		const projects = ctx.workspaceConfig!.projects;
+		const eventsDbPath = join(ctx.dbRoot, "events.db");
+		const eventsFile = Bun.file(eventsDbPath);
+		if (!(await eventsFile.exists())) {
+			if (json) {
+				jsonOutput("replay", { events: [] });
+			} else {
+				process.stdout.write("No events data yet.\n");
+			}
+			return;
+		}
+		const store = createEventStore(eventsDbPath);
 		const allTagged: Array<{ event: StoredEvent; projectName: string }> = [];
 		const queryOpts = { since: sinceStr, until: untilStr, limit };
 
-		for (const project of projects) {
-			const eventsDbPath = join(project.root, ".overstory", "events.db");
-			if (!(await Bun.file(eventsDbPath).exists())) continue;
-			const store = createEventStore(eventsDbPath);
-			try {
+		try {
+			for (const project of projects) {
 				let events: StoredEvent[];
 				if (runId) {
-					events = store.getByRun(runId, queryOpts);
+					events = store.getByRun(runId, { ...queryOpts, projectId: project.name });
 				} else if (agentNames.length > 0) {
 					const merged: StoredEvent[] = [];
 					for (const name of agentNames) {
-						merged.push(...store.getByAgent(name, { since: sinceStr, until: untilStr }));
+						merged.push(
+							...store.getByAgent(name, {
+								since: sinceStr,
+								until: untilStr,
+								projectId: project.name,
+							}),
+						);
 					}
 					merged.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 					events = merged.slice(0, limit);
 				} else {
 					const since24h = sinceStr ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-					events = store.getTimeline({ since: since24h, until: untilStr, limit });
+					events = store.getTimeline({
+						since: since24h,
+						until: untilStr,
+						limit,
+						projectId: project.name,
+					});
 				}
 				for (const event of events) {
 					allTagged.push({ event, projectName: project.name });
 				}
-			} finally {
-				store.close();
 			}
+		} finally {
+			store.close();
 		}
 
 		// Sort merged results chronologically and apply limit
@@ -186,7 +208,7 @@ async function executeReplay(opts: ReplayOpts): Promise<void> {
 	}
 
 	// Single-project mode (single-repo or workspace with --project)
-	const eventsDbPath = join(ctx.overstoryDir, "events.db");
+	const eventsDbPath = join(ctx.dbRoot, "events.db");
 	const eventsFile = Bun.file(eventsDbPath);
 	if (!(await eventsFile.exists())) {
 		if (json) {
@@ -205,7 +227,7 @@ async function executeReplay(opts: ReplayOpts): Promise<void> {
 
 		if (runId) {
 			// Query by run ID
-			events = eventStore.getByRun(runId, queryOpts);
+			events = eventStore.getByRun(runId, { ...queryOpts, projectId: activeProjectId });
 		} else if (agentNames.length > 0) {
 			// Query each agent and merge
 			const allEvents: StoredEvent[] = [];
@@ -213,6 +235,7 @@ async function executeReplay(opts: ReplayOpts): Promise<void> {
 				const agentEvents = eventStore.getByAgent(name, {
 					since: sinceStr,
 					until: untilStr,
+					projectId: activeProjectId,
 				});
 				allEvents.push(...agentEvents);
 			}
@@ -226,25 +249,30 @@ async function executeReplay(opts: ReplayOpts): Promise<void> {
 			const currentRunFile = Bun.file(currentRunPath);
 			if (await currentRunFile.exists()) {
 				const currentRunId = (await currentRunFile.text()).trim();
-				if (currentRunId) {
-					events = eventStore.getByRun(currentRunId, queryOpts);
-				} else {
+					if (currentRunId) {
+						events = eventStore.getByRun(currentRunId, {
+							...queryOpts,
+							projectId: activeProjectId,
+						});
+					} else {
 					// Empty file, fall back to timeline
 					const since24h = sinceStr ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-					events = eventStore.getTimeline({
-						since: since24h,
-						until: untilStr,
-						limit,
-					});
+						events = eventStore.getTimeline({
+							since: since24h,
+							until: untilStr,
+							limit,
+							projectId: activeProjectId,
+						});
 				}
 			} else {
 				// No current run file, fall back to 24h timeline
 				const since24h = sinceStr ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-				events = eventStore.getTimeline({
-					since: since24h,
-					until: untilStr,
-					limit,
-				});
+					events = eventStore.getTimeline({
+						since: since24h,
+						until: untilStr,
+						limit,
+						projectId: activeProjectId,
+					});
 			}
 		}
 

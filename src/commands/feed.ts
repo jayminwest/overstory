@@ -14,6 +14,7 @@ import { jsonOutput } from "../json.ts";
 import type { ColorFn } from "../logging/color.ts";
 import { color } from "../logging/color.ts";
 import type { EventType, StoredEvent } from "../types.ts";
+import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
 import { resolveContext } from "../workspace/resolver.ts";
 
 /** Compact 5-char labels for feed output. */
@@ -73,7 +74,7 @@ function buildEventDetail(event: StoredEvent): string {
 					if (value !== null && value !== undefined) {
 						const strValue = typeof value === "string" ? value : JSON.stringify(value);
 						// Truncate long values
-						const truncated = strValue.length > 60 ? `${strValue.slice(0, 57)}...` : strValue;
+						const truncated = strValue.length > 60 ? `${strValue.slice(0, 57)}…` : strValue;
 						parts.push(`${key}=${truncated}`);
 					}
 				}
@@ -94,6 +95,25 @@ function buildEventDetail(event: StoredEvent): string {
  */
 function buildAgentColorMap(events: StoredEvent[]): Map<string, ColorFn> {
 	const colorMap = new Map<string, ColorFn>();
+	for (const event of events) {
+		if (!colorMap.has(event.agentName)) {
+			const colorIndex = colorMap.size % AGENT_COLORS.length;
+			const agentColorFn = AGENT_COLORS[colorIndex];
+			if (agentColorFn !== undefined) {
+				colorMap.set(event.agentName, agentColorFn);
+			}
+		}
+	}
+	return colorMap;
+}
+
+/**
+ * Extend an existing agent color map with any unseen agent names.
+ */
+function extendAgentColorMap(
+	colorMap: Map<string, ColorFn>,
+	events: StoredEvent[],
+): Map<string, ColorFn> {
 	for (const event of events) {
 		if (!colorMap.has(event.agentName)) {
 			const colorIndex = colorMap.size % AGENT_COLORS.length;
@@ -188,6 +208,8 @@ async function executeFeed(opts: FeedOpts): Promise<void> {
 	}
 
 	const ctx = await resolveContext({ project: opts.project });
+	const activeProjectId =
+		ctx.mode === "workspace" && ctx.projectId !== WORKSPACE_PROJECT_ID ? ctx.projectId : undefined;
 
 	// Workspace-aggregate mode: no --project flag in workspace context
 	const isWorkspaceAggregate =
@@ -196,6 +218,17 @@ async function executeFeed(opts: FeedOpts): Promise<void> {
 	if (isWorkspaceAggregate) {
 		// Workspace mode without --project: aggregate events from all projects
 		const projects = ctx.workspaceConfig!.projects;
+		const eventsDbPath = join(ctx.dbRoot, "events.db");
+		const eventsFile = Bun.file(eventsDbPath);
+		if (!(await eventsFile.exists())) {
+			if (json) {
+				jsonOutput("feed", { events: [] });
+			} else {
+				process.stdout.write("No events data yet.\n");
+			}
+			return;
+		}
+		const store = createEventStore(eventsDbPath);
 
 		// Default since: 5 minutes ago
 		const since = sinceStr ?? new Date(Date.now() - 5 * 60 * 1000).toISOString();
@@ -206,28 +239,26 @@ async function executeFeed(opts: FeedOpts): Promise<void> {
 		): Promise<Array<{ event: StoredEvent; projectName: string }>> => {
 			const allTagged: Array<{ event: StoredEvent; projectName: string }> = [];
 			for (const project of projects) {
-				const eventsDbPath = join(project.root, ".overstory", "events.db");
-				if (!(await Bun.file(eventsDbPath).exists())) continue;
-				const store = createEventStore(eventsDbPath);
-				try {
-					let events: StoredEvent[];
-					if (runId) {
-						events = store.getByRun(runId, queryOpts);
-					} else if (agentNames.length > 0) {
-						const merged: StoredEvent[] = [];
-						for (const name of agentNames) {
-							merged.push(...store.getByAgent(name, { since: queryOpts.since }));
-						}
-						merged.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-						events = merged.slice(0, queryOpts.limit);
-					} else {
-						events = store.getTimeline(queryOpts);
+				let events: StoredEvent[];
+				if (runId) {
+					events = store.getByRun(runId, { ...queryOpts, projectId: project.name });
+				} else if (agentNames.length > 0) {
+					const merged: StoredEvent[] = [];
+					for (const name of agentNames) {
+						merged.push(
+							...store.getByAgent(name, {
+								since: queryOpts.since,
+								projectId: project.name,
+							}),
+						);
 					}
-					for (const event of events) {
-						allTagged.push({ event, projectName: project.name });
-					}
-				} finally {
-					store.close();
+					merged.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+					events = merged.slice(0, queryOpts.limit);
+				} else {
+					events = store.getTimeline({ ...queryOpts, projectId: project.name });
+				}
+				for (const event of events) {
+					allTagged.push({ event, projectName: project.name });
 				}
 			}
 			// Sort merged results chronologically
@@ -235,78 +266,85 @@ async function executeFeed(opts: FeedOpts): Promise<void> {
 			return allTagged.slice(0, queryOpts.limit);
 		};
 
-		if (!follow) {
-			const tagged = await queryAllProjects({ since, limit });
+		try {
+			if (!follow) {
+				const tagged = await queryAllProjects({ since, limit });
 
-			if (json) {
-				process.stdout.write(`${JSON.stringify(tagged.map((t) => ({ ...t.event, projectName: t.projectName })))}\n`);
-				return;
-			}
-
-			if (tagged.length === 0) {
-				process.stdout.write("No events found.\n");
-				return;
-			}
-
-			const colorMap = buildAgentColorMap(tagged.map((t) => t.event));
-			for (const { event, projectName } of tagged) {
-				printEvent(event, colorMap, projectName);
-			}
-			return;
-		}
-
-		// Follow mode: continuous polling (workspace aggregate)
-		// Use timestamps for deduplication since IDs are per-database and not comparable across projects
-		let lastSeenAt = since;
-		const initialTagged = await queryAllProjects({ since, limit });
-
-		const globalColorMap = buildAgentColorMap(initialTagged.map((t) => t.event));
-		if (!json) {
-			for (const { event, projectName } of initialTagged) {
-				printEvent(event, globalColorMap, projectName);
-			}
-		} else {
-			for (const { event, projectName } of initialTagged) {
-				process.stdout.write(`${JSON.stringify({ ...event, projectName })}\n`);
-			}
-		}
-		if (initialTagged.length > 0) {
-			const last = initialTagged[initialTagged.length - 1];
-			if (last) lastSeenAt = last.event.createdAt;
-		}
-
-		while (true) {
-			await Bun.sleep(interval);
-			const pollSince = new Date(Date.now() - 60 * 1000).toISOString();
-			const recentTagged = await queryAllProjects({ since: pollSince, limit: 1000 });
-			const newTagged = recentTagged.filter((t) => t.event.createdAt > lastSeenAt);
-			if (newTagged.length > 0) {
-				if (!json) {
-					for (const { event, projectName } of newTagged) {
-						if (!globalColorMap.has(event.agentName)) {
-							const colorIndex = globalColorMap.size % AGENT_COLORS.length;
-							const agentColorFn = AGENT_COLORS[colorIndex];
-							if (agentColorFn !== undefined) {
-								globalColorMap.set(event.agentName, agentColorFn);
-							}
-						}
-					}
-					for (const { event, projectName } of newTagged) {
-						printEvent(event, globalColorMap, projectName);
-					}
-				} else {
-					for (const { event, projectName } of newTagged) {
-						process.stdout.write(`${JSON.stringify({ ...event, projectName })}\n`);
-					}
+				if (json) {
+					process.stdout.write(
+						`${JSON.stringify(tagged.map((t) => ({ ...t.event, projectName: t.projectName })))}\n`,
+					);
+					return;
 				}
-				const last = newTagged[newTagged.length - 1];
+
+				if (tagged.length === 0) {
+					process.stdout.write("No events found.\n");
+					return;
+				}
+
+				const colorMap = buildAgentColorMap(tagged.map((t) => t.event));
+				for (const { event, projectName } of tagged) {
+					printEvent(event, colorMap, projectName);
+				}
+				return;
+			}
+
+			// Follow mode: continuous polling (workspace aggregate)
+			// Use timestamps for deduplication in aggregate stream.
+			let lastSeenAt = since;
+			const initialTagged = await queryAllProjects({ since, limit });
+
+			const globalColorMap = buildAgentColorMap(initialTagged.map((t) => t.event));
+			if (!json) {
+				for (const { event, projectName } of initialTagged) {
+					printEvent(event, globalColorMap, projectName);
+				}
+			} else {
+				for (const { event, projectName } of initialTagged) {
+					process.stdout.write(`${JSON.stringify({ ...event, projectName })}\n`);
+				}
+			}
+			if (initialTagged.length > 0) {
+				const last = initialTagged[initialTagged.length - 1];
 				if (last) lastSeenAt = last.event.createdAt;
 			}
+
+			while (true) {
+				await Bun.sleep(interval);
+				const pollSince = new Date(Date.now() - 60 * 1000).toISOString();
+				const recentTagged = await queryAllProjects({ since: pollSince, limit: 1000 });
+				const newTagged = recentTagged.filter((t) => t.event.createdAt > lastSeenAt);
+				if (newTagged.length > 0) {
+					if (!json) {
+						for (const { event } of newTagged) {
+							if (!globalColorMap.has(event.agentName)) {
+								const colorIndex = globalColorMap.size % AGENT_COLORS.length;
+								const agentColorFn = AGENT_COLORS[colorIndex];
+								if (agentColorFn !== undefined) {
+									globalColorMap.set(event.agentName, agentColorFn);
+								}
+							}
+						}
+						for (const { event, projectName } of newTagged) {
+							printEvent(event, globalColorMap, projectName);
+						}
+					} else {
+						for (const { event, projectName } of newTagged) {
+							process.stdout.write(`${JSON.stringify({ ...event, projectName })}\n`);
+						}
+					}
+					const last = newTagged[newTagged.length - 1];
+					if (last) lastSeenAt = last.event.createdAt;
+				}
+			}
+		} finally {
+			store.close();
 		}
+		return;
 	}
 
 	// Single-project mode (single-repo or workspace with --project)
-	const eventsDbPath = join(ctx.overstoryDir, "events.db");
+	const eventsDbPath = join(ctx.dbRoot, "events.db");
 	const eventsFile = Bun.file(eventsDbPath);
 	if (!(await eventsFile.exists())) {
 		if (json) {
@@ -324,25 +362,26 @@ async function executeFeed(opts: FeedOpts): Promise<void> {
 		const since = sinceStr ?? new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
 		// Helper to query events based on filters
-		const queryEvents = (queryOpts: { since: string; limit: number }): StoredEvent[] => {
-			if (runId) {
-				return eventStore.getByRun(runId, queryOpts);
-			}
-			if (agentNames.length > 0) {
-				const allEvents: StoredEvent[] = [];
-				for (const name of agentNames) {
-					const agentEvents = eventStore.getByAgent(name, {
-						since: queryOpts.since,
-					});
-					allEvents.push(...agentEvents);
+			const queryEvents = (queryOpts: { since: string; limit: number }): StoredEvent[] => {
+				if (runId) {
+					return eventStore.getByRun(runId, { ...queryOpts, projectId: activeProjectId });
 				}
+				if (agentNames.length > 0) {
+					const allEvents: StoredEvent[] = [];
+					for (const name of agentNames) {
+						const agentEvents = eventStore.getByAgent(name, {
+							since: queryOpts.since,
+							projectId: activeProjectId,
+						});
+						allEvents.push(...agentEvents);
+					}
 				// Sort by createdAt chronologically
 				allEvents.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 				// Apply limit after merge
 				return allEvents.slice(0, queryOpts.limit);
 			}
-			return eventStore.getTimeline(queryOpts);
-		};
+				return eventStore.getTimeline({ ...queryOpts, projectId: activeProjectId });
+			};
 
 		if (!follow) {
 			// Non-follow mode: single snapshot
