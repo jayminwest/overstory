@@ -13,6 +13,7 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { initCommand } from "./init.ts";
 import type { ReadyState } from "../runtimes/types.ts";
 import { createMetricsStore } from "../metrics/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
@@ -218,6 +219,8 @@ pending-nudges/
 
 export interface WorkspaceAddOptions {
 	name?: string;
+	/** Auto-run `ov init` in target project when .overstory is missing. */
+	init?: boolean;
 }
 
 /**
@@ -248,10 +251,26 @@ export async function workspaceAddCommand(
 	}
 
 	if (!existsSync(join(absPath, ".overstory"))) {
-		throw new ValidationError(
-			`Path is not an overstory project (no .overstory found): '${absPath}'. Run ov init there first.`,
-			{ field: "path" },
-		);
+		if (opts.init === false) {
+			throw new ValidationError(
+				`Path is not an overstory project (no .overstory found): '${absPath}'. Run ov init there first.`,
+				{ field: "path" },
+			);
+		}
+		process.stdout.write(`  - .overstory missing in ${absPath}; running ov init...\n`);
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(absPath);
+			await initCommand({ yes: true });
+		} finally {
+			process.chdir(previousCwd);
+		}
+		if (!existsSync(join(absPath, ".overstory"))) {
+			throw new ValidationError(
+				`Path is not an overstory project (auto-init failed to create .overstory): '${absPath}'`,
+				{ field: "path" },
+			);
+		}
 	}
 
 	const projectName = opts.name ?? basename(absPath);
@@ -775,6 +794,7 @@ export function createWorkspaceCommand(deps: WorkspaceDeps = {}): Command {
 		.description("Register a project in the workspace")
 		.argument("<path>", "Path to project root")
 		.option("--name <name>", "Project name (default: directory basename)")
+		.option("--no-init", "Do not auto-run ov init when .overstory is missing")
 		.action(async (path: string, opts: WorkspaceAddOptions) => {
 			await workspaceAddCommand(path, opts);
 		});

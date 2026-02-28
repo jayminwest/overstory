@@ -191,7 +191,7 @@ describe("workspaceAddCommand", () => {
 		);
 	});
 
-	it("errors when path has no .overstory", async () => {
+	it("auto-inits project when path has no .overstory", async () => {
 		const wsDir = await makeTempDir();
 		const repo = await makeTempGitRepo();
 
@@ -199,7 +199,23 @@ describe("workspaceAddCommand", () => {
 		await setupWorkspace(wsDir);
 		process.chdir(wsDir);
 
-		await expect(workspaceAddCommand(repo, { name: "proj" })).rejects.toThrow(
+		await workspaceAddCommand(repo, { name: "proj" });
+
+		expect(existsSync(join(repo, ".overstory"))).toBe(true);
+		const content = await Bun.file(join(wsDir, WORKSPACE_DIR, WORKSPACE_CONFIG_FILENAME)).text();
+		expect(content).toContain("name: proj");
+		expect(content).toContain(`root: ${repo}`);
+	});
+
+	it("errors when path has no .overstory and --no-init is set", async () => {
+		const wsDir = await makeTempDir();
+		const repo = await makeTempGitRepo();
+
+		// repo has .git but no .overstory
+		await setupWorkspace(wsDir);
+		process.chdir(wsDir);
+
+		await expect(workspaceAddCommand(repo, { name: "proj", init: false })).rejects.toThrow(
 			/Run ov init there first/,
 		);
 	});
