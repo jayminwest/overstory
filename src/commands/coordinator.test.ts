@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
+import { Command } from "commander";
 import { AgentError, ValidationError } from "../errors.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
@@ -408,6 +409,42 @@ describe("coordinatorCommand unknown subcommand", () => {
 			expect(ve.message).toContain("frobnicate");
 			expect(ve.field).toBe("subcommand");
 		}
+	});
+});
+
+describe("coordinator command option routing", () => {
+	test("status resolves --project when coordinator is nested under a root command with global --project", async () => {
+		// Configure workspace mode so resolveContext(requireProject=true) requires a valid project.
+		await mkdir(join(tempDir, ".overstory-workspace"), { recursive: true });
+		await Bun.write(
+			join(tempDir, ".overstory-workspace", "workspace.yaml"),
+			[
+				"# Overstory workspace configuration",
+				"name: test-workspace",
+				"projects:",
+				"  - name: test-project",
+				`    root: ${tempDir}`,
+				"    canonicalBranch: main",
+			].join("\n"),
+		);
+
+		const { deps } = makeDeps();
+		const root = new Command("ov")
+			.option("-p, --project <name>", "Target project (workspace mode)")
+			.option("--json", "JSON output");
+		root.addCommand(createCoordinatorCommand(deps));
+		root.exitOverride();
+
+		const output = await captureStdout(async () => {
+			await root.parseAsync(
+				["coordinator", "status", "--project", "test-project", "--json"],
+				{ from: "user" },
+			);
+		});
+
+		const parsed = JSON.parse(output) as { success: boolean; running: boolean };
+		expect(parsed.success).toBe(true);
+		expect(parsed.running).toBe(false);
 	});
 });
 

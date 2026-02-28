@@ -727,36 +727,50 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 		.option("--monitor", "Auto-start Tier 2 monitor agent with coordinator")
 		.option("-p, --project <name>", "Target project (workspace mode)")
 		.option("--json", "Output as JSON")
-		.action(
-			async (opts: {
-				attach?: boolean;
-				watchdog?: boolean;
-				monitor?: boolean;
-				project?: string;
-				json?: boolean;
-			}) => {
-				// opts.attach = true if --attach, false if --no-attach, undefined if neither
-				const shouldAttach = opts.attach !== undefined ? opts.attach : !!process.stdout.isTTY;
-				await startCoordinator(
-					{
-						json: opts.json ?? false,
-						attach: shouldAttach,
-						watchdog: opts.watchdog ?? false,
-						monitor: opts.monitor ?? false,
-						project: opts.project,
+			.action(
+				async (
+					opts: {
+						attach?: boolean;
+						watchdog?: boolean;
+						monitor?: boolean;
+						project?: string;
+						json?: boolean;
 					},
-					deps,
-				);
-			},
-		);
+					cmdObj: Command,
+				) => {
+					const globalOpts = cmdObj.optsWithGlobals() as {
+						project?: string;
+						json?: boolean;
+					};
+					// opts.attach = true if --attach, false if --no-attach, undefined if neither
+					const shouldAttach = opts.attach !== undefined ? opts.attach : !!process.stdout.isTTY;
+					await startCoordinator(
+						{
+							json: opts.json ?? globalOpts.json ?? false,
+							attach: shouldAttach,
+							watchdog: opts.watchdog ?? false,
+							monitor: opts.monitor ?? false,
+							project: opts.project ?? globalOpts.project,
+						},
+						deps,
+					);
+				},
+			);
 
 	cmd
 		.command("stop")
 		.description("Stop the coordinator (kills tmux session)")
 		.option("-p, --project <name>", "Target project (workspace mode)")
 		.option("--json", "Output as JSON")
-		.action(async (opts: { project?: string; json?: boolean }) => {
-			await stopCoordinator({ json: opts.json ?? false, project: opts.project }, deps);
+		.action(async (opts: { project?: string; json?: boolean }, cmdObj: Command) => {
+			const globalOpts = cmdObj.optsWithGlobals() as { project?: string; json?: boolean };
+			await stopCoordinator(
+				{
+					json: opts.json ?? globalOpts.json ?? false,
+					project: opts.project ?? globalOpts.project,
+				},
+				deps,
+			);
 		});
 
 	cmd
@@ -764,8 +778,15 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 		.description("Show coordinator state")
 		.option("-p, --project <name>", "Target project (workspace mode)")
 		.option("--json", "Output as JSON")
-		.action(async (opts: { project?: string; json?: boolean }) => {
-			await statusCoordinator({ json: opts.json ?? false, project: opts.project }, deps);
+		.action(async (opts: { project?: string; json?: boolean }, cmdObj: Command) => {
+			const globalOpts = cmdObj.optsWithGlobals() as { project?: string; json?: boolean };
+			await statusCoordinator(
+				{
+					json: opts.json ?? globalOpts.json ?? false,
+					project: opts.project ?? globalOpts.project,
+				},
+				deps,
+			);
 		});
 
 	return cmd;
