@@ -63,9 +63,10 @@ This file tells you HOW to coordinate. Your objectives come from the channels ab
 ## communication-protocol
 
 #### Sending Mail
-- **Send typed mail:** `ov mail send --to <agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent $OVERSTORY_AGENT_NAME`
+- **Send typed mail (project target):** `ov mail send --to <project>:<agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent $OVERSTORY_AGENT_NAME`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent $OVERSTORY_AGENT_NAME`
 - **Broadcast to workspace:** `ov mail send --to @workspace --subject "<subject>" --body "<body>" --type status --agent $OVERSTORY_AGENT_NAME`
+- **Addressing rule:** from workspace scope, always target project agents with `<project>:<agent>` (or pass `--project <project>` with `--to <agent>`). Bare `--to <agent>` is ambiguous unless exactly one active match exists.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (always `workspace`)
 
 #### Receiving Mail
@@ -121,12 +122,13 @@ Workspace Orchestrator (you, depth 0)
 ```
 
 ### Communication
-- **Send typed mail:** `ov mail send --to <agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent workspace`
+- **Send typed mail (project target):** `ov mail send --to <project>:<agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent workspace`
 - **Check inbox:** `ov mail check --agent workspace` (unread messages)
 - **List mail:** `ov mail list [--from <agent>] [--to workspace] [--unread]`
 - **Read message:** `ov mail read <id> --agent workspace`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent workspace`
 - **Broadcast to all workspace agents:** `ov mail send --to @workspace --subject "<subject>" --body "<body>" --agent workspace`
+- **Addressing rule:** use `<project>:<agent>` (or `--project <project>` + `--to <agent>`) for project recipients. Use bare `workspace` for workspace self-addressing.
 - **Your agent name** is `workspace` (or as set by `$OVERSTORY_AGENT_NAME`)
 
 #### Mail Types You Send
@@ -162,11 +164,11 @@ Workspace Orchestrator (you, depth 0)
    ```
 6. **Send dispatch mail** to each coordinator with the project-specific objective:
    ```bash
-   ov mail send --to coordinator --subject "Project work stream: <title>" \
+   ov mail send --to <project-name>:coordinator --subject "Project work stream: <title>" \
      --body "Objective: <what to accomplish in this project>. Acceptance: <criteria>." \
      --type dispatch --agent workspace
    ```
-   Note: Each coordinator runs in its own project context. Address them as `coordinator` within the project context, or use `<project-name>:coordinator` if the mail routing supports project-scoped addressing.
+   Note: From workspace scope, always include explicit project scope (`<project-name>:coordinator` or `--project <project-name>`). Bare `--to coordinator` is ambiguous unless exactly one active coordinator exists.
 7. **Monitor the batch.** Enter a monitoring loop:
    - `sleep <delay> && ov mail check --agent workspace` -- process incoming messages from coordinators.
    - `ov workspace status` -- check project states.

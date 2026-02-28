@@ -121,6 +121,189 @@ describe("mailCommand", () => {
 		});
 	});
 
+	describe("workspace recipient routing", () => {
+		async function setupWorkspace(projectNames: string[]): Promise<void> {
+			await mkdir(join(tempDir, ".overstory-workspace"), { recursive: true });
+
+			const projectBlocks: string[] = [];
+			for (const name of projectNames) {
+				const projectRoot = join(tempDir, name);
+				await mkdir(join(projectRoot, ".git"), { recursive: true });
+				await mkdir(join(projectRoot, ".overstory"), { recursive: true });
+				projectBlocks.push(
+					`  - name: ${name}\n    root: ${projectRoot}\n    canonicalBranch: main`,
+				);
+			}
+
+			const workspaceYaml = [
+				"# Overstory workspace configuration",
+				"name: test-workspace",
+				"projects:",
+				...projectBlocks,
+				"",
+			].join("\n");
+			await Bun.write(join(tempDir, ".overstory-workspace", "workspace.yaml"), workspaceYaml);
+		}
+
+		async function seedWorkspaceSessions(
+			sessions: Array<{ projectId: string; agentName: string; capability: string }>,
+		): Promise<void> {
+			const { createSessionStore } = await import("../sessions/store.ts");
+			const sessionsDbPath = join(tempDir, ".overstory-workspace", "sessions.db");
+			const sessionStore = createSessionStore(sessionsDbPath);
+
+			for (const [idx, session] of sessions.entries()) {
+				sessionStore.upsert(
+					{
+						projectId: session.projectId,
+						id: `ws-session-${idx}`,
+						agentName: session.agentName,
+						capability: session.capability as
+							| "builder"
+							| "reviewer"
+							| "scout"
+							| "coordinator"
+							| "lead"
+							| "merger"
+							| "supervisor"
+							| "monitor",
+						worktreePath: `/worktrees/${session.agentName}`,
+						branchName: "main",
+						taskId: "",
+						tmuxSession: `overstory-${session.projectId}-${session.agentName}`,
+						state: "working",
+						pid: 40000 + idx,
+						parentAgent: null,
+						depth: 0,
+						runId: null,
+						startedAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+						escalationLevel: 0,
+						stalledSince: null,
+						transcriptPath: null,
+					},
+					session.projectId,
+				);
+			}
+
+			sessionStore.close();
+		}
+
+		test("workspace send to unqualified recipient auto-routes when exactly one active match", async () => {
+			await setupWorkspace(["authmanager", "audit-docs"]);
+			await seedWorkspaceSessions([
+				{ projectId: "authmanager", agentName: "coordinator", capability: "coordinator" },
+			]);
+
+			output = "";
+			await mailCommand([
+				"send",
+				"--to",
+				"coordinator",
+				"--from",
+				"workspace",
+				"--subject",
+				"Workspace dispatch",
+				"--body",
+				"Handle docs",
+			]);
+
+			const store = createMailStore(join(tempDir, ".overstory-workspace", "mail.db"));
+			const client = createMailClient(store);
+			const message = client
+				.list({ to: "coordinator" })
+				.find((m) => m.subject === "Workspace dispatch");
+			expect(message).toBeDefined();
+			expect(message?.projectId).toBe("authmanager");
+			client.close();
+		});
+
+		test("workspace send to unqualified recipient fails when no active matching sessions", async () => {
+			await setupWorkspace(["authmanager"]);
+
+			let error: Error | null = null;
+			try {
+				await mailCommand([
+					"send",
+					"--to",
+					"coordinator",
+					"--from",
+					"workspace",
+					"--subject",
+					"No route",
+					"--body",
+					"Body",
+				]);
+			} catch (err) {
+				error = err as Error;
+			}
+
+			expect(error).toBeTruthy();
+			expect(error?.message).toContain('Cannot resolve recipient "coordinator" from workspace scope');
+			expect(error?.message).toContain("Use --project <name> or --to <project>:coordinator");
+		});
+
+		test("workspace send to unqualified recipient fails when multiple active matches", async () => {
+			await setupWorkspace(["authmanager", "eleiris-ai-assistant-architecture-audit"]);
+			await seedWorkspaceSessions([
+				{ projectId: "authmanager", agentName: "coordinator", capability: "coordinator" },
+				{
+					projectId: "eleiris-ai-assistant-architecture-audit",
+					agentName: "coordinator",
+					capability: "coordinator",
+				},
+			]);
+
+			let error: Error | null = null;
+			try {
+				await mailCommand([
+					"send",
+					"--to",
+					"coordinator",
+					"--from",
+					"workspace",
+					"--subject",
+					"Ambiguous route",
+					"--body",
+					"Body",
+				]);
+			} catch (err) {
+				error = err as Error;
+			}
+
+			expect(error).toBeTruthy();
+			expect(error?.message).toContain('Ambiguous recipient "coordinator" from workspace scope');
+			expect(error?.message).toContain("Active projects: authmanager");
+			expect(error?.message).toContain("Use --project <name> or --to <project>:coordinator");
+		});
+
+		test("workspace send to workspace defaults message scope to _workspace", async () => {
+			await setupWorkspace(["authmanager"]);
+
+			output = "";
+			await mailCommand([
+				"send",
+				"--to",
+				"workspace",
+				"--from",
+				"workspace",
+				"--subject",
+				"Workspace self message",
+				"--body",
+				"Body",
+			]);
+
+			const store = createMailStore(join(tempDir, ".overstory-workspace", "mail.db"));
+			const client = createMailClient(store);
+			const message = client
+				.list({ to: "workspace" })
+				.find((m) => m.subject === "Workspace self message");
+			expect(message).toBeDefined();
+			expect(message?.projectId).toBe("_workspace");
+			client.close();
+		});
+	});
+
 	describe("reply", () => {
 		test("reply to own sent message goes to original recipient", async () => {
 			// Get the message ID of the message orchestrator sent to builder-1

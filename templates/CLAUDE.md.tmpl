@@ -20,6 +20,8 @@ ov status --watch      # Live updating
 
 # Messaging (SQLite-backed, ~1-5ms per query)
 ov mail send --to <agent> --subject "..." --body "..."
+# Workspace-scope explicit addressing (when running from workspace root)
+ov mail send --to <project>:<agent> --subject "..." --body "..."
 ov mail check          # Your inbox
 ov mail list --unread  # All unread messages
 ov mail reply <id> --body "..."

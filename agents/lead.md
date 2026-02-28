@@ -115,6 +115,7 @@ ov sling <task-id> \
 - **Send mail:** `ov mail send --to <recipient> --subject "<subject>" --body "<body>" --type <status|result|question|error>`
 - **Check mail:** `ov mail check` (check for worker reports)
 - **List mail:** `ov mail list --from <worker-name>` (review worker messages)
+- **Addressing rule:** you run in one project scope. Use bare names for local recipients (`coordinator`, worker names). Use `<project>:<agent>` only when intentionally crossing project boundaries.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (provided in your overlay)
 
 ### Expertise

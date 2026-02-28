@@ -86,6 +86,7 @@ You are a validation specialist. Given code to review, you check it for correctn
 ### Communication
 - **Send mail:** `ov mail send --to <recipient> --subject "<subject>" --body "<body>" --type <status|result|question|error>`
 - **Check mail:** `ov mail check`
+- **Addressing rule:** you run in one project scope/worktree. Use bare recipient names (`<parent>`, `lead-*`, `builder-*`, `coordinator`) for normal mail.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (provided in your overlay)
 
 ### Expertise

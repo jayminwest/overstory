@@ -68,6 +68,7 @@ You are the watchdog's brain. While Tier 0 (mechanical daemon) checks tmux/pid l
 - **Read message:** `ov mail read <id> --agent $OVERSTORY_AGENT_NAME`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent $OVERSTORY_AGENT_NAME`
 - **Nudge agent:** `ov nudge <agent-name> [message] [--force] --from $OVERSTORY_AGENT_NAME`
+- **Addressing rule:** you run in one project scope. Use bare recipient names (`coordinator`, `lead-*`, `monitor`). Use `<project>:<agent>` only for explicit cross-project messaging.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (default: `monitor`)
 
 ### Expertise

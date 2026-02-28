@@ -13,7 +13,7 @@ import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
 import { accent, printHint, printSuccess } from "../logging/color.ts";
 import { isGroupAddress, resolveGroupAddress } from "../mail/broadcast.ts";
-import { createMailClient } from "../mail/client.ts";
+import { createMailClient, parseAddress } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { MailMessage, MailMessageType } from "../types.ts";
@@ -404,6 +404,8 @@ async function handleSend(
 	const cwd = root;
 	const { to, subject, body } = opts;
 	const from = opts.agent ?? opts.from ?? "orchestrator";
+	const toParsed = parseAddress(to);
+	const fromParsed = parseAddress(from);
 	const rawPayload = opts.payload;
 	const VALID_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 
@@ -425,6 +427,47 @@ async function handleSend(
 
 	const type = rawType as MailMessage["type"];
 	const priority = rawPriority as MailMessage["priority"];
+
+	// Workspace-root send behavior:
+	// - Unqualified recipients (e.g. "coordinator") are auto-routed only when
+	//   exactly one active session exists for that agent name.
+	// - Otherwise require explicit scoping via --project or <project>:<agent>.
+	// - Workspace self-mail defaults to _workspace instead of _default.
+	let effectiveProjectId = projectId;
+	if (!isGroupAddress(to) && effectiveProjectId === undefined && toParsed.projectId === null) {
+		if (toParsed.agentName === "workspace") {
+			effectiveProjectId = WORKSPACE_PROJECT_ID;
+		} else {
+			const { store: sessionStore } = openSessionStore(dbRoot);
+			try {
+				const active = sessionStore.getActive();
+				const recipientProjects = [...new Set(
+					active
+						.filter((s) => s.agentName === toParsed.agentName)
+						.map((s) => s.projectId)
+						.filter((pid): pid is string => typeof pid === "string" && pid.length > 0),
+				)];
+				if (recipientProjects.length === 1) {
+					effectiveProjectId = recipientProjects[0];
+				} else if (recipientProjects.length === 0) {
+					throw new ValidationError(
+						`Cannot resolve recipient "${toParsed.agentName}" from workspace scope (no active sessions for that agent). Use --project <name> or --to <project>:${toParsed.agentName}.`,
+						{ field: "to", value: to },
+					);
+				} else {
+					throw new ValidationError(
+						`Ambiguous recipient "${toParsed.agentName}" from workspace scope. Active projects: ${recipientProjects.join(", ")}. Use --project <name> or --to <project>:${toParsed.agentName}.`,
+						{ field: "to", value: to },
+					);
+				}
+			} finally {
+				sessionStore.close();
+			}
+		}
+	}
+	if (effectiveProjectId === undefined && fromParsed.agentName === "workspace") {
+		effectiveProjectId = WORKSPACE_PROJECT_ID;
+	}
 
 	// Validate JSON payload if provided
 	let payload: string | undefined;
@@ -491,7 +534,7 @@ async function handleSend(
 								toolArgs: null,
 								toolDurationMs: null,
 								level: "info",
-								projectId: projectId ?? "_workspace",
+								projectId: effectiveProjectId ?? "_workspace",
 								data: JSON.stringify({
 									to: recipient,
 									subject,
@@ -545,7 +588,7 @@ async function handleSend(
 	}
 
 	// Single-recipient message (existing logic)
-	const client = openClient(dbRoot, projectId);
+	const client = openClient(dbRoot, effectiveProjectId);
 	try {
 		const id = client.send({ from, to, subject, body, type, priority, payload });
 
@@ -573,7 +616,7 @@ async function handleSend(
 					toolArgs: null,
 					toolDurationMs: null,
 					level: "info",
-					projectId: projectId ?? "_workspace",
+					projectId: effectiveProjectId ?? "_workspace",
 					data: JSON.stringify({ to, subject, type, priority, messageId: id }),
 				});
 			} finally {
@@ -595,10 +638,10 @@ async function handleSend(
 		// The message is already in the DB — the UserPromptSubmit hook's
 		// `mail check --inject` will surface it on the next prompt cycle.
 		// The pending nudge marker ensures the message gets a priority banner.
-			const shouldNudge = shouldAutoNudge(type, priority);
-			if (shouldNudge) {
-				const nudgeReason = AUTO_NUDGE_TYPES.has(type) ? type : `${priority} priority`;
-				await writePendingNudge(dbRoot, to, {
+		const shouldNudge = shouldAutoNudge(type, priority);
+		if (shouldNudge) {
+			const nudgeReason = AUTO_NUDGE_TYPES.has(type) ? type : `${priority} priority`;
+			await writePendingNudge(dbRoot, to, {
 				from,
 				reason: nudgeReason,
 				subject,
@@ -622,7 +665,7 @@ async function handleSend(
 				const nudgeMessage = `[DISPATCH] ${subject}: ${body.slice(0, 500)}`;
 				// Small delay to let the agent's TUI stabilize after sling
 				await Bun.sleep(3_000);
-					await nudgeAgent(cwd, to, nudgeMessage, true, dbRoot, projectId); // force=true to skip debounce
+				await nudgeAgent(cwd, to, nudgeMessage, true, dbRoot, effectiveProjectId); // force=true to skip debounce
 			} catch {
 				// Non-fatal: the file-based nudge is the fallback
 			}
@@ -633,7 +676,7 @@ async function handleSend(
 			try {
 				const { store: sessionStore } = openSessionStore(dbRoot);
 				try {
-						const allSessions = sessionStore.getAll(projectId);
+					const allSessions = sessionStore.getAll(effectiveProjectId);
 					const myBuilders = allSessions.filter(
 						(s) => s.parentAgent === from && s.capability === "builder",
 					);

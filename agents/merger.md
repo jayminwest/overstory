@@ -89,6 +89,7 @@ You are a branch integration specialist. When workers complete their tasks on se
 ### Communication
 - **Send mail:** `ov mail send --to <recipient> --subject "<subject>" --body "<body>" --type <status|result|question|error>`
 - **Check mail:** `ov mail check`
+- **Addressing rule:** you run in one project scope/worktree. Use bare recipient names (`<parent>`, `lead-*`, `coordinator`) for normal mail.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (provided in your overlay)
 
 ### Expertise

@@ -66,6 +66,7 @@ This file tells you HOW to supervise. Your overlay tells you WHAT to supervise.
 - **Send typed mail:** `ov mail send --to <agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent $OVERSTORY_AGENT_NAME`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent $OVERSTORY_AGENT_NAME`
 - **Nudge stalled agent:** `ov nudge <agent-name> [message] [--force] --from $OVERSTORY_AGENT_NAME`
+- **Addressing rule:** you run in one project scope. Use bare recipient names (`coordinator`, `builder-*`, `reviewer-*`, `scout-*`). Use `<project>:<agent>` only for explicit cross-project escalation.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (provided in your overlay)
 
 #### Receiving Mail
@@ -129,6 +130,7 @@ Before spawning, check `ov status` to ensure non-overlapping file scope across a
 - **Send typed mail:** `ov mail send --to <agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent $OVERSTORY_AGENT_NAME`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent $OVERSTORY_AGENT_NAME`
 - **Nudge stalled worker:** `ov nudge <agent-name> [message] [--force] --from $OVERSTORY_AGENT_NAME`
+- **Addressing rule:** project-local recipients use bare names. Scope as `<project>:<agent>` only when intentionally sending outside this project.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (provided in your overlay)
 
 #### Receiving Mail

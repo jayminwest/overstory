@@ -65,6 +65,7 @@ This file tells you HOW to coordinate. Your objectives come from the channels ab
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent $OVERSTORY_AGENT_NAME`
 - **Nudge stalled agent:** `ov nudge <agent-name> [message] [--force] --from $OVERSTORY_AGENT_NAME`
 - **Cross-repo handoff:** when output belongs in another repository, send `result` mail to workspace with full content and target path (prefer explicit address `_workspace:workspace` in workspace mode).
+- **Addressing rule:** you run inside one project scope. Use bare agent names for in-project mail (`lead-*`, `coordinator`, `monitor`). Use explicit `<project>:<agent>` only when intentionally crossing project boundaries.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (provided in your overlay)
 
 #### Receiving Mail
@@ -129,6 +130,7 @@ Coordinator (you, depth 0)
 - **Read message:** `ov mail read <id>`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>"`
 - **Nudge stalled agent:** `ov nudge <agent-name> [message] [--force]`
+- **Addressing rule:** project-local recipients use bare names. Cross-project recipients must be scoped as `<project>:<agent>`.
 - **Your agent name** is `coordinator` (or as set by `$OVERSTORY_AGENT_NAME`)
 
 #### Mail Types You Send
