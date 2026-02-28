@@ -108,6 +108,29 @@ export function inferDomainsFromFiles(
 	return [...inferred].sort();
 }
 
+/**
+ * Get the current git branch name.
+ * Returns null if in detached HEAD state or on error.
+ *
+ * @param repoRoot - Path to the git repository root
+ * @returns The current branch name, or null if detached HEAD or error
+ */
+export async function getCurrentBranch(repoRoot: string): Promise<string | null> {
+	const proc = Bun.spawn(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
+		cwd: repoRoot,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const exitCode = await proc.exited;
+	if (exitCode !== 0) {
+		return null;
+	}
+	const stdout = await new Response(proc.stdout).text();
+	const branch = stdout.trim();
+	// 'HEAD' means detached HEAD state
+	return branch === "HEAD" ? null : branch;
+}
+
 export interface SlingOptions {
 	capability?: string;
 	name?: string;
@@ -124,6 +147,7 @@ export interface SlingOptions {
 	dispatchMaxAgents?: string;
 	runtime?: string;
 	noScoutCheck?: boolean;
+	baseBranch?: string;
 }
 
 export interface AutoDispatchOptions {
@@ -654,7 +678,16 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 		}
 
-		// 7. Create worktree
+		// 7. Resolve base branch: --base-branch flag > current HEAD > canonical fallback
+		let baseBranch: string;
+		if (opts.baseBranch) {
+			baseBranch = opts.baseBranch;
+		} else {
+			const currentBranch = await getCurrentBranch(config.project.root);
+			baseBranch = currentBranch ?? config.project.canonicalBranch;
+		}
+
+		// 8. Create worktree
 		const worktreeBaseDir = join(config.project.root, config.worktrees.baseDir);
 		await mkdir(worktreeBaseDir, { recursive: true });
 
@@ -662,15 +695,15 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			repoRoot: config.project.root,
 			baseDir: worktreeBaseDir,
 			agentName: name,
-			baseBranch: config.project.canonicalBranch,
+			baseBranch: baseBranch,
 			taskId: taskId,
 		});
 
-		// 8. Generate + write overlay CLAUDE.md
+		// 9. Generate + write overlay CLAUDE.md
 		const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
 		const baseDefinition = await Bun.file(agentDefPath).text();
 
-		// 8a. Fetch file-scoped mulch expertise if mulch is enabled and files are provided
+		// 9a. Fetch file-scoped mulch expertise if mulch is enabled and files are provided
 		let mulchExpertise: string | undefined;
 		if (config.mulch.enabled && fileScope.length > 0) {
 			try {
@@ -732,10 +765,10 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			throw err;
 		}
 
-		// 9. Resolve runtime + model (needed for deployConfig, spawn, and beacon)
+		// 10. Resolve runtime + model (needed for deployConfig, spawn, and beacon)
 		const resolvedModel = resolveModel(config, manifest, capability, agentDef.model);
 
-		// 9a. Deploy hooks config (capability-specific guards)
+		// 10a. Deploy hooks config (capability-specific guards)
 		await runtime.deployConfig(worktreePath, undefined, {
 			agentName: name,
 			capability,
@@ -768,7 +801,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			mailStore.close();
 		}
 
-		// 10. Claim tracker issue
+		// 11. Claim tracker issue
 		if (config.taskTracker.enabled && !skipTaskCheck) {
 			try {
 				await tracker.claim(taskId);
@@ -777,7 +810,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 		}
 
-		// 11. Create agent identity (if new)
+		// 12. Create agent identity (if new)
 		const identityBaseDir = join(config.project.root, ".overstory", "agents");
 		const existingIdentity = await loadIdentity(identityBaseDir, name);
 		if (!existingIdentity) {
@@ -807,10 +840,10 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 		}
 
-		// 11c. Preflight: verify tmux is available before attempting session creation
+		// 12c. Preflight: verify tmux is available before attempting session creation
 		await ensureTmuxAvailable();
 
-		// 12. Create tmux session running claude in interactive mode
+		// 13. Create tmux session running claude in interactive mode
 		const tmuxSessionName = `overstory-${config.project.name}-${name}`;
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
@@ -828,7 +861,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			OVERSTORY_WORKTREE_PATH: worktreePath,
 		});
 
-		// 13. Record session BEFORE sending the beacon so that hook-triggered
+		// 14. Record session BEFORE sending the beacon so that hook-triggered
 		// updateLastActivity() can find the entry and transition booting->working.
 		// Without this, a race exists: hooks fire before the session is persisted,
 		// leaving the agent stuck in "booting" (overstory-036f).
@@ -917,7 +950,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 		}
 
-		// 14. Output result
+		// 15. Output result
 		const output = {
 			agentName: name,
 			capability,

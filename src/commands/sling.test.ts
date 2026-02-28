@@ -15,6 +15,7 @@ import {
 	checkRunSessionLimit,
 	checkTaskLock,
 	extractMulchRecordIds,
+	getCurrentBranch,
 	inferDomainsFromFiles,
 	isRunningAsRoot,
 	parentHasScouts,
@@ -1272,5 +1273,56 @@ describe("extractMulchRecordIds", () => {
 		expect(result).toContainEqual({ id: "mx-636708", domain: "agents" });
 		expect(result).toContainEqual({ id: "mx-b7fa3d", domain: "agents" });
 		expect(result).toContainEqual({ id: "mx-2ce43d", domain: "typescript" });
+	});
+});
+
+/**
+ * Tests for getCurrentBranch helper function.
+ *
+ * getCurrentBranch returns the current git branch name, or null if
+ * in detached HEAD state or on error.
+ */
+describe("getCurrentBranch", () => {
+	test("returns current branch name when on a branch", async () => {
+		// Create a temp git repo and check current branch
+		const tmpDir = `/tmp/overstory-test-branch-${Date.now()}`;
+		await Bun.spawn(["git", "init"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		await Bun.spawn(["git", "config", "user.name", "Test"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		await Bun.spawn(["git", "config", "user.email", "test@example.com"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		await Bun.spawn(["git", "checkout", "-b", "feature-branch"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+
+		const branch = await getCurrentBranch(tmpDir);
+		expect(branch).toBe("feature-branch");
+
+		// Cleanup
+		Bun.spawn(["rm", "-rf", tmpDir], { stdout: "pipe", stderr: "pipe" });
+	});
+
+	test("returns null when in detached HEAD state", async () => {
+		const tmpDir = `/tmp/overstory-test-detached-${Date.now()}`;
+		await Bun.spawn(["git", "init"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		await Bun.spawn(["git", "config", "user.name", "Test"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		await Bun.spawn(["git", "config", "user.email", "test@example.com"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+
+		// Create an initial commit
+		const testFile = `${tmpDir}/test.txt`;
+		await Bun.write(testFile, "test");
+		await Bun.spawn(["git", "add", "test.txt"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		await Bun.spawn(["git", "commit", "-m", "initial"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+
+		// Detach HEAD
+		await Bun.spawn(["git", "checkout", "--detach"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+
+		const branch = await getCurrentBranch(tmpDir);
+		expect(branch).toBeNull();
+
+		// Cleanup
+		Bun.spawn(["rm", "-rf", tmpDir], { stdout: "pipe", stderr: "pipe" });
+	});
+
+	test("returns null when git command fails", async () => {
+		// Test with a non-existent directory
+		const branch = await getCurrentBranch("/nonexistent/path");
+		expect(branch).toBeNull();
 	});
 });
