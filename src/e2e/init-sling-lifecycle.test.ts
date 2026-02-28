@@ -32,7 +32,6 @@ const EXPECTED_AGENT_DEFS = [
 	"monitor.md",
 	"reviewer.md",
 	"scout.md",
-	"supervisor.md",
 	"workspace.md",
 ];
 
