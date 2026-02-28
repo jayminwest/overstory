@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { realpathSync } from "node:fs";
 import { AgentError } from "../errors.ts";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
@@ -38,6 +38,10 @@ async function initBeads(cwd: string): Promise<void> {
 }
 
 const bdAvailable = isBdAvailable();
+
+// Beads integration setup can exceed Bun's default 5s on loaded machines
+// (bd init + pre-created issues + Dolt warmup), causing flaky hook timeouts.
+setDefaultTimeout(30_000);
 
 /**
  * Optimized test suite: uses a single shared repo (beforeAll) instead of
