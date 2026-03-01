@@ -3,6 +3,7 @@ import { resolveModel, resolveProviderEnv } from "../agents/manifest.ts";
 import { HierarchyError } from "../errors.ts";
 import { ClaudeRuntime } from "../runtimes/claude.ts";
 import { getRuntime } from "../runtimes/registry.ts";
+import { cleanupTempDir, createTempGitRepo, runGitInDir } from "../test-helpers.ts";
 import type { AgentManifest, OverstoryConfig } from "../types.ts";
 import {
 	type AutoDispatchOptions,
@@ -1285,44 +1286,46 @@ describe("extractMulchRecordIds", () => {
 describe("getCurrentBranch", () => {
 	test("returns current branch name when on a branch", async () => {
 		// Create a temp git repo and check current branch
-		const tmpDir = `/tmp/overstory-test-branch-${Date.now()}`;
-		await Bun.spawn(["git", "init"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
-		await Bun.spawn(["git", "config", "user.name", "Test"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
-		await Bun.spawn(["git", "config", "user.email", "test@example.com"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
-		await Bun.spawn(["git", "checkout", "-b", "feature-branch"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		const tmpDir = await createTempGitRepo();
+		await runGitInDir(tmpDir, ["checkout", "-b", "feature-branch"]);
 
 		const branch = await getCurrentBranch(tmpDir);
 		expect(branch).toBe("feature-branch");
 
 		// Cleanup
-		Bun.spawn(["rm", "-rf", tmpDir], { stdout: "pipe", stderr: "pipe" });
+		await cleanupTempDir(tmpDir);
 	});
 
 	test("returns null when in detached HEAD state", async () => {
-		const tmpDir = `/tmp/overstory-test-detached-${Date.now()}`;
-		await Bun.spawn(["git", "init"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
-		await Bun.spawn(["git", "config", "user.name", "Test"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
-		await Bun.spawn(["git", "config", "user.email", "test@example.com"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		const tmpDir = await createTempGitRepo();
 
 		// Create an initial commit
-		const testFile = `${tmpDir}/test.txt`;
-		await Bun.write(testFile, "test");
-		await Bun.spawn(["git", "add", "test.txt"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
-		await Bun.spawn(["git", "commit", "-m", "initial"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		await Bun.write(`${tmpDir}/test.txt`, "test");
+		await runGitInDir(tmpDir, ["add", "test.txt"]);
+		await runGitInDir(tmpDir, ["commit", "-m", "initial"]);
 
 		// Detach HEAD
-		await Bun.spawn(["git", "checkout", "--detach"], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }).exited;
+		await runGitInDir(tmpDir, ["checkout", "--detach"]);
 
 		const branch = await getCurrentBranch(tmpDir);
 		expect(branch).toBeNull();
 
 		// Cleanup
-		Bun.spawn(["rm", "-rf", tmpDir], { stdout: "pipe", stderr: "pipe" });
+		await cleanupTempDir(tmpDir);
 	});
 
 	test("returns null when git command fails", async () => {
-		// Test with a non-existent directory
-		const branch = await getCurrentBranch("/nonexistent/path");
+		// Create a temp directory that is NOT a git repo
+		// getCurrentBranch should return null when git rev-parse fails
+		const { mkdtemp } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const tmpDir = await mkdtemp(join(tmpdir(), "overstory-non-git-"));
+
+		const branch = await getCurrentBranch(tmpDir);
 		expect(branch).toBeNull();
+
+		// Cleanup
+		await cleanupTempDir(tmpDir);
 	});
 });
