@@ -280,6 +280,7 @@ ov sling <task-id>              Spawn a worker agent
   --no-scout-check                       Suppress scout-before-build warning
   --force-hierarchy                      Bypass hierarchy validation (debugging only)
   --runtime <name>                       Runtime adapter (default: config or claude)
+  --base-branch <name>                   Base branch for worktree (default: current HEAD)
   --json                                 JSON output
 
 ov stop <agent-name>            Terminate a running agent
