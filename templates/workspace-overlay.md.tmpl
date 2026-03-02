@@ -31,6 +31,12 @@ ov mail check --agent workspace
 # Send to a project coordinator
 ov mail send --to <project>:coordinator --subject "status" --body "..." --type status --agent workspace
 
+# Nudge a project agent
+ov nudge <project>:coordinator "Check mail and process dispatch"
+
+# Debug mail routing
+ov mail debug --to <project>:coordinator --from workspace --json
+
 # Broadcast to all workspace agents
 ov mail send --to @workspace --subject "announcement" --body "..." --type status --agent workspace
 ```

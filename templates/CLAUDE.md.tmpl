@@ -25,6 +25,8 @@ ov mail send --to <project>:<agent> --subject "..." --body "..."
 ov mail check          # Your inbox
 ov mail list --unread  # All unread messages
 ov mail reply <id> --body "..."
+ov nudge <agent> "Check mail"                      # Project scope
+ov nudge <project>:<agent> "Check mail"            # Workspace scope
 
 # Merge completed work
 ov merge --branch <name>   # Merge a specific branch

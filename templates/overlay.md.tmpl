@@ -73,6 +73,12 @@ ov mail send --to {{PARENT_AGENT}} --subject "done" \
 
 # Reply to a message
 ov mail reply <message-id> --body "Your reply" --agent {{AGENT_NAME}}
+
+# Nudge a local project agent
+ov nudge <agent-name> "Check mail and respond"
+
+# Debug mail routing
+ov mail debug --to <agent-name> --from {{AGENT_NAME}} --json
 ```
 
 ## Spawning Sub-Workers

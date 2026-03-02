@@ -394,6 +394,48 @@ interface PurgeOpts {
 	json?: boolean;
 }
 
+interface DebugOpts {
+	to?: string;
+	from?: string;
+	agent?: string;
+	json?: boolean;
+}
+
+function resolveSingleRecipientScope(
+	to: string,
+	from: string,
+	projectId: string | undefined,
+): {
+	effectiveProjectId: string | undefined;
+	toParsed: { projectId: string | null; agentName: string };
+	fromParsed: { projectId: string | null; agentName: string };
+} {
+	const toParsed = parseAddress(to);
+	const fromParsed = parseAddress(from);
+
+	// Explicit recipient scoping always wins.
+	if (toParsed.projectId !== null) {
+		return { effectiveProjectId: toParsed.projectId, toParsed, fromParsed };
+	}
+	// Explicit sender scoping is respected if recipient is unscoped.
+	if (fromParsed.projectId !== null) {
+		return { effectiveProjectId: fromParsed.projectId, toParsed, fromParsed };
+	}
+	// In-project scope (single repo or selected workspace project).
+	if (projectId !== undefined) {
+		return { effectiveProjectId: projectId, toParsed, fromParsed };
+	}
+	// Workspace root strict mode: require explicit project for project agents.
+	if (toParsed.agentName === "workspace") {
+		return { effectiveProjectId: WORKSPACE_PROJECT_ID, toParsed, fromParsed };
+	}
+
+	throw new ValidationError(
+		`Workspace-scope mail requires explicit recipient scope. Use --to <project>:${toParsed.agentName} (or pass --project <name> with --to ${toParsed.agentName}).`,
+		{ field: "to", value: to },
+	);
+}
+
 /** overstory mail send */
 async function handleSend(
 	opts: SendOpts,
@@ -404,8 +446,6 @@ async function handleSend(
 	const cwd = root;
 	const { to, subject, body } = opts;
 	const from = opts.agent ?? opts.from ?? "orchestrator";
-	const toParsed = parseAddress(to);
-	const fromParsed = parseAddress(from);
 	const rawPayload = opts.payload;
 	const VALID_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 
@@ -428,46 +468,11 @@ async function handleSend(
 	const type = rawType as MailMessage["type"];
 	const priority = rawPriority as MailMessage["priority"];
 
-	// Workspace-root send behavior:
-	// - Unqualified recipients (e.g. "coordinator") are auto-routed only when
-	//   exactly one active session exists for that agent name.
-	// - Otherwise require explicit scoping via --project or <project>:<agent>.
-	// - Workspace self-mail defaults to _workspace instead of _default.
-	let effectiveProjectId = projectId;
-	if (!isGroupAddress(to) && effectiveProjectId === undefined && toParsed.projectId === null) {
-		if (toParsed.agentName === "workspace") {
-			effectiveProjectId = WORKSPACE_PROJECT_ID;
-		} else {
-			const { store: sessionStore } = openSessionStore(dbRoot);
-			try {
-				const active = sessionStore.getActive();
-				const recipientProjects = [...new Set(
-					active
-						.filter((s) => s.agentName === toParsed.agentName)
-						.map((s) => s.projectId)
-						.filter((pid): pid is string => typeof pid === "string" && pid.length > 0),
-				)];
-				if (recipientProjects.length === 1) {
-					effectiveProjectId = recipientProjects[0];
-				} else if (recipientProjects.length === 0) {
-					throw new ValidationError(
-						`Cannot resolve recipient "${toParsed.agentName}" from workspace scope (no active sessions for that agent). Use --project <name> or --to <project>:${toParsed.agentName}.`,
-						{ field: "to", value: to },
-					);
-				} else {
-					throw new ValidationError(
-						`Ambiguous recipient "${toParsed.agentName}" from workspace scope. Active projects: ${recipientProjects.join(", ")}. Use --project <name> or --to <project>:${toParsed.agentName}.`,
-						{ field: "to", value: to },
-					);
-				}
-			} finally {
-				sessionStore.close();
-			}
-		}
-	}
-	if (effectiveProjectId === undefined && fromParsed.agentName === "workspace") {
-		effectiveProjectId = WORKSPACE_PROJECT_ID;
-	}
+	const toParsed = parseAddress(to);
+	const targetAgentName = toParsed.agentName;
+	const effectiveProjectId = isGroupAddress(to)
+		? projectId
+		: resolveSingleRecipientScope(to, from, projectId).effectiveProjectId;
 
 	// Validate JSON payload if provided
 	let payload: string | undefined;
@@ -529,15 +534,15 @@ async function handleSend(
 								runId,
 								agentName: from,
 								sessionId: null,
-								eventType: "mail_sent",
-								toolName: null,
-								toolArgs: null,
-								toolDurationMs: null,
-								level: "info",
-								projectId: effectiveProjectId ?? "_workspace",
-								data: JSON.stringify({
-									to: recipient,
-									subject,
+							eventType: "mail_sent",
+							toolName: null,
+							toolArgs: null,
+							toolDurationMs: null,
+							level: "info",
+							projectId: recipientProjectId ?? "_workspace",
+							data: JSON.stringify({
+								to: recipient,
+								subject,
 									type,
 									priority,
 									messageId: id,
@@ -641,7 +646,7 @@ async function handleSend(
 		const shouldNudge = shouldAutoNudge(type, priority);
 		if (shouldNudge) {
 			const nudgeReason = AUTO_NUDGE_TYPES.has(type) ? type : `${priority} priority`;
-			await writePendingNudge(dbRoot, to, {
+			await writePendingNudge(dbRoot, targetAgentName, {
 				from,
 				reason: nudgeReason,
 				subject,
@@ -649,7 +654,7 @@ async function handleSend(
 			});
 			if (!opts.json) {
 				process.stdout.write(
-					`Queued nudge for "${to}" (${nudgeReason}, delivered on next prompt)\n`,
+					`Queued nudge for "${targetAgentName}" (${nudgeReason}, delivered on next prompt)\n`,
 				);
 			}
 		}
@@ -665,7 +670,7 @@ async function handleSend(
 				const nudgeMessage = `[DISPATCH] ${subject}: ${body.slice(0, 500)}`;
 				// Small delay to let the agent's TUI stabilize after sling
 				await Bun.sleep(3_000);
-				await nudgeAgent(cwd, to, nudgeMessage, true, dbRoot, effectiveProjectId); // force=true to skip debounce
+				await nudgeAgent(cwd, targetAgentName, nudgeMessage, true, dbRoot, effectiveProjectId); // force=true to skip debounce
 			} catch {
 				// Non-fatal: the file-based nudge is the fallback
 			}
@@ -704,6 +709,81 @@ async function handleSend(
 	} finally {
 		client.close();
 	}
+}
+
+function handleDebug(
+	opts: DebugOpts,
+	ctx: ResolvedContext,
+	projectId: string | undefined,
+	dbRoot: string,
+	root: string,
+): void {
+	const from = opts.agent ?? opts.from ?? "orchestrator";
+	const to = opts.to;
+
+	let routing:
+		| {
+				toParsed: { projectId: string | null; agentName: string };
+				fromParsed: { projectId: string | null; agentName: string };
+				effectiveProjectId: string | undefined;
+		  }
+		| undefined;
+	let routingError: string | null = null;
+
+	if (to !== undefined) {
+		try {
+			routing = resolveSingleRecipientScope(to, from, projectId);
+		} catch (err) {
+			routingError = err instanceof Error ? err.message : String(err);
+		}
+	}
+
+	const payload = {
+		context: {
+			mode: ctx.mode,
+			workspaceRoot: ctx.workspaceRoot,
+			projectRoot: root,
+			dbRoot,
+			contextProjectId: ctx.projectId,
+			resolvedProjectId: projectId ?? null,
+		},
+		addressing: {
+			from,
+			to: to ?? null,
+			fromParsed: parseAddress(from),
+			toParsed: to ? parseAddress(to) : null,
+			effectiveProjectId: routing?.effectiveProjectId ?? null,
+			error: routingError,
+			rule:
+				projectId === undefined
+					? "workspace scope requires explicit project recipient: <project>:<agent> (except workspace self-address)"
+					: "project scope uses bare recipient names by default",
+		},
+	};
+
+	if (opts.json) {
+		jsonOutput("mail debug", payload);
+		return;
+	}
+
+	process.stdout.write("Mail Routing Debug\n");
+	process.stdout.write("==================\n");
+	process.stdout.write(`mode: ${payload.context.mode}\n`);
+	process.stdout.write(`workspaceRoot: ${payload.context.workspaceRoot ?? "(none)"}\n`);
+	process.stdout.write(`projectRoot: ${payload.context.projectRoot}\n`);
+	process.stdout.write(`dbRoot: ${payload.context.dbRoot}\n`);
+	process.stdout.write(`contextProjectId: ${payload.context.contextProjectId}\n`);
+	process.stdout.write(`resolvedProjectId: ${payload.context.resolvedProjectId ?? "(workspace aggregate)"}\n`);
+	process.stdout.write(`from: ${from}\n`);
+	if (to !== undefined) {
+		process.stdout.write(`to: ${to}\n`);
+		if (routingError) {
+			process.stdout.write(`resolution: ERROR — ${routingError}\n`);
+		} else {
+			process.stdout.write(`effectiveProjectId: ${routing?.effectiveProjectId ?? "(none)"}\n`);
+		}
+	}
+	process.stdout.write(`rule: ${payload.addressing.rule}\n`);
 }
 
 /** overstory mail check */
@@ -945,6 +1025,18 @@ export async function mailCommand(args: string[]): Promise<void> {
 			.action(async (opts: CheckOpts) => {
 				await handleCheck(opts, root, dbRoot, resolvedProjectId, ctx);
 			});
+
+	program
+		.command("debug")
+		.description("Show mail routing/debug info for current scope")
+		.option("--to <agent>", "Recipient to simulate routing for")
+		.option("--from <name>", "Sender name")
+		.option("--agent <name>", "Alias for --from")
+		.option("--json", "Output as JSON")
+		.exitOverride()
+		.action((opts: DebugOpts) => {
+			handleDebug(opts, ctx, resolvedProjectId, dbRoot, root);
+		});
 
 	program
 		.command("list")

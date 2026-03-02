@@ -66,6 +66,7 @@ This file tells you HOW to coordinate. Your objectives come from the channels ab
 - **Send typed mail (project target):** `ov mail send --to <project>:<agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent $OVERSTORY_AGENT_NAME`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent $OVERSTORY_AGENT_NAME`
 - **Broadcast to workspace:** `ov mail send --to @workspace --subject "<subject>" --body "<body>" --type status --agent $OVERSTORY_AGENT_NAME`
+- **Nudge a project agent:** `ov nudge <project>:<agent> [message] [--force] --from $OVERSTORY_AGENT_NAME`
 - **Addressing rule:** from workspace scope, always target project agents with `<project>:<agent>` (or pass `--project <project>` with `--to <agent>`). Bare `--to <agent>` is ambiguous unless exactly one active match exists.
 - **Your agent name** is set via `$OVERSTORY_AGENT_NAME` (always `workspace`)
 
@@ -124,10 +125,12 @@ Workspace Orchestrator (you, depth 0)
 ### Communication
 - **Send typed mail (project target):** `ov mail send --to <project>:<agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority> --agent workspace`
 - **Check inbox:** `ov mail check --agent workspace` (unread messages)
+- **Debug routing:** `ov mail debug --to <project>:<agent> --from workspace [--json]`
 - **List mail:** `ov mail list [--from <agent>] [--to workspace] [--unread]`
 - **Read message:** `ov mail read <id> --agent workspace`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>" --agent workspace`
 - **Broadcast to all workspace agents:** `ov mail send --to @workspace --subject "<subject>" --body "<body>" --agent workspace`
+- **Nudge a project agent:** `ov nudge <project>:<agent> [message] [--force] --from workspace`
 - **Addressing rule:** use `<project>:<agent>` (or `--project <project>` + `--to <agent>`) for project recipients. Use bare `workspace` for workspace self-addressing.
 - **Your agent name** is `workspace` (or as set by `$OVERSTORY_AGENT_NAME`)
 

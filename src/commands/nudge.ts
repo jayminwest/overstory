@@ -15,6 +15,7 @@ import { AgentError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
+import { parseAddress } from "../mail/client.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { EventStore } from "../types.ts";
 import { WORKSPACE_PROJECT_ID } from "../workspace/config.ts";
@@ -239,8 +240,9 @@ export async function nudgeAgent(
 	let result: { delivered: boolean; reason?: string };
 
 	const effectiveDbRoot = dbRoot ?? join(projectRoot, ".overstory");
-	const overstoryDir =
-		projectId === WORKSPACE_PROJECT_ID ? effectiveDbRoot : join(projectRoot, ".overstory");
+	const overstoryDir = effectiveDbRoot.endsWith(".overstory-workspace")
+		? effectiveDbRoot
+		: join(projectRoot, ".overstory");
 
 	// Resolve tmux session (SessionStore for agents, orchestrator-tmux.json for orchestrator)
 	const tmuxSessionName = await resolveTargetSession(
@@ -329,7 +331,7 @@ export async function nudgeCommand(args: string[]): Promise<void> {
 		.exitOverride()
 		.action(
 			async (
-				agentName: string,
+				targetAddress: string,
 				messageParts: string[],
 				opts: { from: string; force?: boolean; json?: boolean },
 			) => {
@@ -340,22 +342,41 @@ export async function nudgeCommand(args: string[]): Promise<void> {
 
 				// Resolve context (respects --project flag)
 				const ctx = await resolveContext({ project: extractProjectFlag() });
+				const parsed = parseAddress(targetAddress);
+				const contextProjectId = ctx.projectId === WORKSPACE_PROJECT_ID ? undefined : ctx.projectId;
+				const targetAgentName = parsed.agentName;
+				const targetProjectId =
+					parsed.projectId ??
+					contextProjectId ??
+					(targetAgentName === "workspace" ? WORKSPACE_PROJECT_ID : undefined);
+
+				if (targetProjectId === undefined) {
+					throw new AgentError(
+						`Workspace-scope nudge requires explicit recipient scope. Use <project>:${targetAgentName} (or pass --project <name>).`,
+						{ agentName: targetAgentName },
+					);
+				}
 
 				const result = await nudgeAgent(
 					ctx.projectRoot,
-					agentName,
+					targetAgentName,
 					message,
 					opts.force ?? false,
 					ctx.dbRoot,
-					ctx.projectId,
+					targetProjectId,
 				);
 
 				if (opts.json) {
-					jsonOutput("nudge", { agentName, delivered: result.delivered, reason: result.reason });
+					jsonOutput("nudge", {
+						agentName: targetAgentName,
+						projectId: targetProjectId,
+						delivered: result.delivered,
+						reason: result.reason,
+					});
 				} else if (result.delivered) {
-					printSuccess("Nudge delivered", agentName);
+					printSuccess("Nudge delivered", targetAgentName);
 				} else {
-					throw new AgentError(`Nudge failed: ${result.reason}`, { agentName });
+					throw new AgentError(`Nudge failed: ${result.reason}`, { agentName: targetAgentName });
 				}
 			},
 		);

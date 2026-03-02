@@ -145,81 +145,9 @@ describe("mailCommand", () => {
 			await Bun.write(join(tempDir, ".overstory-workspace", "workspace.yaml"), workspaceYaml);
 		}
 
-		async function seedWorkspaceSessions(
-			sessions: Array<{ projectId: string; agentName: string; capability: string }>,
-		): Promise<void> {
-			const { createSessionStore } = await import("../sessions/store.ts");
-			const sessionsDbPath = join(tempDir, ".overstory-workspace", "sessions.db");
-			const sessionStore = createSessionStore(sessionsDbPath);
-
-			for (const [idx, session] of sessions.entries()) {
-				sessionStore.upsert(
-					{
-						projectId: session.projectId,
-						id: `ws-session-${idx}`,
-						agentName: session.agentName,
-						capability: session.capability as
-							| "builder"
-							| "reviewer"
-							| "scout"
-							| "coordinator"
-							| "lead"
-							| "merger"
-							| "supervisor"
-							| "monitor",
-						worktreePath: `/worktrees/${session.agentName}`,
-						branchName: "main",
-						taskId: "",
-						tmuxSession: `overstory-${session.projectId}-${session.agentName}`,
-						state: "working",
-						pid: 40000 + idx,
-						parentAgent: null,
-						depth: 0,
-						runId: null,
-						startedAt: new Date().toISOString(),
-						lastActivity: new Date().toISOString(),
-						escalationLevel: 0,
-						stalledSince: null,
-						transcriptPath: null,
-					},
-					session.projectId,
-				);
-			}
-
-			sessionStore.close();
-		}
-
-		test("workspace send to unqualified recipient auto-routes when exactly one active match", async () => {
-			await setupWorkspace(["authmanager", "audit-docs"]);
-			await seedWorkspaceSessions([
-				{ projectId: "authmanager", agentName: "coordinator", capability: "coordinator" },
-			]);
-
-			output = "";
-			await mailCommand([
-				"send",
-				"--to",
-				"coordinator",
-				"--from",
-				"workspace",
-				"--subject",
-				"Workspace dispatch",
-				"--body",
-				"Handle docs",
-			]);
-
-			const store = createMailStore(join(tempDir, ".overstory-workspace", "mail.db"));
-			const client = createMailClient(store);
-			const message = client
-				.list({ to: "coordinator" })
-				.find((m) => m.subject === "Workspace dispatch");
-			expect(message).toBeDefined();
-			expect(message?.projectId).toBe("authmanager");
-			client.close();
-		});
-
-		test("workspace send to unqualified recipient fails when no active matching sessions", async () => {
+		test("workspace send to unqualified recipient is rejected in strict mode", async () => {
 			await setupWorkspace(["authmanager"]);
+			process.chdir(tempDir);
 
 			let error: Error | null = null;
 			try {
@@ -239,46 +167,40 @@ describe("mailCommand", () => {
 			}
 
 			expect(error).toBeTruthy();
-			expect(error?.message).toContain('Cannot resolve recipient "coordinator" from workspace scope');
-			expect(error?.message).toContain("Use --project <name> or --to <project>:coordinator");
+			expect(error?.message).toContain("Workspace-scope mail requires explicit recipient scope");
+			expect(error?.message).toContain("--to <project>:coordinator");
 		});
 
-		test("workspace send to unqualified recipient fails when multiple active matches", async () => {
-			await setupWorkspace(["authmanager", "eleiris-ai-assistant-architecture-audit"]);
-			await seedWorkspaceSessions([
-				{ projectId: "authmanager", agentName: "coordinator", capability: "coordinator" },
-				{
-					projectId: "eleiris-ai-assistant-architecture-audit",
-					agentName: "coordinator",
-					capability: "coordinator",
-				},
+		test("workspace send with explicit project scope is visible to project coordinator", async () => {
+			await setupWorkspace(["authmanager"]);
+			process.chdir(tempDir);
+			await mailCommand([
+				"send",
+				"--to",
+				"authmanager:coordinator",
+				"--from",
+				"workspace",
+				"--subject",
+				"Workspace dispatch",
+				"--body",
+				"Handle docs",
 			]);
 
-			let error: Error | null = null;
-			try {
-				await mailCommand([
-					"send",
-					"--to",
-					"coordinator",
-					"--from",
-					"workspace",
-					"--subject",
-					"Ambiguous route",
-					"--body",
-					"Body",
-				]);
-			} catch (err) {
-				error = err as Error;
-			}
-
-			expect(error).toBeTruthy();
-			expect(error?.message).toContain('Ambiguous recipient "coordinator" from workspace scope');
-			expect(error?.message).toContain("Active projects: authmanager");
-			expect(error?.message).toContain("Use --project <name> or --to <project>:coordinator");
+			output = "";
+			process.chdir(join(tempDir, "authmanager"));
+			await mailCommand(["check", "--agent", "coordinator", "--json"]);
+			const result = JSON.parse(output.trim()) as {
+				messages: Array<{ subject: string; to: string; projectId: string }>;
+			};
+			expect(result.messages).toHaveLength(1);
+			expect(result.messages[0]?.subject).toBe("Workspace dispatch");
+			expect(result.messages[0]?.to).toBe("coordinator");
+			expect(result.messages[0]?.projectId).toBe("authmanager");
 		});
 
 		test("workspace send to workspace defaults message scope to _workspace", async () => {
 			await setupWorkspace(["authmanager"]);
+			process.chdir(tempDir);
 
 			output = "";
 			await mailCommand([
@@ -301,6 +223,18 @@ describe("mailCommand", () => {
 			expect(message).toBeDefined();
 			expect(message?.projectId).toBe("_workspace");
 			client.close();
+		});
+
+		test("mail debug reports strict addressing error at workspace scope", async () => {
+			await setupWorkspace(["authmanager"]);
+			process.chdir(tempDir);
+			output = "";
+			await mailCommand(["debug", "--to", "coordinator", "--from", "workspace", "--json"]);
+			const debug = JSON.parse(output.trim()) as {
+				addressing: { error: string | null; rule: string };
+			};
+			expect(debug.addressing.error).toContain("Workspace-scope mail requires explicit recipient scope");
+			expect(debug.addressing.rule).toContain("workspace scope requires explicit project recipient");
 		});
 	});
 

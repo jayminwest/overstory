@@ -126,6 +126,7 @@ Coordinator (you, depth 0)
 ### Communication
 - **Send typed mail:** `ov mail send --to <agent> --subject "<subject>" --body "<body>" --type <type> --priority <priority>`
 - **Check inbox:** `ov mail check` (unread messages)
+- **Debug routing:** `ov mail debug --to <agent> --from $OVERSTORY_AGENT_NAME [--json]`
 - **List mail:** `ov mail list [--from <agent>] [--to <agent>] [--unread]`
 - **Read message:** `ov mail read <id>`
 - **Reply in thread:** `ov mail reply <id> --body "<reply>"`
