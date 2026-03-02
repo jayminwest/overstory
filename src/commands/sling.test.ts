@@ -1,9 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { resolveModel, resolveProviderEnv } from "../agents/manifest.ts";
 import { HierarchyError } from "../errors.ts";
 import { ClaudeRuntime } from "../runtimes/claude.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import type { AgentManifest, OverstoryConfig } from "../types.ts";
+import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import {
 	type AutoDispatchOptions,
 	type BeaconOptions,
@@ -15,6 +20,7 @@ import {
 	checkRunSessionLimit,
 	checkTaskLock,
 	extractMulchRecordIds,
+	getCurrentBranch,
 	inferDomainsFromFiles,
 	isRunningAsRoot,
 	parentHasScouts,
@@ -1272,5 +1278,61 @@ describe("extractMulchRecordIds", () => {
 		expect(result).toContainEqual({ id: "mx-636708", domain: "agents" });
 		expect(result).toContainEqual({ id: "mx-b7fa3d", domain: "agents" });
 		expect(result).toContainEqual({ id: "mx-2ce43d", domain: "typescript" });
+	});
+});
+
+describe("getCurrentBranch", () => {
+	let repoDir: string;
+
+	beforeEach(async () => {
+		repoDir = realpathSync(await createTempGitRepo());
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(repoDir);
+	});
+
+	test("returns the current branch name", async () => {
+		const branch = await getCurrentBranch(repoDir);
+		expect(branch).toMatch(/^(main|master)$/);
+	});
+
+	test("returns feature branch name after checkout", async () => {
+		const proc = Bun.spawn(["git", "checkout", "-b", "feature/test-branch"], {
+			cwd: repoDir,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		await proc.exited;
+		const branch = await getCurrentBranch(repoDir);
+		expect(branch).toBe("feature/test-branch");
+	});
+
+	test("returns null for detached HEAD", async () => {
+		const hashProc = Bun.spawn(["git", "rev-parse", "HEAD"], {
+			cwd: repoDir,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const hash = (await new Response(hashProc.stdout).text()).trim();
+		await hashProc.exited;
+		const proc = Bun.spawn(["git", "checkout", hash], {
+			cwd: repoDir,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		await proc.exited;
+		const branch = await getCurrentBranch(repoDir);
+		expect(branch).toBeNull();
+	});
+
+	test("returns null for non-git directory", async () => {
+		const tmpDir = realpathSync(await mkdtemp(join(tmpdir(), "overstory-notgit-")));
+		try {
+			const branch = await getCurrentBranch(tmpDir);
+			expect(branch).toBeNull();
+		} finally {
+			await cleanupTempDir(tmpDir);
+		}
 	});
 });

@@ -124,6 +124,7 @@ export interface SlingOptions {
 	dispatchMaxAgents?: string;
 	runtime?: string;
 	noScoutCheck?: boolean;
+	baseBranch?: string;
 }
 
 export interface AutoDispatchOptions {
@@ -387,6 +388,28 @@ export function extractMulchRecordIds(primeText: string): Array<{ id: string; do
 		}
 	}
 	return results;
+}
+
+/**
+ * Get the current git branch name for the repo at the given path.
+ *
+ * Returns null if in detached HEAD state, the directory is not a git repo,
+ * or git exits non-zero.
+ *
+ * @param repoRoot - Absolute path to the git repository root
+ */
+export async function getCurrentBranch(repoRoot: string): Promise<string | null> {
+	const proc = Bun.spawn(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
+		cwd: repoRoot,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+	if (exitCode !== 0) return null;
+	const branch = stdout.trim();
+	// "HEAD" is returned when in detached HEAD state
+	if (branch === "HEAD" || branch === "") return null;
+	return branch;
 }
 
 /**
@@ -658,11 +681,17 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		const worktreeBaseDir = join(config.project.root, config.worktrees.baseDir);
 		await mkdir(worktreeBaseDir, { recursive: true });
 
+		// Resolve base branch: --base-branch flag > current HEAD > config.project.canonicalBranch
+		const baseBranch =
+			opts.baseBranch ??
+			(await getCurrentBranch(config.project.root)) ??
+			config.project.canonicalBranch;
+
 		const { path: worktreePath, branch: branchName } = await createWorktree({
 			repoRoot: config.project.root,
 			baseDir: worktreeBaseDir,
 			agentName: name,
-			baseBranch: config.project.canonicalBranch,
+			baseBranch,
 			taskId: taskId,
 		});
 
