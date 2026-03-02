@@ -5,6 +5,7 @@ import type { OverstoryConfig } from "../types.ts";
 import { ClaudeRuntime } from "./claude.ts";
 import { CodexRuntime } from "./codex.ts";
 import { CopilotRuntime } from "./copilot.ts";
+import { GeminiRuntime } from "./gemini.ts";
 import { PiRuntime } from "./pi.ts";
 import type { AgentRuntime } from "./types.ts";
 
@@ -14,6 +15,7 @@ const runtimes = new Map<string, () => AgentRuntime>([
 	["codex", () => new CodexRuntime()],
 	["pi", () => new PiRuntime()],
 	["copilot", () => new CopilotRuntime()],
+	["gemini", () => new GeminiRuntime()],
 ]);
 
 /**
