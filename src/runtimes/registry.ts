@@ -7,6 +7,7 @@ import { CodexRuntime } from "./codex.ts";
 import { CopilotRuntime } from "./copilot.ts";
 import { GeminiRuntime } from "./gemini.ts";
 import { PiRuntime } from "./pi.ts";
+import { SaplingRuntime } from "./sapling.ts";
 import type { AgentRuntime } from "./types.ts";
 
 /** Registry of config-independent runtime adapters (name → factory). */
@@ -16,6 +17,7 @@ const runtimes = new Map<string, () => AgentRuntime>([
 	["pi", () => new PiRuntime()],
 	["copilot", () => new CopilotRuntime()],
 	["gemini", () => new GeminiRuntime()],
+	["sapling", () => new SaplingRuntime()],
 ]);
 
 /**
