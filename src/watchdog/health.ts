@@ -20,6 +20,11 @@
  *   - pid alive + tmux dead → should not happen (tmux owns the pid), but if it
  *     does, trust tmux (the session is gone).
  *
+ * Headless agents (tmuxSession === ''):
+ *   Headless agents have no tmux session. For these, PID is the PRIMARY liveness
+ *   signal. The tmuxAlive parameter is meaningless and ignored. ZFC rules are
+ *   applied using PID liveness instead of tmux liveness.
+ *
  * The rationale: sessions.json is updated asynchronously by hooks and can become
  * stale if the agent crashes between hook invocations. tmux and the OS process
  * table are always up-to-date because they reflect real kernel state.
@@ -66,6 +71,92 @@ export function isProcessRunning(pid: number): boolean {
 }
 
 /**
+ * Detect whether a session is a headless agent.
+ *
+ * Headless agents are spawned without a tmux session (tmuxSession === '') and
+ * are tracked solely by PID. For these agents, PID is the primary liveness signal.
+ */
+function isHeadlessSession(session: AgentSession): boolean {
+	return session.tmuxSession === "" && session.pid !== null;
+}
+
+/**
+ * Evaluate time-based health (persistent capability exemptions, stale, zombie thresholds,
+ * booting→working transition). Called after liveness is confirmed for both TUI and headless paths.
+ *
+ * Assumes that by the time this is called:
+ * - The agent is not completed
+ * - The agent is not in a liveness-based zombie state
+ * - The agent is not in a zombie state that needs investigation
+ */
+function evaluateTimeBased(
+	session: AgentSession,
+	base: Pick<HealthCheck, "agentName" | "timestamp" | "tmuxAlive" | "pidAlive" | "lastActivity">,
+	elapsedMs: number,
+	thresholds: { staleMs: number; zombieMs: number },
+): HealthCheck {
+	// Persistent capabilities (coordinator, monitor) are expected to have long idle
+	// periods waiting for mail/events. Skip time-based stale/zombie detection for
+	// them — only tmux/pid liveness matters (checked above).
+	if (PERSISTENT_CAPABILITIES.has(session.capability)) {
+		// Transition booting → working if we reach here (process alive)
+		const state = session.state === "booting" ? "working" : session.state;
+		return {
+			...base,
+			processAlive: true,
+			state: state === "stalled" ? "working" : state,
+			action: "none",
+			reconciliationNote:
+				session.state === "stalled"
+					? `Persistent capability "${session.capability}" exempted from stale detection — resetting to working`
+					: null,
+		};
+	}
+
+	// lastActivity older than zombieMs → zombie
+	if (elapsedMs > thresholds.zombieMs) {
+		return {
+			...base,
+			processAlive: true,
+			state: "zombie",
+			action: "terminate",
+			reconciliationNote: null,
+		};
+	}
+
+	// lastActivity older than staleMs → stalled
+	if (elapsedMs > thresholds.staleMs) {
+		return {
+			...base,
+			processAlive: true,
+			state: "stalled",
+			action: "escalate",
+			reconciliationNote: null,
+		};
+	}
+
+	// booting → transition to working once there's recent activity
+	if (session.state === "booting") {
+		return {
+			...base,
+			processAlive: true,
+			state: "working",
+			action: "none",
+			reconciliationNote: null,
+		};
+	}
+
+	// Default: healthy and working
+	return {
+		...base,
+		processAlive: true,
+		state: "working",
+		action: "none",
+		reconciliationNote: null,
+	};
+}
+
+/**
  * Evaluate the health of an agent session.
  *
  * Implements the ZFC principle: observable state (tmux liveness, pid liveness)
@@ -74,18 +165,23 @@ export function isProcessRunning(pid: number): boolean {
  * Decision logic (in priority order):
  *
  * 1. Completed agents skip monitoring entirely.
- * 2. tmux dead → zombie, terminate (regardless of what sessions.json says).
- * 3. tmux alive + sessions.json says zombie → investigate (don't auto-kill).
+ * 2. Headless agents (tmuxSession === ''): PID is primary liveness signal.
+ *    - pid dead → zombie, terminate.
+ *    - pid alive + state zombie → investigate.
+ *    - pid alive → fall through to time-based checks.
+ * 3. tmux dead → zombie, terminate (regardless of what sessions.json says).
+ * 4. tmux alive + sessions.json says zombie → investigate (don't auto-kill).
  *    Something external marked this zombie, but the process is still running.
- * 4. pid dead + tmux alive → zombie, terminate. The agent process exited but
+ * 5. pid dead + tmux alive → zombie, terminate. The agent process exited but
  *    the tmux pane shell survived. The agent is not doing work.
- * 5. lastActivity older than zombieMs → zombie, terminate.
- * 6. lastActivity older than staleMs → stalled, escalate.
- * 7. booting with recent activity → working.
- * 8. Otherwise → working, healthy.
+ * 6. lastActivity older than zombieMs → zombie, terminate.
+ * 7. lastActivity older than staleMs → stalled, escalate.
+ * 8. booting with recent activity → working.
+ * 9. Otherwise → working, healthy.
  *
  * @param session - The agent session to evaluate
  * @param tmuxAlive - Whether the agent's tmux session is still running
+ *                    (ignored for headless agents where tmuxSession === '')
  * @param thresholds - Staleness and zombie time thresholds in milliseconds
  * @returns A HealthCheck describing the agent's current state and recommended action
  */
@@ -101,13 +197,16 @@ export function evaluateHealth(
 	// Check pid liveness as secondary signal (null if pid unavailable)
 	const pidAlive = session.pid !== null ? isProcessRunning(session.pid) : null;
 
+	// Headless agents have no tmux session; tmuxAlive is always false for them.
+	const effectiveTmuxAlive = isHeadlessSession(session) ? false : tmuxAlive;
+
 	const base: Pick<
 		HealthCheck,
 		"agentName" | "timestamp" | "tmuxAlive" | "pidAlive" | "lastActivity"
 	> = {
 		agentName: session.agentName,
 		timestamp: now.toISOString(),
-		tmuxAlive,
+		tmuxAlive: effectiveTmuxAlive,
 		pidAlive,
 		lastActivity: session.lastActivity,
 	};
@@ -116,12 +215,43 @@ export function evaluateHealth(
 	if (session.state === "completed") {
 		return {
 			...base,
-			processAlive: tmuxAlive,
+			processAlive: effectiveTmuxAlive,
 			state: "completed",
 			action: "none",
 			reconciliationNote: null,
 		};
 	}
+
+	// === Headless path: PID is the primary liveness signal ===
+	if (isHeadlessSession(session)) {
+		// pid dead → zombie immediately (equivalent to ZFC Rule 1 for headless)
+		if (pidAlive === false) {
+			return {
+				...base,
+				processAlive: false,
+				state: "zombie",
+				action: "terminate",
+				reconciliationNote: `ZFC: headless agent pid ${session.pid} dead — marking zombie`,
+			};
+		}
+
+		// pid alive + state zombie → investigate (equivalent to ZFC Rule 2 for headless)
+		if (session.state === "zombie") {
+			return {
+				...base,
+				processAlive: true,
+				state: "zombie",
+				action: "investigate",
+				reconciliationNote:
+					"ZFC: headless pid alive but sessions.json says zombie — investigation needed (don't auto-kill)",
+			};
+		}
+
+		// pid alive → fall through to time-based checks
+		return evaluateTimeBased(session, base, elapsedMs, thresholds);
+	}
+
+	// === TUI/tmux path ===
 
 	// ZFC Rule 1: tmux dead → zombie immediately, regardless of recorded state.
 	// Observable state says the process is gone.
@@ -166,67 +296,8 @@ export function evaluateHealth(
 		};
 	}
 
-	// Persistent capabilities (coordinator, monitor) are expected to have long idle
-	// periods waiting for mail/events. Skip time-based stale/zombie detection for
-	// them — only tmux/pid liveness matters (checked above).
-	if (PERSISTENT_CAPABILITIES.has(session.capability)) {
-		// Transition booting → working if we reach here (tmux alive, pid alive)
-		const state = session.state === "booting" ? "working" : session.state;
-		return {
-			...base,
-			processAlive: true,
-			state: state === "stalled" ? "working" : state,
-			action: "none",
-			reconciliationNote:
-				session.state === "stalled"
-					? `Persistent capability "${session.capability}" exempted from stale detection — resetting to working`
-					: null,
-		};
-	}
-
 	// Time-based checks (both tmux and pid confirmed alive, or pid unavailable)
-
-	// lastActivity older than zombieMs → zombie
-	if (elapsedMs > thresholds.zombieMs) {
-		return {
-			...base,
-			processAlive: true,
-			state: "zombie",
-			action: "terminate",
-			reconciliationNote: null,
-		};
-	}
-
-	// lastActivity older than staleMs → stalled
-	if (elapsedMs > thresholds.staleMs) {
-		return {
-			...base,
-			processAlive: true,
-			state: "stalled",
-			action: "escalate",
-			reconciliationNote: null,
-		};
-	}
-
-	// booting → transition to working once there's recent activity
-	if (session.state === "booting") {
-		return {
-			...base,
-			processAlive: true,
-			state: "working",
-			action: "none",
-			reconciliationNote: null,
-		};
-	}
-
-	// Default: healthy and working
-	return {
-		...base,
-		processAlive: true,
-		state: "working",
-		action: "none",
-		reconciliationNote: null,
-	};
+	return evaluateTimeBased(session, base, elapsedMs, thresholds);
 }
 
 /**

@@ -3,7 +3,8 @@
  *
  * Explicitly terminates a running agent by:
  * 1. Looking up the agent session by name
- * 2. Killing its tmux session (if alive)
+ * 2a. For TUI agents: killing its tmux session (if alive)
+ * 2b. For headless agents (tmuxSession === ''): sending SIGTERM to the process tree
  * 3. Marking it as completed in the SessionStore
  * 4. Optionally removing its worktree (--clean-worktree)
  */
@@ -15,7 +16,7 @@ import { jsonOutput } from "../json.ts";
 import { printSuccess, printWarning } from "../logging/color.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { removeWorktree } from "../worktree/manager.ts";
-import { isSessionAlive, killSession } from "../worktree/tmux.ts";
+import { isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
 
 export interface StopOptions {
 	force?: boolean;
@@ -36,6 +37,10 @@ export interface StopDeps {
 			options?: { force?: boolean; forceBranch?: boolean },
 		) => Promise<void>;
 	};
+	_process?: {
+		isAlive: (pid: number) => boolean;
+		killTree: (pid: number) => Promise<void>;
+	};
 }
 
 /**
@@ -43,7 +48,7 @@ export interface StopDeps {
  *
  * @param agentName - Name of the agent to stop
  * @param opts - Command options
- * @param deps - Optional dependency injection for testing (tmux, worktree)
+ * @param deps - Optional dependency injection for testing (tmux, worktree, process)
  */
 export async function stopCommand(
 	agentName: string,
@@ -63,6 +68,7 @@ export async function stopCommand(
 
 	const tmux = deps._tmux ?? { isSessionAlive, killSession };
 	const worktree = deps._worktree ?? { remove: removeWorktree };
+	const proc = deps._process ?? { isAlive: isProcessAlive, killTree: killProcessTree };
 
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
@@ -84,10 +90,25 @@ export async function stopCommand(
 			throw new AgentError(`Agent "${agentName}" is already zombie (dead)`, { agentName });
 		}
 
-		// Kill tmux session if alive
-		const alive = await tmux.isSessionAlive(session.tmuxSession);
-		if (alive) {
-			await tmux.killSession(session.tmuxSession);
+		const isHeadless = session.tmuxSession === "" && session.pid !== null;
+
+		let tmuxKilled = false;
+		let pidKilled = false;
+
+		if (isHeadless && session.pid !== null) {
+			// Headless agent: kill via process tree instead of tmux
+			const alive = proc.isAlive(session.pid);
+			if (alive) {
+				await proc.killTree(session.pid);
+				pidKilled = true;
+			}
+		} else {
+			// TUI agent: kill via tmux session
+			const alive = await tmux.isSessionAlive(session.tmuxSession);
+			if (alive) {
+				await tmux.killSession(session.tmuxSession);
+				tmuxKilled = true;
+			}
 		}
 
 		// Mark session as completed
@@ -115,16 +136,25 @@ export async function stopCommand(
 				agentName,
 				sessionId: session.id,
 				capability: session.capability,
-				tmuxKilled: alive,
+				tmuxKilled,
+				pidKilled,
 				worktreeRemoved,
 				force,
 			});
 		} else {
 			printSuccess("Agent stopped", agentName);
-			if (alive) {
-				process.stdout.write(`  Tmux session killed: ${session.tmuxSession}\n`);
+			if (isHeadless) {
+				if (pidKilled) {
+					process.stdout.write(`  Process tree killed: PID ${session.pid}\n`);
+				} else {
+					process.stdout.write(`  Process was already dead (PID ${session.pid})\n`);
+				}
 			} else {
-				process.stdout.write(`  Tmux session was already dead\n`);
+				if (tmuxKilled) {
+					process.stdout.write(`  Tmux session killed: ${session.tmuxSession}\n`);
+				} else {
+					process.stdout.write(`  Tmux session was already dead\n`);
+				}
 			}
 			if (cleanWorktree && worktreeRemoved) {
 				process.stdout.write(`  Worktree removed: ${session.worktreePath}\n`);

@@ -20,6 +20,38 @@ import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import type { AgentSession } from "../types.ts";
 import { type StopDeps, stopCommand } from "./stop.ts";
 
+// --- Fake Process (for headless agents) ---
+
+/** Track calls to fake process for assertions. */
+interface ProcessCallTracker {
+	isAlive: Array<{ pid: number; result: boolean }>;
+	killTree: Array<{ pid: number }>;
+}
+
+/** Build a fake process DI object with configurable PID liveness. */
+function makeFakeProcess(pidAliveMap: Record<number, boolean> = {}): {
+	proc: NonNullable<StopDeps["_process"]>;
+	calls: ProcessCallTracker;
+} {
+	const calls: ProcessCallTracker = {
+		isAlive: [],
+		killTree: [],
+	};
+
+	const proc: NonNullable<StopDeps["_process"]> = {
+		isAlive: (pid: number): boolean => {
+			const alive = pidAliveMap[pid] ?? false;
+			calls.isAlive.push({ pid, result: alive });
+			return alive;
+		},
+		killTree: async (pid: number): Promise<void> => {
+			calls.killTree.push({ pid });
+		},
+	};
+
+	return { proc, calls };
+}
+
 // --- Fake Tmux ---
 
 /** Track calls to fake tmux for assertions. */
@@ -403,5 +435,102 @@ describe("stopCommand --clean-worktree", () => {
 		const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
 		expect(parsed.stopped).toBe(true);
 		expect(parsed.worktreeRemoved).toBe(false);
+	});
+});
+
+describe("stopCommand headless agents", () => {
+	const HEADLESS_PID = 99999;
+
+	function makeHeadlessSession(overrides: Partial<AgentSession> = {}): AgentSession {
+		return makeAgentSession({
+			tmuxSession: "",
+			pid: HEADLESS_PID,
+			...overrides,
+		});
+	}
+
+	function makeHeadlessDeps(
+		pidAliveMap: Record<number, boolean> = {},
+		worktreeConfig?: { shouldFail?: boolean },
+	): {
+		deps: StopDeps;
+		tmuxCalls: TmuxCallTracker;
+		procCalls: ProcessCallTracker;
+		worktreeCalls: WorktreeCallTracker;
+	} {
+		const { tmux, calls: tmuxCalls } = makeFakeTmux({});
+		const { proc, calls: procCalls } = makeFakeProcess(pidAliveMap);
+		const { worktree, calls: worktreeCalls } = makeFakeWorktree(worktreeConfig?.shouldFail);
+		return { deps: { _tmux: tmux, _worktree: worktree, _process: proc }, tmuxCalls, procCalls, worktreeCalls };
+	}
+
+	test("stops headless agent by killing process tree (no tmux interaction)", async () => {
+		const session = makeHeadlessSession({ state: "working" });
+		saveSessionsToDb([session]);
+
+		const { deps, tmuxCalls, procCalls } = makeHeadlessDeps({ [HEADLESS_PID]: true });
+		const output = await captureStdout(() => stopCommand("my-builder", {}, deps));
+
+		// PID was killed
+		expect(procCalls.killTree).toHaveLength(1);
+		expect(procCalls.killTree[0]?.pid).toBe(HEADLESS_PID);
+		// Tmux was NOT touched
+		expect(tmuxCalls.isSessionAlive).toHaveLength(0);
+		expect(tmuxCalls.killSession).toHaveLength(0);
+
+		expect(output).toContain("Agent stopped");
+		expect(output).toContain("Process tree killed");
+		expect(output).toContain(String(HEADLESS_PID));
+
+		const { store } = openSessionStore(overstoryDir);
+		const updated = store.getByName("my-builder");
+		store.close();
+		expect(updated?.state).toBe("completed");
+	});
+
+	test("handles headless agent with already-dead PID gracefully", async () => {
+		const session = makeHeadlessSession({ state: "working" });
+		saveSessionsToDb([session]);
+
+		// PID is NOT alive
+		const { deps, procCalls } = makeHeadlessDeps({ [HEADLESS_PID]: false });
+		const output = await captureStdout(() => stopCommand("my-builder", {}, deps));
+
+		expect(procCalls.killTree).toHaveLength(0);
+		expect(output).toContain("Agent stopped");
+		expect(output).toContain("Process was already dead");
+
+		const { store } = openSessionStore(overstoryDir);
+		const updated = store.getByName("my-builder");
+		store.close();
+		expect(updated?.state).toBe("completed");
+	});
+
+	test("--json output includes pidKilled for headless agent", async () => {
+		const session = makeHeadlessSession({ state: "working" });
+		saveSessionsToDb([session]);
+
+		const { deps } = makeHeadlessDeps({ [HEADLESS_PID]: true });
+		const output = await captureStdout(() => stopCommand("my-builder", { json: true }, deps));
+
+		const parsed = JSON.parse(output.trim()) as Record<string, unknown>;
+		expect(parsed.success).toBe(true);
+		expect(parsed.stopped).toBe(true);
+		expect(parsed.pidKilled).toBe(true);
+		expect(parsed.tmuxKilled).toBe(false);
+		expect(parsed.agentName).toBe("my-builder");
+	});
+
+	test("--clean-worktree works for headless agent", async () => {
+		const session = makeHeadlessSession({ state: "working" });
+		saveSessionsToDb([session]);
+
+		const { deps, worktreeCalls } = makeHeadlessDeps({ [HEADLESS_PID]: true });
+		const output = await captureStdout(() =>
+			stopCommand("my-builder", { cleanWorktree: true }, deps),
+		);
+
+		expect(output).toContain(`Worktree removed: ${session.worktreePath}`);
+		expect(worktreeCalls.remove).toHaveLength(1);
 	});
 });

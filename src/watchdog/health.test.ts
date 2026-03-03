@@ -316,6 +316,108 @@ describe("evaluateHealth", () => {
 	});
 });
 
+// === Headless agents (tmuxSession === '', PID-based lifecycle) ===
+
+describe("headless agents (tmuxSession empty, PID-based lifecycle)", () => {
+	// Headless agents always have tmuxAlive=false passed by the caller (no tmux).
+	// PID is the primary liveness signal.
+
+	test("headless agent with alive PID → working (NOT zombie)", () => {
+		const session = makeSession({ tmuxSession: "", pid: ALIVE_PID, state: "working" });
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("working");
+		expect(check.action).toBe("none");
+		expect(check.processAlive).toBe(true);
+		expect(check.pidAlive).toBe(true);
+		// tmuxAlive is always false for headless
+		expect(check.tmuxAlive).toBe(false);
+	});
+
+	test("headless agent with dead PID → zombie, terminate", () => {
+		const session = makeSession({ tmuxSession: "", pid: DEAD_PID, state: "working" });
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("zombie");
+		expect(check.action).toBe("terminate");
+		expect(check.processAlive).toBe(false);
+		expect(check.pidAlive).toBe(false);
+		expect(check.reconciliationNote).toContain("ZFC");
+		expect(check.reconciliationNote).toContain("headless");
+		expect(check.reconciliationNote).toContain("dead");
+	});
+
+	test("headless agent with alive PID + state=zombie → investigate (don't auto-kill)", () => {
+		const session = makeSession({ tmuxSession: "", pid: ALIVE_PID, state: "zombie" });
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("zombie");
+		expect(check.action).toBe("investigate");
+		expect(check.processAlive).toBe(true);
+		expect(check.reconciliationNote).toContain("ZFC");
+		expect(check.reconciliationNote).toContain("don't auto-kill");
+	});
+
+	test("headless booting agent with alive PID → transitions to working", () => {
+		const session = makeSession({ tmuxSession: "", pid: ALIVE_PID, state: "booting" });
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("working");
+		expect(check.action).toBe("none");
+	});
+
+	test("headless agent with stale activity → stalled", () => {
+		const staleActivity = new Date(Date.now() - 60_000).toISOString();
+		const session = makeSession({
+			tmuxSession: "",
+			pid: ALIVE_PID,
+			state: "working",
+			lastActivity: staleActivity,
+		});
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("stalled");
+		expect(check.action).toBe("escalate");
+	});
+
+	test("headless agent with zombie-level staleness → zombie", () => {
+		const oldActivity = new Date(Date.now() - 200_000).toISOString();
+		const session = makeSession({
+			tmuxSession: "",
+			pid: ALIVE_PID,
+			state: "working",
+			lastActivity: oldActivity,
+		});
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("zombie");
+		expect(check.action).toBe("terminate");
+	});
+
+	test("headless persistent capability (coordinator) with stale activity → still working", () => {
+		const staleActivity = new Date(Date.now() - 60_000).toISOString();
+		const session = makeSession({
+			tmuxSession: "",
+			pid: ALIVE_PID,
+			capability: "coordinator",
+			state: "working",
+			lastActivity: staleActivity,
+		});
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("working");
+		expect(check.action).toBe("none");
+	});
+
+	test("headless completed agent → skips monitoring", () => {
+		const session = makeSession({ tmuxSession: "", pid: ALIVE_PID, state: "completed" });
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("completed");
+		expect(check.action).toBe("none");
+	});
+});
+
 // === transitionState ===
 
 describe("transitionState", () => {
