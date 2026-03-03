@@ -74,7 +74,9 @@ export class GeminiRuntime implements AgentRuntime {
 	 * Build the argv array for a headless one-shot Gemini invocation.
 	 *
 	 * Returns an argv array suitable for `Bun.spawn()`. The `-p` flag
-	 * triggers headless mode — the CLI processes the prompt and exits.
+	 * triggers headless mode — the CLI processes the prompt (including tool
+	 * invocations) and exits. `--yolo` auto-approves tool calls; without it,
+	 * unapproved tool calls fail rather than hang.
 	 *
 	 * Used by merge/resolver.ts and watchdog/triage.ts for AI-assisted operations.
 	 *
@@ -83,7 +85,7 @@ export class GeminiRuntime implements AgentRuntime {
 	 * @returns Argv array for Bun.spawn
 	 */
 	buildPrintCommand(prompt: string, model?: string): string[] {
-		const cmd = ["gemini", "-p", prompt];
+		const cmd = ["gemini", "-p", prompt, "--yolo"];
 		if (model !== undefined) {
 			cmd.push("-m", model);
 		}

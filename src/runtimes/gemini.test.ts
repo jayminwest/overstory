@@ -99,14 +99,21 @@ describe("GeminiRuntime", () => {
 	});
 
 	describe("buildPrintCommand", () => {
-		test("basic prompt produces gemini -p argv", () => {
+		test("basic prompt produces gemini -p argv with --yolo", () => {
 			const cmd = runtime.buildPrintCommand("Resolve this conflict");
-			expect(cmd).toEqual(["gemini", "-p", "Resolve this conflict"]);
+			expect(cmd).toEqual(["gemini", "-p", "Resolve this conflict", "--yolo"]);
 		});
 
 		test("with model override adds -m flag", () => {
 			const cmd = runtime.buildPrintCommand("Triage this failure", "gemini-2.5-flash");
-			expect(cmd).toEqual(["gemini", "-p", "Triage this failure", "-m", "gemini-2.5-flash"]);
+			expect(cmd).toEqual([
+				"gemini",
+				"-p",
+				"Triage this failure",
+				"--yolo",
+				"-m",
+				"gemini-2.5-flash",
+			]);
 		});
 
 		test("without model omits -m flag", () => {
@@ -122,7 +129,7 @@ describe("GeminiRuntime", () => {
 
 		test("empty prompt is passed through", () => {
 			const cmd = runtime.buildPrintCommand("");
-			expect(cmd).toEqual(["gemini", "-p", ""]);
+			expect(cmd).toEqual(["gemini", "-p", "", "--yolo"]);
 		});
 	});
 
