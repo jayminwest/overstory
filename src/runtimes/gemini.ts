@@ -134,10 +134,10 @@ export class GeminiRuntime implements AgentRuntime {
 	detectReady(paneContent: string): ReadyState {
 		const lower = paneContent.toLowerCase();
 
-		// Prompt indicator: placeholder text, "> " prefix, or ❯ character.
+		// Prompt indicator: placeholder text, "> " at line start, or ❯ character.
 		const hasPrompt =
 			lower.includes("type your message") ||
-			paneContent.includes("> ") ||
+			/^> /m.test(paneContent) ||
 			paneContent.includes("\u276f");
 
 		// Branding indicator: "gemini" visible in TUI header/status.
@@ -193,15 +193,15 @@ export class GeminiRuntime implements AgentRuntime {
 				}
 
 				// Token usage from result event's stats field.
-				if (event.type === "result") {
-					const stats = event.stats as Record<string, number | undefined> | undefined;
-					if (stats) {
-						if (typeof stats.input_tokens === "number") {
-							inputTokens += stats.input_tokens;
-						}
-						if (typeof stats.output_tokens === "number") {
-							outputTokens += stats.output_tokens;
-						}
+				if (event.type === "result" && typeof event.stats === "object" && event.stats !== null) {
+					const stats = event.stats as Record<string, unknown>;
+					const inp = stats.input_tokens;
+					const out = stats.output_tokens;
+					if (typeof inp === "number") {
+						inputTokens += inp;
+					}
+					if (typeof out === "number") {
+						outputTokens += out;
 					}
 				}
 

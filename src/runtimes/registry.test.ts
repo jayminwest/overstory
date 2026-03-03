@@ -3,6 +3,7 @@ import type { OverstoryConfig } from "../types.ts";
 import { ClaudeRuntime } from "./claude.ts";
 import { CodexRuntime } from "./codex.ts";
 import { CopilotRuntime } from "./copilot.ts";
+import { GeminiRuntime } from "./gemini.ts";
 import { PiRuntime } from "./pi.ts";
 import { getRuntime } from "./registry.ts";
 
@@ -21,7 +22,7 @@ describe("getRuntime", () => {
 
 	it("throws with a helpful message for an unknown runtime", () => {
 		expect(() => getRuntime("unknown-runtime")).toThrow(
-			'Unknown runtime: "unknown-runtime". Available: claude, codex, pi, copilot',
+			'Unknown runtime: "unknown-runtime". Available: claude, codex, pi, copilot, gemini',
 		);
 	});
 
@@ -102,5 +103,18 @@ describe("getRuntime", () => {
 		const a = getRuntime("copilot");
 		const b = getRuntime("copilot");
 		expect(a).not.toBe(b);
+	});
+
+	it("returns GeminiRuntime when name is 'gemini'", () => {
+		const runtime = getRuntime("gemini");
+		expect(runtime).toBeInstanceOf(GeminiRuntime);
+		expect(runtime.id).toBe("gemini");
+	});
+
+	it("uses config.runtime.default 'gemini' when name is omitted", () => {
+		const config = { runtime: { default: "gemini" } } as OverstoryConfig;
+		const runtime = getRuntime(undefined, config);
+		expect(runtime).toBeInstanceOf(GeminiRuntime);
+		expect(runtime.id).toBe("gemini");
 	});
 });

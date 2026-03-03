@@ -34,6 +34,7 @@ export interface DiscoveredAgent {
 const KNOWN_INSTRUCTION_PATHS = [
 	join(".claude", "CLAUDE.md"), // Claude Code, Pi
 	"AGENTS.md", // Codex (future)
+	"GEMINI.md", // Gemini CLI
 ];
 
 /**
