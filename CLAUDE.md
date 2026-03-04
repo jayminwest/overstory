@@ -273,7 +273,7 @@ ov init                          Initialize .overstory/ and bootstrap os-eco eco
 
 ov sling <task-id>              Spawn a worker agent
   --capability <type>                    builder | scout | reviewer | lead | merger
-  --name <name>                          Unique agent name (required)
+  --name <name>                          Unique agent name (auto-generated if omitted)
   --spec <path>                          Path to task spec file
   --files <f1,f2,...>                    Exclusive file scope (comma-separated)
   --parent <agent-name>                  Parent (for hierarchy tracking)

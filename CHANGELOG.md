@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-03-04
+
+### Added
+
+#### Auto-Generated Agent Names
+- **`ov sling` no longer requires `--name`** — when omitted, generates a unique name from `{capability}-{taskId}`, with `-2`, `-3` suffixes to avoid collisions against active sessions
+- `generateAgentName()` helper exported from `src/commands/sling.ts` with collision-avoidance logic
+
+#### Direct Scout/Builder Spawn
+- **Coordinator can now spawn scouts and builders directly** — previously only `lead` was allowed without `--parent`; scouts and builders are now also permitted for lightweight tasks that don't need a lead intermediary
+
+#### Runtime-Aware Instruction Path
+- **`{{INSTRUCTION_PATH}}` placeholder** in agent definitions — all agent `.md` files now use a runtime-resolved placeholder instead of hardcoded `.claude/CLAUDE.md`, enabling Codex (`AGENTS.md`), Sapling (`SAPLING.md`), and other runtimes to place overlays at their native instruction path
+- `instructionPath` field added to `OverlayConfig` type and `generateOverlay()` function
+
+### Fixed
+
+- **Codex runtime startup** — `buildSpawnCommand()` now uses interactive `codex` (not `codex exec`) so sessions stay alive in tmux; omits `--model` for Anthropic aliases that Codex CLI doesn't accept (thanks @vidhatanand)
+- **Zombie agent cleanup** — `ov stop` now cleans up zombie agents (marks them completed) instead of erroring with "already zombie"
+- **Headless stdout redirect** — `ov sling` always redirects headless agent stdout to file, preventing backpressure-induced zombie processes
+- **Config warning deduplication** — non-Anthropic model warnings in `validateConfig` now emit once per process instead of on every `loadConfig()` call
+- **Codex bare model refs** — `validateConfig` now accepts bare model references (e.g., `gpt-5.3-codex`) when the default runtime is `codex`, instead of requiring provider-prefixed format
+
+### Changed
+
+- Agent definition `.md` files updated to use `{{INSTRUCTION_PATH}}` placeholder (builder, lead, merger, reviewer, scout, supervisor, orchestrator)
+
+### Testing
+
+- 3130 tests across 96 files (7406 `expect()` calls)
+
 ## [0.8.2] - 2026-03-04
 
 ### Added
@@ -1379,7 +1410,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Biome configuration for formatting and linting
 - TypeScript strict mode with `noUncheckedIndexedAccess`
 
-[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/jayminwest/overstory/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/jayminwest/overstory/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/jayminwest/overstory/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/jayminwest/overstory/compare/v0.7.9...v0.8.0
