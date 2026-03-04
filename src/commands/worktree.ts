@@ -21,7 +21,7 @@ import {
 	preserveSeedsChanges,
 	removeWorktree,
 } from "../worktree/manager.ts";
-import { isSessionAlive, killSession } from "../worktree/tmux.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 
 /**
  * Handle `ov worktree list`.
@@ -132,10 +132,11 @@ async function handleClean(
 			// If --all, clean everything
 			// Kill tmux session if still alive
 			if (session?.tmuxSession) {
-				const alive = await isSessionAlive(session.tmuxSession);
+				const sm = await getSessionManager();
+				const alive = await sm.isSessionAlive(session.tmuxSession);
 				if (alive) {
 					try {
-						await killSession(session.tmuxSession);
+						await sm.killSession(session.tmuxSession);
 					} catch {
 						// Best effort
 					}

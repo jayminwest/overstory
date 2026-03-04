@@ -17,7 +17,7 @@ import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { EventStore } from "../types.ts";
-import { isSessionAlive, sendKeys } from "../worktree/tmux.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 
 const DEFAULT_MESSAGE = "Check your mail inbox for new messages.";
 const MAX_RETRIES = 3;
@@ -124,15 +124,16 @@ async function recordNudge(statePath: string, agentName: string): Promise<void> 
  * @returns true if the nudge was delivered, false if all retries failed
  */
 async function sendNudgeWithRetry(tmuxSession: string, message: string): Promise<boolean> {
+	const sm = await getSessionManager();
 	for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 		try {
-			await sendKeys(tmuxSession, message);
+			await sm.sendKeys(tmuxSession, message);
 			// Follow-up Enter after a short delay to ensure submission.
 			// Claude Code's TUI may consume the first Enter during re-render/focus
 			// events, leaving text visible but unsubmitted (overstory-t62v).
 			// Same workaround as sling.ts and coordinator.ts.
 			await Bun.sleep(500);
-			await sendKeys(tmuxSession, "");
+			await sm.sendKeys(tmuxSession, "");
 			return true;
 		} catch {
 			if (attempt < MAX_RETRIES) {
@@ -230,7 +231,8 @@ export async function nudgeAgent(
 			result = { delivered: false, reason: "Debounced: nudge sent too recently" };
 		} else {
 			// Verify tmux session is alive
-			const alive = await isSessionAlive(tmuxSessionName);
+			const sm = await getSessionManager();
+			const alive = await sm.isSessionAlive(tmuxSessionName);
 			if (!alive) {
 				result = {
 					delivered: false,

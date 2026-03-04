@@ -27,7 +27,8 @@ export const checkDependencies: DoctorCheckFn = async (
 	const tools: ToolSpec[] = [
 		{ name: "git", versionFlag: "--version", required: true },
 		{ name: "bun", versionFlag: "--version", required: true },
-		{ name: "tmux", versionFlag: "-V", required: true },
+		// tmux is only required on Unix — Windows uses Bun.spawn directly
+		...(process.platform !== "win32" ? [{ name: "tmux", versionFlag: "-V", required: true }] : []),
 		{
 			name: trackerName,
 			versionFlag: "--version",

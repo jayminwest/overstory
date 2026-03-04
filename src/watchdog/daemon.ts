@@ -28,7 +28,7 @@ import { getConnection, removeConnection } from "../runtimes/connections.ts";
 import type { RuntimeConnection } from "../runtimes/types.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, EventStore, HealthCheck } from "../types.ts";
-import { isSessionAlive, killSession } from "../worktree/tmux.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 import { evaluateHealth, transitionState } from "./health.ts";
 import { triageAgent } from "./triage.ts";
 
@@ -347,7 +347,11 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 		tier1Enabled = false,
 		onHealthCheck,
 	} = options;
-	const tmux = options._tmux ?? { isSessionAlive, killSession };
+	const sm = await getSessionManager();
+	const tmux = options._tmux ?? {
+		isSessionAlive: (name: string) => sm.isSessionAlive(name),
+		killSession: (name: string) => sm.killSession(name),
+	};
 	const triage = options._triage ?? triageAgent;
 	const nudge = options._nudge ?? nudgeAgent;
 	const recordFailureFn = options._recordFailure ?? recordFailure;

@@ -40,13 +40,7 @@ import { createTrackerClient, resolveBackend, trackerCliName } from "../tracker/
 import type { AgentSession, OverlayConfig } from "../types.ts";
 import { createWorktree } from "../worktree/manager.ts";
 import { spawnHeadlessAgent } from "../worktree/process.ts";
-import {
-	capturePaneContent,
-	createSession,
-	ensureTmuxAvailable,
-	sendKeys,
-	waitForTuiReady,
-} from "../worktree/tmux.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 
 /**
  * Calculate how many milliseconds to sleep before spawning a new agent,
@@ -949,7 +943,8 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 		} else {
 			// 11c. Preflight: verify tmux is available before attempting session creation
-			await ensureTmuxAvailable();
+			const sm = await getSessionManager();
+			await sm.ensureAvailable();
 
 			// 12. Create tmux session running claude in interactive mode
 			const tmuxSessionName = `overstory-${config.project.name}-${name}`;
@@ -963,7 +958,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					OVERSTORY_WORKTREE_PATH: worktreePath,
 				},
 			});
-			const pid = await createSession(tmuxSessionName, worktreePath, spawnCmd, {
+			const pid = await sm.createSession(tmuxSessionName, worktreePath, spawnCmd, {
 				...runtime.buildEnv(resolvedModel),
 				OVERSTORY_AGENT_NAME: name,
 				OVERSTORY_WORKTREE_PATH: worktreePath,
@@ -1012,7 +1007,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			// Wait for Claude Code TUI to render before sending input.
 			// Polling capture-pane is more reliable than a fixed sleep because
 			// TUI init time varies by machine load and model state.
-			await waitForTuiReady(tmuxSessionName, (content) => runtime.detectReady(content));
+			await sm.waitForTuiReady(tmuxSessionName, (content) => runtime.detectReady(content));
 			// Buffer for the input handler to attach after initial render
 			await Bun.sleep(1_000);
 
@@ -1024,14 +1019,14 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				depth,
 				instructionPath: runtime.instructionPath,
 			});
-			await sendKeys(tmuxSessionName, beacon);
+			await sm.sendKeys(tmuxSessionName, beacon);
 
 			// 13c. Follow-up Enters with increasing delays to ensure submission.
 			// Claude Code's TUI may consume early Enters during late initialization
 			// (overstory-yhv6). An Enter on an empty input line is harmless.
 			for (const delay of [1_000, 2_000, 3_000, 5_000]) {
 				await Bun.sleep(delay);
-				await sendKeys(tmuxSessionName, "");
+				await sm.sendKeys(tmuxSessionName, "");
 			}
 
 			// 13d. Verify beacon was received — if pane still shows the welcome
@@ -1050,7 +1045,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				const verifyAttempts = 5;
 				for (let v = 0; v < verifyAttempts; v++) {
 					await Bun.sleep(2_000);
-					const paneContent = await capturePaneContent(tmuxSessionName);
+					const paneContent = await sm.capturePaneContent(tmuxSessionName);
 					if (paneContent) {
 						const readyState = runtime.detectReady(paneContent);
 						if (readyState.phase !== "ready") {
@@ -1058,9 +1053,9 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 						}
 					}
 					// Still at welcome/idle screen — resend beacon
-					await sendKeys(tmuxSessionName, beacon);
+					await sm.sendKeys(tmuxSessionName, beacon);
 					await Bun.sleep(1_000);
-					await sendKeys(tmuxSessionName, ""); // Follow-up Enter
+					await sm.sendKeys(tmuxSessionName, ""); // Follow-up Enter
 				}
 			}
 

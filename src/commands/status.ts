@@ -20,7 +20,8 @@ import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { evaluateHealth } from "../watchdog/health.ts";
 import { listWorktrees } from "../worktree/manager.ts";
-import { isProcessAlive, listSessions } from "../worktree/tmux.ts";
+import { isProcessAlive } from "../worktree/process-utils.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 
 // ---------------------------------------------------------------------------
 // Subprocess result cache (TTL-based, module-level)
@@ -62,7 +63,8 @@ export async function getCachedTmuxSessions(
 		return tmuxCache.data;
 	}
 	try {
-		const data = await listSessions();
+		const sm = await getSessionManager();
+		const data = await sm.listSessions();
 		tmuxCache = { data, timestamp: now };
 		return data;
 	} catch {

@@ -25,13 +25,7 @@ import { getRuntime } from "../runtimes/registry.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { createTrackerClient, resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession } from "../types.ts";
-import {
-	createSession,
-	isSessionAlive,
-	killSession,
-	sendKeys,
-	waitForTuiReady,
-} from "../worktree/tmux.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 import { isRunningAsRoot } from "./sling.ts";
 
 /**
@@ -117,6 +111,7 @@ async function startSupervisor(opts: {
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 	try {
+		const sm = await getSessionManager();
 		const existing = store.getByName(opts.name);
 
 		if (
@@ -125,7 +120,7 @@ async function startSupervisor(opts: {
 			existing.state !== "completed" &&
 			existing.state !== "zombie"
 		) {
-			const alive = await isSessionAlive(existing.tmuxSession);
+			const alive = await sm.isSessionAlive(existing.tmuxSession);
 			if (alive) {
 				throw new AgentError(
 					`Supervisor '${opts.name}' is already running (tmux: ${existing.tmuxSession}, since: ${existing.startedAt})`,
@@ -187,13 +182,13 @@ async function startSupervisor(opts: {
 				OVERSTORY_AGENT_NAME: opts.name,
 			},
 		});
-		const pid = await createSession(tmuxSession, projectRoot, spawnCmd, {
+		const pid = await sm.createSession(tmuxSession, projectRoot, spawnCmd, {
 			...runtime.buildEnv(resolvedModel),
 			OVERSTORY_AGENT_NAME: opts.name,
 		});
 
 		// Wait for Claude Code TUI to render before sending input
-		await waitForTuiReady(tmuxSession, (content) => runtime.detectReady(content));
+		await sm.waitForTuiReady(tmuxSession, (content) => runtime.detectReady(content));
 		await Bun.sleep(1_000);
 
 		const beacon = buildSupervisorBeacon({
@@ -203,12 +198,12 @@ async function startSupervisor(opts: {
 			parent: opts.parent,
 			trackerCli: trackerCliName(resolvedBackend),
 		});
-		await sendKeys(tmuxSession, beacon);
+		await sm.sendKeys(tmuxSession, beacon);
 
 		// Follow-up Enters with increasing delays to ensure submission
 		for (const delay of [1_000, 2_000, 3_000, 5_000]) {
 			await Bun.sleep(delay);
-			await sendKeys(tmuxSession, "");
+			await sm.sendKeys(tmuxSession, "");
 		}
 
 		// Record session
@@ -297,9 +292,10 @@ async function stopSupervisor(opts: { name: string; json: boolean }): Promise<vo
 		}
 
 		// Kill tmux session with process tree cleanup
-		const alive = await isSessionAlive(session.tmuxSession);
+		const sm = await getSessionManager();
+		const alive = await sm.isSessionAlive(session.tmuxSession);
 		if (alive) {
-			await killSession(session.tmuxSession);
+			await sm.killSession(session.tmuxSession);
 		}
 
 		// Update session state
@@ -330,6 +326,7 @@ async function statusSupervisor(opts: { name?: string; json: boolean }): Promise
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 	try {
+		const sm = await getSessionManager();
 		if (opts.name) {
 			// Show specific supervisor
 			const session = store.getByName(opts.name);
@@ -348,7 +345,7 @@ async function statusSupervisor(opts: { name?: string; json: boolean }): Promise
 				return;
 			}
 
-			const alive = await isSessionAlive(session.tmuxSession);
+			const alive = await sm.isSessionAlive(session.tmuxSession);
 
 			// Reconcile state: we already filtered out completed/zombie above,
 			// so if tmux is dead this session needs to be marked as zombie.
@@ -402,7 +399,7 @@ async function statusSupervisor(opts: { name?: string; json: boolean }): Promise
 
 			const statuses = await Promise.all(
 				supervisors.map(async (session) => {
-					const alive = await isSessionAlive(session.tmuxSession);
+					const alive = await sm.isSessionAlive(session.tmuxSession);
 
 					// Reconcile state
 					if (!alive && session.state !== "completed" && session.state !== "zombie") {

@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, OverstoryConfig } from "../types.ts";
 import { listWorktrees } from "../worktree/manager.ts";
-import { isProcessAlive, listSessions } from "../worktree/tmux.ts";
+import { isProcessAlive } from "../worktree/process-utils.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 import type { DoctorCheck } from "./types.ts";
 
 /**
@@ -29,10 +30,14 @@ export async function checkConsistency(
 	deps?: ConsistencyCheckDeps,
 ): Promise<DoctorCheck[]> {
 	// Use injected dependencies or defaults
-	const { listSessions: listSessionsFn, isProcessAlive: isProcessAliveFn } = deps || {
-		listSessions,
+	const defaultDeps = deps || {
+		listSessions: async () => {
+			const sm = await getSessionManager();
+			return sm.listSessions();
+		},
 		isProcessAlive,
 	};
+	const { listSessions: listSessionsFn, isProcessAlive: isProcessAliveFn } = defaultDeps;
 	const checks: DoctorCheck[] = [];
 
 	// Gather data from all three sources

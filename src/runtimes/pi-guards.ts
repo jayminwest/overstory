@@ -174,7 +174,7 @@ export function generatePiGuardExtension(hooks: HooksDef): string {
 				`\t\t\tif (FILE_MODIFYING_PATTERNS.some((re) => re.test(cmd))) {`,
 				`\t\t\t\tconst tokens = cmd.split(/\\s+/);`,
 				`\t\t\t\tconst paths = tokens`,
-				`\t\t\t\t\t.filter((t) => t.startsWith("/"))`,
+				`\t\t\t\t\t.filter((t) => t.startsWith("/") || /^[A-Z]:\\\\/i.test(t))`,
 				`\t\t\t\t\t.map((t) => t.replace(/[";>]*$/, ""));`,
 				`\t\t\t\tfor (const p of paths) {`,
 				`\t\t\t\t\tif (!p.startsWith("/dev/") && !p.startsWith("/tmp/") && !p.startsWith(WORKTREE_PATH + "/") && p !== WORKTREE_PATH) {`,

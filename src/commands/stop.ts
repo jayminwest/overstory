@@ -16,7 +16,8 @@ import { jsonOutput } from "../json.ts";
 import { printSuccess, printWarning } from "../logging/color.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { removeWorktree } from "../worktree/manager.ts";
-import { isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
+import { isProcessAlive, killProcessTree } from "../worktree/process-utils.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 
 export interface StopOptions {
 	force?: boolean;
@@ -66,7 +67,11 @@ export async function stopCommand(
 	const force = opts.force ?? false;
 	const cleanWorktree = opts.cleanWorktree ?? false;
 
-	const tmux = deps._tmux ?? { isSessionAlive, killSession };
+	const sm = await getSessionManager();
+	const tmux = deps._tmux ?? {
+		isSessionAlive: (name: string) => sm.isSessionAlive(name),
+		killSession: (name: string) => sm.killSession(name),
+	};
 	const worktree = deps._worktree ?? { remove: removeWorktree };
 	const proc = deps._process ?? { isAlive: isProcessAlive, killTree: killProcessTree };
 

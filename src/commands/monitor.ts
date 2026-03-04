@@ -25,7 +25,7 @@ import { printHint, printSuccess } from "../logging/color.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
-import { createSession, isSessionAlive, killSession, sendKeys } from "../worktree/tmux.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 import { isRunningAsRoot } from "./sling.ts";
 
 /** Default monitor agent name. */
@@ -91,6 +91,7 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 	try {
+		const sm = await getSessionManager();
 		const existing = store.getByName(MONITOR_NAME);
 
 		if (
@@ -99,7 +100,7 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 			existing.state !== "completed" &&
 			existing.state !== "zombie"
 		) {
-			const alive = await isSessionAlive(existing.tmuxSession);
+			const alive = await sm.isSessionAlive(existing.tmuxSession);
 			if (alive) {
 				throw new AgentError(
 					`Monitor is already running (tmux: ${existing.tmuxSession}, since: ${existing.startedAt})`,
@@ -159,7 +160,7 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 				OVERSTORY_AGENT_NAME: MONITOR_NAME,
 			},
 		});
-		const pid = await createSession(tmuxSession, projectRoot, spawnCmd, {
+		const pid = await sm.createSession(tmuxSession, projectRoot, spawnCmd, {
 			...runtime.buildEnv(resolvedModel),
 			OVERSTORY_AGENT_NAME: MONITOR_NAME,
 		});
@@ -191,11 +192,11 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 		// Send beacon after TUI initialization delay
 		await Bun.sleep(3_000);
 		const beacon = buildMonitorBeacon();
-		await sendKeys(tmuxSession, beacon);
+		await sm.sendKeys(tmuxSession, beacon);
 
 		// Follow-up Enter to ensure submission (same pattern as sling.ts)
 		await Bun.sleep(500);
-		await sendKeys(tmuxSession, "");
+		await sm.sendKeys(tmuxSession, "");
 
 		const output = {
 			agentName: MONITOR_NAME,
@@ -254,9 +255,10 @@ async function stopMonitor(opts: { json: boolean }): Promise<void> {
 		}
 
 		// Kill tmux session with process tree cleanup
-		const alive = await isSessionAlive(session.tmuxSession);
+		const sm = await getSessionManager();
+		const alive = await sm.isSessionAlive(session.tmuxSession);
 		if (alive) {
-			await killSession(session.tmuxSession);
+			await sm.killSession(session.tmuxSession);
 		}
 
 		// Update session state
@@ -303,7 +305,8 @@ async function statusMonitor(opts: { json: boolean }): Promise<void> {
 			return;
 		}
 
-		const alive = await isSessionAlive(session.tmuxSession);
+		const sm = await getSessionManager();
+		const alive = await sm.isSessionAlive(session.tmuxSession);
 
 		// Reconcile state: if session says active but tmux is dead, update.
 		if (!alive) {

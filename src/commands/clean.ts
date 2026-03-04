@@ -31,7 +31,7 @@ import { createMulchClient } from "../mulch/client.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, MulchDoctorResult, MulchPruneResult, MulchStatus } from "../types.ts";
 import { listWorktrees, removeWorktree } from "../worktree/manager.ts";
-import { killSession, listSessions } from "../worktree/tmux.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 
 export interface CleanOptions {
 	all?: boolean;
@@ -150,7 +150,8 @@ async function killAllTmuxSessions(overstoryDir: string, projectName: string): P
 	let killed = 0;
 	const projectPrefix = `overstory-${projectName}-`;
 	try {
-		const tmuxSessions = await listSessions();
+		const sm = await getSessionManager();
+		const tmuxSessions = await sm.listSessions();
 		const overStorySessions = tmuxSessions.filter((s) => s.name.startsWith(projectPrefix));
 		if (overStorySessions.length === 0) {
 			return 0;
@@ -168,7 +169,7 @@ async function killAllTmuxSessions(overstoryDir: string, projectName: string): P
 
 		for (const session of toKill) {
 			try {
-				await killSession(session.name);
+				await sm.killSession(session.name);
 				killed++;
 			} catch {
 				// Best effort

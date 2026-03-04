@@ -74,7 +74,18 @@ function getTemplatePath(): string {
  * (which have OVERSTORY_AGENT_NAME set in their environment) and are
  * no-ops for the user's own Claude Code session.
  */
-const ENV_GUARD = '[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;';
+const ENV_GUARD =
+	process.platform === "win32"
+		? `bun run "${join(dirname(import.meta.dir), "..", "src", "guards", "env-guard.ts")}"&&`
+		: '[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;';
+
+/**
+ * Resolve the path to a guard TypeScript script for Windows.
+ * Guards live at `src/guards/` relative to the overstory package root.
+ */
+function guardScriptPath(scriptName: string): string {
+	return join(dirname(import.meta.dir), "..", "src", "guards", scriptName);
+}
 
 /**
  * PATH setup prefix for hook commands.
@@ -90,7 +101,10 @@ const ENV_GUARD = '[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;';
  *
  * Exported so tests can verify the exact prefix value.
  */
-export const PATH_PREFIX = 'export PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH";';
+export const PATH_PREFIX =
+	process.platform === "win32"
+		? 'set "PATH=%USERPROFILE%\\.bun\\bin;%PATH%"&&'
+		: 'export PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH";';
 
 /**
  * Build a PreToolUse guard script that validates file paths are within
@@ -104,6 +118,9 @@ export const PATH_PREFIX = 'export PATH="$HOME/.bun/bin:/usr/local/bin:/opt/home
  *   ("file_path" for Write/Edit, "notebook_path" for NotebookEdit)
  */
 export function buildPathBoundaryGuardScript(filePathField: string): string {
+	if (process.platform === "win32") {
+		return `bun run "${guardScriptPath("path-boundary-guard.ts")}" --field ${filePathField}`;
+	}
 	const script = [
 		// Only enforce for overstory agent sessions
 		ENV_GUARD,
@@ -171,12 +188,16 @@ export function escapeForSingleQuotedShell(str: string): string {
  */
 function blockGuard(toolName: string, reason: string): HookEntry {
 	const response = JSON.stringify({ decision: "block", reason });
+	const command =
+		process.platform === "win32"
+			? `${ENV_GUARD} echo ${response.replace(/"/g, '\\"')}`
+			: `${ENV_GUARD} echo '${escapeForSingleQuotedShell(response)}'`;
 	return {
 		matcher: toolName,
 		hooks: [
 			{
 				type: "command",
-				command: `${ENV_GUARD} echo '${escapeForSingleQuotedShell(response)}'`,
+				command,
 			},
 		],
 	};
@@ -190,6 +211,9 @@ function blockGuard(toolName: string, reason: string): HookEntry {
  * dangerous patterns (push to canonical branch, hard reset, wrong branch naming).
  */
 function buildBashGuardScript(agentName: string): string {
+	if (process.platform === "win32") {
+		return `bun run "${guardScriptPath("bash-guard.ts")}" --agent ${agentName}`;
+	}
 	// The script reads JSON from stdin, extracts the command field, then checks patterns.
 	// Uses parameter expansion to avoid requiring jq (zero runtime deps).
 	const script = [
@@ -257,6 +281,11 @@ export function buildBashFileGuardScript(
 	capability: string,
 	extraSafePrefixes: string[] = [],
 ): string {
+	if (process.platform === "win32") {
+		const safePrefixArg =
+			extraSafePrefixes.length > 0 ? ` --safe-prefixes "${extraSafePrefixes.join(",")}"` : "";
+		return `bun run "${guardScriptPath("bash-file-guard.ts")}" --capability ${capability}${safePrefixArg}`;
+	}
 	// Build the safe prefix check: if command starts with any safe prefix, allow it
 	const allSafePrefixes = [...SAFE_BASH_PREFIXES, ...extraSafePrefixes];
 	const safePrefixChecks = allSafePrefixes
@@ -330,6 +359,9 @@ const FILE_MODIFYING_BASH_PATTERNS = [
  * Uses OVERSTORY_WORKTREE_PATH env var set during tmux session creation.
  */
 export function buildBashPathBoundaryScript(): string {
+	if (process.platform === "win32") {
+		return `bun run "${guardScriptPath("bash-path-boundary-guard.ts")}"`;
+	}
 	const fileModifyPattern = FILE_MODIFYING_BASH_PATTERNS.join("|");
 
 	const script = [

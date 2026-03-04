@@ -17,7 +17,7 @@ import { createMetricsStore } from "../metrics/store.ts";
 import { createMulchClient } from "../mulch/client.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentIdentity, AgentManifest, SessionCheckpoint, SessionMetrics } from "../types.ts";
-import { getCurrentSessionName } from "../worktree/tmux.ts";
+import { getSessionManager } from "../worktree/session-factory.ts";
 import { OVERSTORY_GITIGNORE } from "./init.ts";
 
 export interface PrimeOptions {
@@ -247,7 +247,8 @@ async function outputOrchestratorContext(
 ): Promise<void> {
 	// Register orchestrator tmux session for reverse-nudge (agents → orchestrator)
 	try {
-		const tmuxSession = await getCurrentSessionName();
+		const sm = await getSessionManager();
+		const tmuxSession = await sm.getCurrentSessionName();
 		if (tmuxSession) {
 			const regPath = join(config.project.root, ".overstory", "orchestrator-tmux.json");
 			await Bun.write(

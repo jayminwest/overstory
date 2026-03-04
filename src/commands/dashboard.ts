@@ -42,7 +42,7 @@ import { createTrackerClient, resolveBackend } from "../tracker/factory.ts";
 import type { TrackerIssue } from "../tracker/types.ts";
 import type { EventStore, MailMessage, StoredEvent } from "../types.ts";
 import { evaluateHealth } from "../watchdog/health.ts";
-import { isProcessAlive } from "../worktree/tmux.ts";
+import { isProcessAlive } from "../worktree/process-utils.ts";
 import { getCachedTmuxSessions, getCachedWorktrees, type StatusData } from "./status.ts";
 
 const pkgPath = resolve(import.meta.dir, "../../package.json");
