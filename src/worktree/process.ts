@@ -3,7 +3,7 @@
  *
  * Used by `ov sling` when runtime.headless === true to bypass tmux entirely.
  * Provides spawnHeadlessAgent() for direct Bun.spawn() invocation of
- * headless agent processes (e.g., Sapling running in --mode rpc).
+ * headless agent processes (e.g., Sapling running with --json).
  *
  * Note: isProcessAlive() and killProcessTree() for headless process lifecycle
  * management already exist in src/worktree/tmux.ts — not duplicated here.
