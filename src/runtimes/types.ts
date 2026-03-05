@@ -241,4 +241,11 @@ export interface AgentRuntime {
 	 * The caller provides the raw stdout ReadableStream from Bun.spawn().
 	 */
 	parseEvents?(stream: ReadableStream<Uint8Array>): AsyncIterable<AgentEvent>;
+
+	/**
+	 * Prepare a worktree path before spawning an agent.
+	 * Called by sling.ts after worktree creation but before agent spawn.
+	 * Used by runtimes that need environment setup (e.g., Copilot folder trust).
+	 */
+	prepareWorktree?(worktreePath: string): Promise<void>;
 }

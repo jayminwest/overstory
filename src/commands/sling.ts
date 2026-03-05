@@ -746,6 +746,11 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		// Resolve runtime before overlayConfig so we can pass runtime.instructionPath
 		const runtime = getRuntime(opts.runtime, config, capability);
 
+		// 7b. Runtime-specific worktree preparation (e.g., Copilot folder trust)
+		if (runtime.prepareWorktree) {
+			await runtime.prepareWorktree(worktreePath);
+		}
+
 		const overlayConfig: OverlayConfig = {
 			agentName: name,
 			taskId: taskId,
