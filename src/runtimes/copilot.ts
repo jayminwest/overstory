@@ -4,6 +4,7 @@
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { deployCopilotHooks } from "../agents/copilot-hooks-deployer.ts";
 import type { ResolvedModel } from "../types.ts";
 import type {
 	AgentRuntime,
@@ -138,23 +139,21 @@ export class CopilotRuntime implements AgentRuntime {
 	}
 
 	/**
-	 * Deploy per-agent instructions to a worktree.
+	 * Deploy per-agent instructions and lifecycle hooks to a worktree.
 	 *
-	 * For Copilot this writes only the instruction file:
+	 * For Copilot this writes:
 	 * - `.github/copilot-instructions.md` — the agent's task-specific overlay.
 	 *   Skipped when overlay is undefined.
-	 *
-	 * The `hooks` parameter is unused — Copilot does not support Claude Code's
-	 * hook mechanism, so no settings file is deployed.
+	 * - `.github/hooks/hooks.json` — Copilot lifecycle hooks (onSessionStart).
 	 *
 	 * @param worktreePath - Absolute path to the agent's git worktree
 	 * @param overlay - Overlay content to write as copilot-instructions.md, or undefined to skip
-	 * @param _hooks - Unused for Copilot runtime
+	 * @param hooks - Hook config providing agentName for hook command substitution
 	 */
 	async deployConfig(
 		worktreePath: string,
 		overlay: OverlayContent | undefined,
-		_hooks: HooksDef,
+		hooks: HooksDef,
 	): Promise<void> {
 		if (overlay) {
 			const githubDir = join(worktreePath, ".github");
@@ -162,7 +161,8 @@ export class CopilotRuntime implements AgentRuntime {
 			await Bun.write(join(githubDir, "copilot-instructions.md"), overlay.content);
 		}
 
-		// No hook deployment for Copilot — the runtime has no hook mechanism.
+		// Deploy Copilot lifecycle hooks (Phase 1: onSessionStart only).
+		await deployCopilotHooks(worktreePath, hooks.agentName);
 	}
 
 	/**
