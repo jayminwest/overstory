@@ -3,7 +3,13 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { cleanupTempDir, createTempGitRepo, runGitInDir } from "../test-helpers.ts";
 import type { Spawner } from "./init.ts";
-import { initCommand, OVERSTORY_GITIGNORE, OVERSTORY_README, resolveToolSet } from "./init.ts";
+import {
+	detectDefaultRuntime,
+	initCommand,
+	OVERSTORY_GITIGNORE,
+	OVERSTORY_README,
+	resolveToolSet,
+} from "./init.ts";
 
 /**
  * Tests for `overstory init` -- agent definition deployment.
@@ -787,5 +793,134 @@ describe("initCommand: .gitattributes setup", () => {
 		const content = await Bun.file(join(tempDir, ".gitattributes")).text();
 		// Content should be unchanged
 		expect(content).toBe(existingContent);
+	});
+});
+
+// ---- detectDefaultRuntime Tests ----
+
+describe("detectDefaultRuntime", () => {
+	test("returns 'claude' when claude is installed (highest priority)", async () => {
+		const { spawner } = createMockSpawner({
+			"which claude": { exitCode: 0, stdout: "/usr/local/bin/claude", stderr: "" },
+			"which copilot": { exitCode: 0, stdout: "/usr/local/bin/copilot", stderr: "" },
+		});
+		const result = await detectDefaultRuntime(spawner);
+		expect(result).toBe("claude");
+	});
+
+	test("returns 'copilot' when only copilot is installed", async () => {
+		const { spawner } = createMockSpawner({
+			"which claude": { exitCode: 1, stdout: "", stderr: "" },
+			"which copilot": { exitCode: 0, stdout: "/usr/local/bin/copilot", stderr: "" },
+		});
+		const result = await detectDefaultRuntime(spawner);
+		expect(result).toBe("copilot");
+	});
+
+	test("returns 'gemini' when only gemini is installed", async () => {
+		const { spawner } = createMockSpawner({
+			"which claude": { exitCode: 1, stdout: "", stderr: "" },
+			"which copilot": { exitCode: 1, stdout: "", stderr: "" },
+			"which gemini": { exitCode: 0, stdout: "/usr/local/bin/gemini", stderr: "" },
+		});
+		const result = await detectDefaultRuntime(spawner);
+		expect(result).toBe("gemini");
+	});
+
+	test("returns 'opencode' when only opencode is installed", async () => {
+		const { spawner } = createMockSpawner({
+			"which claude": { exitCode: 1, stdout: "", stderr: "" },
+			"which copilot": { exitCode: 1, stdout: "", stderr: "" },
+			"which gemini": { exitCode: 1, stdout: "", stderr: "" },
+			"which opencode": { exitCode: 0, stdout: "/usr/local/bin/opencode", stderr: "" },
+		});
+		const result = await detectDefaultRuntime(spawner);
+		expect(result).toBe("opencode");
+	});
+
+	test("returns 'sapling' when only sp is installed", async () => {
+		const { spawner } = createMockSpawner({
+			"which claude": { exitCode: 1, stdout: "", stderr: "" },
+			"which copilot": { exitCode: 1, stdout: "", stderr: "" },
+			"which gemini": { exitCode: 1, stdout: "", stderr: "" },
+			"which opencode": { exitCode: 1, stdout: "", stderr: "" },
+			"which sp": { exitCode: 0, stdout: "/usr/local/bin/sp", stderr: "" },
+		});
+		const result = await detectDefaultRuntime(spawner);
+		expect(result).toBe("sapling");
+	});
+
+	test("returns 'pi' when only pi is installed", async () => {
+		const { spawner } = createMockSpawner({
+			"which claude": { exitCode: 1, stdout: "", stderr: "" },
+			"which copilot": { exitCode: 1, stdout: "", stderr: "" },
+			"which gemini": { exitCode: 1, stdout: "", stderr: "" },
+			"which opencode": { exitCode: 1, stdout: "", stderr: "" },
+			"which sp": { exitCode: 1, stdout: "", stderr: "" },
+			"which pi": { exitCode: 0, stdout: "/usr/local/bin/pi", stderr: "" },
+		});
+		const result = await detectDefaultRuntime(spawner);
+		expect(result).toBe("pi");
+	});
+
+	test("returns 'claude' as fallback when no runtimes are installed", async () => {
+		const spawner: Spawner = async () => ({ exitCode: 1, stdout: "", stderr: "not found" });
+		const result = await detectDefaultRuntime(spawner);
+		expect(result).toBe("claude");
+	});
+
+	test("uses which checks, not version flags", async () => {
+		const calls: string[][] = [];
+		const spawner: Spawner = async (args) => {
+			calls.push(args);
+			return { exitCode: 1, stdout: "", stderr: "not found" };
+		};
+		await detectDefaultRuntime(spawner);
+		// All calls should be 'which <cli>'
+		expect(calls.every((c) => c[0] === "which")).toBe(true);
+		expect(calls.length).toBeGreaterThan(0);
+	});
+});
+
+describe("initCommand: runtime detection integration", () => {
+	let tempDir: string;
+	let originalCwd: string;
+	let originalWrite: typeof process.stdout.write;
+
+	beforeEach(async () => {
+		tempDir = await createTempGitRepo();
+		originalCwd = process.cwd();
+		process.chdir(tempDir);
+		originalWrite = process.stdout.write;
+		process.stdout.write = (() => true) as typeof process.stdout.write;
+	});
+
+	afterEach(async () => {
+		process.chdir(originalCwd);
+		process.stdout.write = originalWrite;
+		await cleanupTempDir(tempDir);
+	});
+
+	test("config.yaml runtime.default is set to detected runtime", async () => {
+		const { spawner } = createMockSpawner({
+			"which claude": { exitCode: 1, stdout: "", stderr: "" },
+			"which copilot": { exitCode: 0, stdout: "/usr/bin/copilot", stderr: "" },
+		});
+
+		await initCommand({ _spawner: spawner });
+
+		const configPath = join(tempDir, ".overstory", "config.yaml");
+		const content = await Bun.file(configPath).text();
+		expect(content).toContain("default: copilot");
+	});
+
+	test("config.yaml runtime.default falls back to claude when nothing detected", async () => {
+		const { spawner } = createMockSpawner({});
+
+		await initCommand({ _spawner: spawner });
+
+		const configPath = join(tempDir, ".overstory", "config.yaml");
+		const content = await Bun.file(configPath).text();
+		expect(content).toContain("default: claude");
 	});
 });

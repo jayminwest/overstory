@@ -128,6 +128,39 @@ async function onboardTool(
 }
 
 /**
+ * Known runtime CLI candidates in detection priority order.
+ * First installed runtime wins.
+ */
+const RUNTIME_CANDIDATES: Array<{ name: string; cli: string }> = [
+	{ name: "claude", cli: "claude" },
+	{ name: "copilot", cli: "copilot" },
+	{ name: "gemini", cli: "gemini" },
+	{ name: "opencode", cli: "opencode" },
+	{ name: "sapling", cli: "sp" },
+	{ name: "pi", cli: "pi" },
+];
+
+/**
+ * Detect the default runtime by checking which coding agent CLIs are installed.
+ *
+ * Uses `which <cli>` via the spawner abstraction so detection is testable
+ * without real binaries on PATH. Returns the first installed runtime by
+ * priority order, or "claude" as the safe fallback.
+ *
+ * @param spawner - Spawner abstraction (defaults to Bun.spawn wrapper)
+ * @returns Runtime name suitable for config.runtime.default
+ */
+export async function detectDefaultRuntime(spawner: Spawner): Promise<string> {
+	for (const { name, cli } of RUNTIME_CANDIDATES) {
+		const result = await spawner(["which", cli]);
+		if (result.exitCode === 0) {
+			return name;
+		}
+	}
+	return "claude";
+}
+
+/**
  * Set up .gitattributes with merge=union entries for JSONL files.
  *
  * Only adds entries not already present. Returns true if file was modified.
@@ -709,6 +742,7 @@ export async function initCommand(opts: InitOptions): Promise<void> {
 	// 2. Detect project info
 	const projectName = opts.name ?? (await detectProjectName(projectRoot));
 	const canonicalBranch = await detectCanonicalBranch(projectRoot);
+	const defaultRuntime = await detectDefaultRuntime(spawner);
 
 	process.stdout.write(`Initializing overstory for "${projectName}"...\n\n`);
 
@@ -745,6 +779,9 @@ export async function initCommand(opts: InitOptions): Promise<void> {
 	config.project.name = projectName;
 	config.project.root = projectRoot;
 	config.project.canonicalBranch = canonicalBranch;
+	if (config.runtime) {
+		config.runtime.default = defaultRuntime;
+	}
 
 	const configYaml = serializeConfigToYaml(config);
 	const configPath = join(overstoryPath, "config.yaml");
