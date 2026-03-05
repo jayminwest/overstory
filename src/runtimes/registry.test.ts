@@ -22,7 +22,7 @@ describe("getRuntime", () => {
 
 	it("throws with a helpful message for an unknown runtime", () => {
 		expect(() => getRuntime("unknown-runtime")).toThrow(
-			'Unknown runtime: "unknown-runtime". Available: claude, codex, pi, copilot, gemini, sapling',
+			'Unknown runtime: "unknown-runtime". Available: claude, codex, pi, copilot, gemini, opencode, sapling',
 		);
 	});
 

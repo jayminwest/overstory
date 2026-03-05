@@ -210,14 +210,20 @@ describe("OpenCode runtime", () => {
 	});
 
 	describe("detectReady", () => {
-		test("returns ready when prompt and status bar are present", () => {
-			const paneContent = "❯ Some prompt\nStatus: 50% complete";
+		test("returns ready when prompt and token count are present", () => {
+			const paneContent = "❯ Some prompt\nTokens: 1500";
 			const state = runtime.detectReady(paneContent);
 			expect(state).toEqual({ phase: "ready" });
 		});
 
-		test("returns ready when opencode and status indicators are present", () => {
-			const paneContent = "opencode v1.2.15\nReady\n│─Tokens: 1000";
+		test("returns ready when opencode branding and model indicator are present", () => {
+			const paneContent = "opencode v1.2.15\nmodel: sonnet\n❯";
+			const state = runtime.detectReady(paneContent);
+			expect(state).toEqual({ phase: "ready" });
+		});
+
+		test("returns ready when opencode and ready indicator are present", () => {
+			const paneContent = "opencode v1.2.15\nReady";
 			const state = runtime.detectReady(paneContent);
 			expect(state).toEqual({ phase: "ready" });
 		});
@@ -229,7 +235,7 @@ describe("OpenCode runtime", () => {
 		});
 
 		test("returns loading when only status bar is present", () => {
-			const paneContent = "Status: 50%";
+			const paneContent = "Tokens: 1500";
 			const state = runtime.detectReady(paneContent);
 			expect(state).toEqual({ phase: "loading" });
 		});
@@ -240,16 +246,10 @@ describe("OpenCode runtime", () => {
 			expect(state).toEqual({ phase: "loading" });
 		});
 
-		test("recognizes token counts in status bar", () => {
-			const paneContent = "❯ Prompt\nTokens: 1500";
+		test("does not false-positive on generic box-drawing characters", () => {
+			const paneContent = "❯ prompt\n│ some list\n─── separator";
 			const state = runtime.detectReady(paneContent);
-			expect(state).toEqual({ phase: "ready" });
-		});
-
-		test("recognizes ready indicator", () => {
-			const paneContent = "❯ Prompt\nRunning";
-			const state = runtime.detectReady(paneContent);
-			expect(state).toEqual({ phase: "ready" });
+			expect(state).toEqual({ phase: "loading" });
 		});
 	});
 
@@ -284,8 +284,7 @@ describe("OpenCode runtime", () => {
 			expect(result?.outputTokens).toBe(300);
 		});
 
-		test.skip("parses JSONL format with message.usage object", async () => {
-			// TODO: Fix this test - the runtime parseTranscript needs debugging
+		test("parses JSONL format with message.usage object", async () => {
 			const transcriptPath = join(testDir, "transcript.jsonl");
 			const content = `{"message":{"usage":{"input_tokens":100,"output_tokens":200},"model":"model-1"}}`;
 			await Bun.write(transcriptPath, content);
@@ -365,6 +364,18 @@ describe("OpenCode runtime", () => {
 
 			const result = await runtime.parseTranscript(transcriptPath);
 			expect(result?.model).toBe("sonnet");
+		});
+	});
+
+	describe("getTranscriptDir", () => {
+		test("returns null", () => {
+			expect(runtime.getTranscriptDir("/some/project")).toBeNull();
+		});
+	});
+
+	describe("requiresBeaconVerification", () => {
+		test("returns false", () => {
+			expect(runtime.requiresBeaconVerification()).toBe(false);
 		});
 	});
 

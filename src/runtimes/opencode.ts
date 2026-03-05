@@ -85,18 +85,17 @@ export class OpenCodeRuntime implements AgentRuntime {
 	}
 
 	detectReady(paneContent: string): ReadyState {
-		// OpenCode TUI ready state detection
-		// Look for prompt indicator and status bar
+		const lower = paneContent.toLowerCase();
 
-		// Prompt indicator: "❯" character or "opencode" in pane content
-		const hasPrompt = paneContent.includes("❯") || paneContent.includes("opencode");
+		// Prompt indicator: "❯" character or "opencode" branding in pane.
+		const hasPrompt = paneContent.includes("\u276f") || lower.includes("opencode");
 
-		// Status bar: look for session indicators or token counts
-		// OpenCode shows various status indicators when ready
+		// Status bar: look for OpenCode-specific indicators — token counts or
+		// model name display that appear once the TUI is fully initialized.
 		const hasStatusBar =
-			/[0-9]+%|tokens|ready|running/i.test(paneContent) ||
-			paneContent.includes("│") ||
-			paneContent.includes("─");
+			/tokens?\s*[:=]\s*[0-9]/i.test(paneContent) ||
+			/model\s*[:=]\s*\S/i.test(paneContent) ||
+			lower.includes("ready");
 
 		if (hasPrompt && hasStatusBar) {
 			return { phase: "ready" };
@@ -223,6 +222,24 @@ export class OpenCodeRuntime implements AgentRuntime {
 					}
 				}
 
+				// Also check message.usage (Anthropic API response format)
+				if (typeof session.message === "object" && session.message !== null) {
+					const msg = session.message as Record<string, unknown>;
+					const msgUsage = msg.usage;
+					if (typeof msgUsage === "object" && msgUsage !== null) {
+						const mu = msgUsage as Record<string, unknown>;
+						if (typeof mu.input_tokens === "number") {
+							inputTokens = mu.input_tokens as number;
+						}
+						if (typeof mu.output_tokens === "number") {
+							outputTokens = mu.output_tokens as number;
+						}
+					}
+					if (typeof msg.model === "string") {
+						model = msg.model;
+					}
+				}
+
 				// Capture model
 				if (typeof session.model === "string") {
 					model = session.model;
@@ -242,6 +259,14 @@ export class OpenCodeRuntime implements AgentRuntime {
 		} catch {
 			return null;
 		}
+	}
+
+	getTranscriptDir(_projectRoot: string): string | null {
+		return null;
+	}
+
+	requiresBeaconVerification(): boolean {
+		return false;
 	}
 
 	buildEnv(model: ResolvedModel): Record<string, string> {

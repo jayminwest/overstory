@@ -651,7 +651,6 @@ describe("ClaudeRuntime integration: registry resolves 'claude' as default", () 
 
 	test("getRuntime rejects unknown runtimes", async () => {
 		const { getRuntime } = await import("./registry.ts");
-		expect(() => getRuntime("opencode")).toThrow('Unknown runtime: "opencode"');
 		expect(() => getRuntime("aider")).toThrow('Unknown runtime: "aider"');
 	});
 });

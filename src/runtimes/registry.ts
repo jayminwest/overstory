@@ -6,8 +6,8 @@ import { ClaudeRuntime } from "./claude.ts";
 import { CodexRuntime } from "./codex.ts";
 import { CopilotRuntime } from "./copilot.ts";
 import { GeminiRuntime } from "./gemini.ts";
-import { PiRuntime } from "./pi.ts";
 import { OpenCodeRuntime } from "./opencode.ts";
+import { PiRuntime } from "./pi.ts";
 import { SaplingRuntime } from "./sapling.ts";
 import type { AgentRuntime } from "./types.ts";
 
