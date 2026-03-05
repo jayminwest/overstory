@@ -14,6 +14,12 @@ import type {
 	TranscriptSummary,
 } from "./types.ts";
 
+const MODEL_MAP: Record<string, string> = {
+	sonnet: "claude-sonnet-4-6",
+	opus: "claude-opus-4-6",
+	haiku: "claude-haiku-4-5",
+};
+
 /**
 <<<<<<< HEAD
  * Map of overstory model aliases to fully-qualified Copilot model names.
@@ -54,9 +60,7 @@ export async function ensureCopilotTrustedFolders(
 		// File doesn't exist or contains invalid JSON — start fresh.
 	}
 
-	const trusted = Array.isArray(config.trustedFolders)
-		? (config.trustedFolders as string[])
-		: [];
+	const trusted = Array.isArray(config.trustedFolders) ? (config.trustedFolders as string[]) : [];
 	if (!trusted.includes(worktreePath)) {
 		trusted.push(worktreePath);
 		config.trustedFolders = trusted;
@@ -313,9 +317,7 @@ export class CopilotRuntime implements AgentRuntime {
 		try {
 			await ensureCopilotTrustedFolders(worktreePath);
 		} catch {
-			process.stderr.write(
-				`Warning: Could not pre-trust Copilot folder: ${worktreePath}\n`,
-			);
+			process.stderr.write(`Warning: Could not pre-trust Copilot folder: ${worktreePath}\n`);
 		}
 	}
 }
