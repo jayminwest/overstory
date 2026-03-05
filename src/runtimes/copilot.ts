@@ -2,6 +2,7 @@
 // Implements the AgentRuntime contract for the `copilot` CLI (GitHub Copilot).
 
 import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ResolvedModel } from "../types.ts";
 import type {
@@ -14,6 +15,7 @@ import type {
 } from "./types.ts";
 
 /**
+<<<<<<< HEAD
  * Map of overstory model aliases to fully-qualified Copilot model names.
  *
  * The copilot CLI rejects short aliases like "sonnet" and requires fully-qualified
@@ -25,6 +27,43 @@ const MODEL_MAP: Record<string, string> = {
 	opus: "claude-opus-4-6",
 	haiku: "claude-haiku-4-5",
 };
+=======
+ * Add a worktree path to the Copilot trusted folders list.
+ *
+ * Reads `~/.config/github-copilot/config.json`, appends the worktreePath to
+ * the `trustedFolders` array if not already present, and writes back atomically.
+ * Creates the config directory if it does not exist.
+ *
+ * Exported for testability — callers can inject a custom configDir to avoid
+ * touching the real home directory in tests.
+ *
+ * @param worktreePath - Absolute path to the worktree to pre-trust
+ * @param configDir - Override the config directory (default: ~/.config/github-copilot)
+ */
+export async function ensureCopilotTrustedFolders(
+	worktreePath: string,
+	configDir: string = join(homedir(), ".config", "github-copilot"),
+): Promise<void> {
+	const configPath = join(configDir, "config.json");
+	await mkdir(configDir, { recursive: true });
+
+	let config: Record<string, unknown> = {};
+	try {
+		config = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
+	} catch {
+		// File doesn't exist or contains invalid JSON — start fresh.
+	}
+
+	const trusted = Array.isArray(config.trustedFolders)
+		? (config.trustedFolders as string[])
+		: [];
+	if (!trusted.includes(worktreePath)) {
+		trusted.push(worktreePath);
+		config.trustedFolders = trusted;
+		await Bun.write(configPath, `${JSON.stringify(config, null, "\t")}\n`);
+	}
+}
+>>>>>>> 175657c (feat: add prepareWorktree interface + Copilot folder trust)
 
 /**
  * GitHub Copilot runtime adapter.
@@ -257,5 +296,26 @@ export class CopilotRuntime implements AgentRuntime {
 	/** Copilot does not produce transcript files. */
 	getTranscriptDir(_projectRoot: string): string | null {
 		return null;
+	}
+
+	/**
+	 * Pre-trust the worktree path in the Copilot config.
+	 *
+	 * Copilot shows an interactive folder trust dialog when it encounters a new
+	 * worktree path. Pre-writing the path to ~/.config/github-copilot/config.json
+	 * before spawn prevents this dialog from blocking the agent session.
+	 *
+	 * Errors are non-fatal: a warning is emitted to stderr and spawn continues.
+	 *
+	 * @param worktreePath - Absolute path to the agent's worktree
+	 */
+	async prepareWorktree(worktreePath: string): Promise<void> {
+		try {
+			await ensureCopilotTrustedFolders(worktreePath);
+		} catch {
+			process.stderr.write(
+				`Warning: Could not pre-trust Copilot folder: ${worktreePath}\n`,
+			);
+		}
 	}
 }

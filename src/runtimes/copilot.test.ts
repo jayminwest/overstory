@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDir } from "../test-helpers.ts";
 import type { ResolvedModel } from "../types.ts";
-import { CopilotRuntime } from "./copilot.ts";
+import { CopilotRuntime, ensureCopilotTrustedFolders } from "./copilot.ts";
 import type { SpawnOpts } from "./types.ts";
 
 describe("CopilotRuntime", () => {
@@ -536,6 +536,124 @@ describe("CopilotRuntime", () => {
 			expect(result?.outputTokens).toBe(0);
 			expect(result?.model).toBe("");
 		});
+	});
+});
+
+describe("ensureCopilotTrustedFolders", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-copilot-trust-test-"));
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tempDir);
+	});
+
+	test("creates config.json with trustedFolders when file does not exist", async () => {
+		const configDir = join(tempDir, "github-copilot");
+		await ensureCopilotTrustedFolders("/some/worktree", configDir);
+
+		const configPath = join(configDir, "config.json");
+		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
+		expect(Array.isArray(content.trustedFolders)).toBe(true);
+		expect(content.trustedFolders).toContain("/some/worktree");
+	});
+
+	test("creates config directory if it does not exist", async () => {
+		const configDir = join(tempDir, "nested", "github-copilot");
+		await ensureCopilotTrustedFolders("/my/worktree", configDir);
+
+		const configPath = join(configDir, "config.json");
+		const exists = await Bun.file(configPath).exists();
+		expect(exists).toBe(true);
+	});
+
+	test("appends to existing trustedFolders without duplicates", async () => {
+		const configDir = join(tempDir, "github-copilot");
+		await ensureCopilotTrustedFolders("/first/path", configDir);
+		await ensureCopilotTrustedFolders("/second/path", configDir);
+
+		const configPath = join(configDir, "config.json");
+		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
+		expect(Array.isArray(content.trustedFolders)).toBe(true);
+		const trusted = content.trustedFolders as string[];
+		expect(trusted).toContain("/first/path");
+		expect(trusted).toContain("/second/path");
+		expect(trusted.length).toBe(2);
+	});
+
+	test("does not duplicate existing entries", async () => {
+		const configDir = join(tempDir, "github-copilot");
+		await ensureCopilotTrustedFolders("/some/worktree", configDir);
+		await ensureCopilotTrustedFolders("/some/worktree", configDir);
+
+		const configPath = join(configDir, "config.json");
+		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
+		const trusted = content.trustedFolders as string[];
+		expect(trusted.filter((p) => p === "/some/worktree").length).toBe(1);
+	});
+
+	test("preserves other config keys when updating trustedFolders", async () => {
+		const configDir = join(tempDir, "github-copilot");
+		const configPath = join(configDir, "config.json");
+		await Bun.write(
+			configPath,
+			`${JSON.stringify({ someOtherKey: "value", trustedFolders: [] }, null, "\t")}\n`,
+		);
+
+		await ensureCopilotTrustedFolders("/new/worktree", configDir);
+
+		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
+		expect(content.someOtherKey).toBe("value");
+		expect((content.trustedFolders as string[])).toContain("/new/worktree");
+	});
+
+	test("handles invalid JSON in existing config by starting fresh", async () => {
+		const configDir = join(tempDir, "github-copilot");
+		await Bun.write(join(configDir, "config.json"), "not valid json");
+		await ensureCopilotTrustedFolders("/new/worktree", configDir);
+
+		const configPath = join(configDir, "config.json");
+		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
+		expect((content.trustedFolders as string[])).toContain("/new/worktree");
+	});
+
+	test("treats non-array trustedFolders as empty and replaces it", async () => {
+		const configDir = join(tempDir, "github-copilot");
+		const configPath = join(configDir, "config.json");
+		await Bun.write(configPath, `${JSON.stringify({ trustedFolders: "not-an-array" }, null, "\t")}\n`);
+
+		await ensureCopilotTrustedFolders("/my/worktree", configDir);
+
+		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
+		expect(Array.isArray(content.trustedFolders)).toBe(true);
+		expect((content.trustedFolders as string[])).toContain("/my/worktree");
+	});
+});
+
+describe("CopilotRuntime.prepareWorktree", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-copilot-prepworktree-test-"));
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tempDir);
+	});
+
+	test("prepareWorktree is defined on CopilotRuntime", () => {
+		const runtime = new CopilotRuntime();
+		expect(typeof runtime.prepareWorktree).toBe("function");
+	});
+
+	test("calling prepareWorktree with a worktreePath does not throw", async () => {
+		// We can't inject configDir through the interface method, but we can verify
+		// it doesn't throw. The actual file write goes to real homedir, which is
+		// tested via ensureCopilotTrustedFolders directly.
+		const runtime = new CopilotRuntime();
+		await expect(runtime.prepareWorktree("/test/worktree")).resolves.toBeUndefined();
 	});
 });
 
