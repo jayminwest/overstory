@@ -332,13 +332,13 @@ describe("CopilotRuntime", () => {
 				worktreePath,
 			});
 
-			// No overlay written — .github directory should not be created.
+			// No overlay written — copilot-instructions.md should not exist.
 			const overlayPath = join(worktreePath, ".github", "copilot-instructions.md");
 			const overlayExists = await Bun.file(overlayPath).exists();
 			expect(overlayExists).toBe(false);
 		});
 
-		test("does not write settings.local.json (no hook deployment)", async () => {
+		test("does not write settings.local.json (Copilot uses its own hooks format)", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
 			await runtime.deployConfig(
@@ -351,6 +351,42 @@ describe("CopilotRuntime", () => {
 			const settingsPath = join(worktreePath, ".claude", "settings.local.json");
 			const settingsExists = await Bun.file(settingsPath).exists();
 			expect(settingsExists).toBe(false);
+		});
+
+		test("writes .github/hooks/hooks.json with Copilot schema when deployConfig is called", async () => {
+			const worktreePath = join(tempDir, "worktree-hooks");
+
+			await runtime.deployConfig(
+				worktreePath,
+				{ content: "# Instructions" },
+				{ agentName: "test-builder", capability: "builder", worktreePath },
+			);
+
+			const hooksPath = join(worktreePath, ".github", "hooks", "hooks.json");
+			const hooksExists = await Bun.file(hooksPath).exists();
+			expect(hooksExists).toBe(true);
+
+			const hooksContent = JSON.parse(await Bun.file(hooksPath).text()) as Record<string, unknown>;
+			// Copilot schema: top-level "hooks" key with onSessionStart array
+			expect(hooksContent).toHaveProperty("hooks");
+			const hooks = hooksContent.hooks as Record<string, unknown>;
+			expect(hooks).toHaveProperty("onSessionStart");
+			expect(Array.isArray(hooks.onSessionStart)).toBe(true);
+		});
+
+		test("hooks.json contains agentName substituted in commands", async () => {
+			const worktreePath = join(tempDir, "worktree-agentname");
+
+			await runtime.deployConfig(worktreePath, undefined, {
+				agentName: "my-test-agent",
+				capability: "builder",
+				worktreePath,
+			});
+
+			const hooksPath = join(worktreePath, ".github", "hooks", "hooks.json");
+			const raw = await Bun.file(hooksPath).text();
+			expect(raw).toContain("my-test-agent");
+			expect(raw).not.toContain("{{AGENT_NAME}}");
 		});
 	});
 
@@ -606,7 +642,7 @@ describe("ensureCopilotTrustedFolders", () => {
 
 		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
 		expect(content.someOtherKey).toBe("value");
-		expect((content.trustedFolders as string[])).toContain("/new/worktree");
+		expect(content.trustedFolders as string[]).toContain("/new/worktree");
 	});
 
 	test("handles invalid JSON in existing config by starting fresh", async () => {
@@ -616,19 +652,22 @@ describe("ensureCopilotTrustedFolders", () => {
 
 		const configPath = join(configDir, "config.json");
 		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
-		expect((content.trustedFolders as string[])).toContain("/new/worktree");
+		expect(content.trustedFolders as string[]).toContain("/new/worktree");
 	});
 
 	test("treats non-array trustedFolders as empty and replaces it", async () => {
 		const configDir = join(tempDir, "github-copilot");
 		const configPath = join(configDir, "config.json");
-		await Bun.write(configPath, `${JSON.stringify({ trustedFolders: "not-an-array" }, null, "\t")}\n`);
+		await Bun.write(
+			configPath,
+			`${JSON.stringify({ trustedFolders: "not-an-array" }, null, "\t")}\n`,
+		);
 
 		await ensureCopilotTrustedFolders("/my/worktree", configDir);
 
 		const content = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
 		expect(Array.isArray(content.trustedFolders)).toBe(true);
-		expect((content.trustedFolders as string[])).toContain("/my/worktree");
+		expect(content.trustedFolders as string[]).toContain("/my/worktree");
 	});
 });
 
