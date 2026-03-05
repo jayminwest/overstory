@@ -29,7 +29,7 @@ describe("CopilotRuntime", () => {
 				env: {},
 			};
 			const cmd = runtime.buildSpawnCommand(opts);
-			expect(cmd).toBe("copilot --model sonnet --allow-all-tools");
+			expect(cmd).toBe("copilot --model claude-sonnet-4-6 --allow-all-tools");
 		});
 
 		test("ask permission mode omits permission flag", () => {
@@ -40,7 +40,7 @@ describe("CopilotRuntime", () => {
 				env: {},
 			};
 			const cmd = runtime.buildSpawnCommand(opts);
-			expect(cmd).toBe("copilot --model opus");
+			expect(cmd).toBe("copilot --model claude-opus-4-6");
 			expect(cmd).not.toContain("--allow-all-tools");
 			expect(cmd).not.toContain("--permission-mode");
 		});
@@ -54,7 +54,7 @@ describe("CopilotRuntime", () => {
 				appendSystemPrompt: "You are a builder agent.",
 			};
 			const cmd = runtime.buildSpawnCommand(opts);
-			expect(cmd).toBe("copilot --model sonnet --allow-all-tools");
+			expect(cmd).toBe("copilot --model claude-sonnet-4-6 --allow-all-tools");
 			expect(cmd).not.toContain("append-system-prompt");
 			expect(cmd).not.toContain("You are a builder agent");
 		});
@@ -68,7 +68,7 @@ describe("CopilotRuntime", () => {
 				appendSystemPromptFile: "/project/.overstory/agent-defs/coordinator.md",
 			};
 			const cmd = runtime.buildSpawnCommand(opts);
-			expect(cmd).toBe("copilot --model opus --allow-all-tools");
+			expect(cmd).toBe("copilot --model claude-opus-4-6 --allow-all-tools");
 			expect(cmd).not.toContain("cat");
 			expect(cmd).not.toContain("coordinator.md");
 		});
@@ -86,16 +86,23 @@ describe("CopilotRuntime", () => {
 			expect(cmd).not.toContain("GITHUB_TOKEN");
 		});
 
-		test("all model names pass through unchanged", () => {
-			for (const model of ["sonnet", "opus", "haiku", "gpt-4o", "openrouter/gpt-5"]) {
+		test("known aliases expand to fully-qualified names, unknown models pass through", () => {
+			const cases: Array<[string, string]> = [
+				["sonnet", "claude-sonnet-4-6"],
+				["opus", "claude-opus-4-6"],
+				["haiku", "claude-haiku-4-5"],
+				["gpt-4o", "gpt-4o"],
+				["openrouter/gpt-5", "openrouter/gpt-5"],
+			];
+			for (const [alias, expected] of cases) {
 				const opts: SpawnOpts = {
-					model,
+					model: alias,
 					permissionMode: "bypass",
 					cwd: "/tmp",
 					env: {},
 				};
 				const cmd = runtime.buildSpawnCommand(opts);
-				expect(cmd).toContain(`--model ${model}`);
+				expect(cmd).toContain(`--model ${expected}`);
 			}
 		});
 
@@ -112,13 +119,37 @@ describe("CopilotRuntime", () => {
 		});
 	});
 
+	describe("expandModel", () => {
+		test("expands 'sonnet' to claude-sonnet-4-6", () => {
+			expect(runtime.expandModel("sonnet")).toBe("claude-sonnet-4-6");
+		});
+
+		test("expands 'opus' to claude-opus-4-6", () => {
+			expect(runtime.expandModel("opus")).toBe("claude-opus-4-6");
+		});
+
+		test("expands 'haiku' to claude-haiku-4-5", () => {
+			expect(runtime.expandModel("haiku")).toBe("claude-haiku-4-5");
+		});
+
+		test("passes through fully-qualified names unchanged", () => {
+			expect(runtime.expandModel("claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
+			expect(runtime.expandModel("gpt-4o")).toBe("gpt-4o");
+			expect(runtime.expandModel("openrouter/gpt-5")).toBe("openrouter/gpt-5");
+		});
+
+		test("passes through unknown aliases unchanged", () => {
+			expect(runtime.expandModel("my-custom-model")).toBe("my-custom-model");
+		});
+	});
+
 	describe("buildPrintCommand", () => {
 		test("basic command without model includes --allow-all-tools", () => {
 			const argv = runtime.buildPrintCommand("Summarize this diff");
 			expect(argv).toEqual(["copilot", "-p", "Summarize this diff", "--allow-all-tools"]);
 		});
 
-		test("command with model override appends --model flag", () => {
+		test("command with model override appends --model flag (alias expanded)", () => {
 			const argv = runtime.buildPrintCommand("Classify this error", "haiku");
 			expect(argv).toEqual([
 				"copilot",
@@ -126,7 +157,19 @@ describe("CopilotRuntime", () => {
 				"Classify this error",
 				"--allow-all-tools",
 				"--model",
-				"haiku",
+				"claude-haiku-4-5",
+			]);
+		});
+
+		test("command with fully-qualified model passes through unchanged", () => {
+			const argv = runtime.buildPrintCommand("Summarize", "gpt-4o");
+			expect(argv).toEqual([
+				"copilot",
+				"-p",
+				"Summarize",
+				"--allow-all-tools",
+				"--model",
+				"gpt-4o",
 			]);
 		});
 
