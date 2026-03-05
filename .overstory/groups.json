@@ -815,5 +815,17 @@
 		"status": "completed",
 		"createdAt": "2026-03-05T14:49:40.932Z",
 		"completedAt": "2026-03-05T15:07:52.194Z"
+	},
+	{
+		"id": "group-830aeda2",
+		"name": "copilot-fixes",
+		"memberIssueIds": [
+			"overstory-6782",
+			"overstory-82e9",
+			"overstory-8cf9"
+		],
+		"status": "active",
+		"createdAt": "2026-03-05T15:27:34.057Z",
+		"completedAt": null
 	}
 ]
