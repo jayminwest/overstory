@@ -1012,7 +1012,17 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			// Wait for Claude Code TUI to render before sending input.
 			// Polling capture-pane is more reliable than a fixed sleep because
 			// TUI init time varies by machine load and model state.
-			await waitForTuiReady(tmuxSessionName, (content) => runtime.detectReady(content));
+			const tuiReady = await waitForTuiReady(tmuxSessionName, (content) =>
+				runtime.detectReady(content),
+			);
+			if (!tuiReady) {
+				throw new AgentError(
+					`Agent "${name}" TUI did not become ready (timeout or dead pane). ` +
+						`The runtime process may have exited — check that the model name is valid for this runtime. ` +
+						`Aborting to avoid sending keys to a dead pane.`,
+					{ agentName: name },
+				);
+			}
 			// Buffer for the input handler to attach after initial render
 			await Bun.sleep(1_000);
 

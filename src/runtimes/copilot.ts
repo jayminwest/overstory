@@ -14,6 +14,19 @@ import type {
 } from "./types.ts";
 
 /**
+ * Map of overstory model aliases to fully-qualified Copilot model names.
+ *
+ * The copilot CLI rejects short aliases like "sonnet" and requires fully-qualified
+ * names like "claude-sonnet-4-6". Unknown names (e.g. "gpt-4o", "openrouter/gpt-5")
+ * are passed through unchanged.
+ */
+const MODEL_MAP: Record<string, string> = {
+	sonnet: "claude-sonnet-4-6",
+	opus: "claude-opus-4-6",
+	haiku: "claude-haiku-4-5",
+};
+
+/**
  * GitHub Copilot runtime adapter.
  *
  * Implements AgentRuntime for the `copilot` CLI (GitHub Copilot coding agent).
@@ -32,10 +45,24 @@ export class CopilotRuntime implements AgentRuntime {
 	readonly instructionPath = ".github/copilot-instructions.md";
 
 	/**
+	 * Expand a model alias to a fully-qualified Copilot model name.
+	 *
+	 * Looks up the alias in MODEL_MAP. If not found, returns the model unchanged.
+	 * This allows known aliases (sonnet, opus, haiku) to be resolved while
+	 * passing through fully-qualified names (e.g. gpt-4o, openrouter/gpt-5).
+	 *
+	 * @param model - Short alias or fully-qualified model name
+	 * @returns Fully-qualified model name accepted by the copilot CLI
+	 */
+	expandModel(model: string): string {
+		return MODEL_MAP[model] ?? model;
+	}
+
+	/**
 	 * Build the shell command string to spawn an interactive Copilot agent.
 	 *
 	 * Maps SpawnOpts to `copilot` CLI flags:
-	 * - `model` → `--model <model>`
+	 * - `model` → `--model <model>` (aliases expanded via MODEL_MAP)
 	 * - `permissionMode === "bypass"` → `--allow-all-tools`
 	 * - `permissionMode === "ask"` → no permission flag added
 	 * - `appendSystemPrompt` and `appendSystemPromptFile` are IGNORED —
@@ -48,7 +75,7 @@ export class CopilotRuntime implements AgentRuntime {
 	 * @returns Shell command string suitable for tmux new-session -c
 	 */
 	buildSpawnCommand(opts: SpawnOpts): string {
-		let cmd = `copilot --model ${opts.model}`;
+		let cmd = `copilot --model ${this.expandModel(opts.model)}`;
 
 		if (opts.permissionMode === "bypass") {
 			cmd += " --allow-all-tools";
@@ -76,7 +103,7 @@ export class CopilotRuntime implements AgentRuntime {
 	buildPrintCommand(prompt: string, model?: string): string[] {
 		const cmd = ["copilot", "-p", prompt, "--allow-all-tools"];
 		if (model !== undefined) {
-			cmd.push("--model", model);
+			cmd.push("--model", this.expandModel(model));
 		}
 		return cmd;
 	}
