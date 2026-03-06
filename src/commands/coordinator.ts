@@ -25,7 +25,7 @@ import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import { openSessionStore } from "../sessions/compat.ts";
-import { createRunStore } from "../sessions/store.ts";
+import { createRunStore, createSessionStore } from "../sessions/store.ts";
 import { resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession } from "../types.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
@@ -1054,6 +1054,146 @@ async function outputCoordinator(
 	}
 }
 
+/** Per-trigger evaluation result for checkComplete. */
+export interface TriggerResult {
+	enabled: boolean;
+	met: boolean;
+	detail: string;
+}
+
+/** Result of `ov coordinator check-complete`. */
+export interface CheckCompleteResult {
+	complete: boolean;
+	triggers: {
+		allAgentsDone: TriggerResult;
+		taskTrackerEmpty: TriggerResult;
+		onShutdownSignal: TriggerResult;
+	};
+}
+
+/**
+ * Evaluate configured exit triggers and return per-trigger status.
+ *
+ * Logic:
+ * - complete = true only if ALL enabled triggers are met
+ * - No enabled triggers → complete: false (safety default)
+ */
+export async function checkComplete(
+	opts: { json: boolean },
+	deps?: CoordinatorDeps,
+): Promise<CheckCompleteResult> {
+	void deps; // reserved for future DI
+
+	const config = await loadConfig(process.cwd());
+	const triggers = config.coordinator?.exitTriggers ?? {
+		allAgentsDone: false,
+		taskTrackerEmpty: false,
+		onShutdownSignal: false,
+	};
+
+	const result: CheckCompleteResult = {
+		complete: false,
+		triggers: {
+			allAgentsDone: { enabled: triggers.allAgentsDone, met: false, detail: "" },
+			taskTrackerEmpty: { enabled: triggers.taskTrackerEmpty, met: false, detail: "" },
+			onShutdownSignal: { enabled: triggers.onShutdownSignal, met: false, detail: "" },
+		},
+	};
+
+	// allAgentsDone: read current-run.txt, query SessionStore
+	if (triggers.allAgentsDone) {
+		const runIdPath = join(config.project.root, ".overstory", "current-run.txt");
+		const runIdFile = Bun.file(runIdPath);
+		if (await runIdFile.exists()) {
+			const runId = (await runIdFile.text()).trim();
+			const sessionsDb = join(config.project.root, ".overstory", "sessions.db");
+			const store = createSessionStore(sessionsDb);
+			try {
+				const sessions = store.getByRun(runId);
+				const agentSessions = sessions.filter((s) => s.capability !== "coordinator");
+				const allDone =
+					agentSessions.length > 0 && agentSessions.every((s) => s.state === "completed");
+				result.triggers.allAgentsDone.met = allDone;
+				const states = agentSessions.map((s) => `${s.agentName}:${s.state}`);
+				result.triggers.allAgentsDone.detail = allDone
+					? `All ${agentSessions.length} agents completed`
+					: states.join(", ");
+			} finally {
+				store.close();
+			}
+		} else {
+			result.triggers.allAgentsDone.detail = "No current run found";
+		}
+	}
+
+	// taskTrackerEmpty: shell out to tracker CLI
+	if (triggers.taskTrackerEmpty) {
+		try {
+			const backend = await resolveBackend(config.taskTracker.backend, config.project.root);
+			const cliName = trackerCliName(backend);
+			const proc = Bun.spawn([cliName, "ready", "--json"], {
+				cwd: config.project.root,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const exitCode = await proc.exited;
+			const stdout = await new Response(proc.stdout).text();
+			if (exitCode === 0) {
+				try {
+					const issues = JSON.parse(stdout.trim()) as unknown;
+					const isEmpty = Array.isArray(issues) && issues.length === 0;
+					result.triggers.taskTrackerEmpty.met = isEmpty;
+					result.triggers.taskTrackerEmpty.detail = isEmpty
+						? "No unblocked issues"
+						: `${(issues as unknown[]).length} unblocked issue(s)`;
+				} catch {
+					const isEmpty = stdout.trim() === "" || stdout.trim() === "[]";
+					result.triggers.taskTrackerEmpty.met = isEmpty;
+					result.triggers.taskTrackerEmpty.detail = isEmpty
+						? "No unblocked issues"
+						: "Issues found";
+				}
+			} else {
+				result.triggers.taskTrackerEmpty.detail = `Tracker command failed (exit ${exitCode})`;
+			}
+		} catch (err) {
+			result.triggers.taskTrackerEmpty.detail = `Tracker error: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
+	// onShutdownSignal: check mail for shutdown messages to coordinator
+	if (triggers.onShutdownSignal) {
+		const mailDb = join(config.project.root, ".overstory", "mail.db");
+		const mailStore = createMailStore(mailDb);
+		try {
+			const unread = mailStore.getUnread("coordinator");
+			const shutdownMsg = unread.find((m) => m.subject.toLowerCase().includes("shutdown"));
+			result.triggers.onShutdownSignal.met = shutdownMsg !== undefined;
+			result.triggers.onShutdownSignal.detail = shutdownMsg
+				? `Shutdown signal from ${shutdownMsg.from}: ${shutdownMsg.subject}`
+				: "No shutdown signal received";
+		} finally {
+			mailStore.close();
+		}
+	}
+
+	// Overall: complete only if ALL enabled triggers are met
+	const enabledTriggers = Object.values(result.triggers).filter((t) => t.enabled);
+	result.complete = enabledTriggers.length > 0 && enabledTriggers.every((t) => t.met);
+
+	if (opts.json) {
+		jsonOutput("coordinator check-complete", result as unknown as Record<string, unknown>);
+	} else {
+		for (const [name, trigger] of Object.entries(result.triggers)) {
+			const status = !trigger.enabled ? "disabled" : trigger.met ? "MET" : "NOT MET";
+			process.stdout.write(`  ${name}: ${status} — ${trigger.detail}\n`);
+		}
+		process.stdout.write(`\nComplete: ${result.complete ? "YES" : "NO"}\n`);
+	}
+
+	return result;
+}
+
 /**
  * Create the Commander command for `ov coordinator`.
  */
@@ -1149,6 +1289,14 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 				);
 			},
 		);
+
+	cmd
+		.command("check-complete")
+		.description("Evaluate exit triggers and report completion status")
+		.option("--json", "Output as JSON")
+		.action(async (opts: { json?: boolean }) => {
+			await checkComplete({ json: opts.json ?? false }, deps);
+		});
 
 	return cmd;
 }
