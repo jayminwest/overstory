@@ -655,3 +655,63 @@ describe("ClaudeRuntime integration: registry resolves 'claude' as default", () 
 		expect(() => getRuntime("cursor")).toThrow('Unknown runtime: "cursor"');
 	});
 });
+
+describe("ClaudeRuntime detectRateLimit", () => {
+	const runtime = new ClaudeRuntime();
+
+	describe("detectRateLimit", () => {
+		test("detects usage cap with minute reset", () => {
+			const result = runtime.detectRateLimit("You've hit your limit. Usage resets in 45 minutes.");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.resumesAt).not.toBeNull();
+				expect(result.message).toContain("usage cap");
+			}
+		});
+
+		test("detects usage cap with time reset (PM)", () => {
+			const result = runtime.detectRateLimit("You've hit your limit. Resets 3:00 PM");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.resumesAt).not.toBeNull();
+				expect(result.message).toContain("usage cap");
+			}
+		});
+
+		test("detects usage cap without parseable time", () => {
+			const result = runtime.detectRateLimit("Usage cap reached. Please wait.");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.resumesAt).toBeNull();
+				expect(result.message).toContain("usage cap");
+			}
+		});
+
+		test("detects rate-limit-options dialog", () => {
+			const result = runtime.detectRateLimit(
+				'<div class="rate-limit-options">Choose an option</div>',
+			);
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.message).toContain("rate limited");
+			}
+		});
+
+		test("detects generic rate limit text", () => {
+			const result = runtime.detectRateLimit("Error: rate limit exceeded");
+			expect(result.limited).toBe(true);
+		});
+
+		test("returns not limited for normal output", () => {
+			const result = runtime.detectRateLimit(
+				"✓ File written successfully\n$ bun test\n5 pass, 0 fail",
+			);
+			expect(result.limited).toBe(false);
+		});
+
+		test("returns not limited for empty string", () => {
+			const result = runtime.detectRateLimit("");
+			expect(result.limited).toBe(false);
+		});
+	});
+});

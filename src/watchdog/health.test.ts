@@ -534,3 +534,60 @@ describe("transitionState", () => {
 		expect(transitionState("working", check)).toBe("working");
 	});
 });
+
+// === Rate limit bypass ===
+
+describe("evaluateHealth rate limit bypass", () => {
+	test("rate-limited agent gets action:none instead of escalation", () => {
+		const session = makeSession({
+			state: "stalled",
+			pid: ALIVE_PID,
+			lastActivity: new Date(Date.now() - 300_000).toISOString(), // 5 min stale
+			escalationLevel: 2,
+		});
+		const rateLimitState = { limited: true, resumesAt: null, message: "Rate limited" };
+
+		const check = evaluateHealth(session, true, THRESHOLDS, rateLimitState);
+		expect(check.action).toBe("none");
+		expect(check.reconciliationNote).toContain("Rate limited");
+	});
+
+	test("rate-limited agent state resets from stalled to working", () => {
+		const session = makeSession({
+			state: "stalled",
+			pid: ALIVE_PID,
+			lastActivity: new Date(Date.now() - 300_000).toISOString(),
+		});
+		const rateLimitState = { limited: true, resumesAt: null, message: "Usage cap" };
+
+		const check = evaluateHealth(session, true, THRESHOLDS, rateLimitState);
+		expect(check.state).toBe("working");
+	});
+
+	test("non-rate-limited stale agent still gets escalated", () => {
+		const session = makeSession({
+			state: "working",
+			pid: ALIVE_PID,
+			lastActivity: new Date(Date.now() - 60_000).toISOString(), // 60s > staleMs(30s)
+			escalationLevel: 0,
+		});
+
+		const check = evaluateHealth(session, true, THRESHOLDS);
+		expect(check.action).not.toBe("none");
+		expect(check.state).toBe("stalled");
+	});
+
+	test("rate limit with resumesAt preserves the message", () => {
+		const resumesAt = new Date(Date.now() + 600_000);
+		const session = makeSession({ pid: ALIVE_PID });
+		const rateLimitState = {
+			limited: true,
+			resumesAt,
+			message: "Claude usage cap reached",
+		};
+
+		const check = evaluateHealth(session, true, THRESHOLDS, rateLimitState);
+		expect(check.action).toBe("none");
+		expect(check.reconciliationNote).toContain("Claude usage cap");
+	});
+});
