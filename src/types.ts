@@ -753,7 +753,7 @@ export interface SessionHandoff {
 	fromSessionId: string;
 	toSessionId: string | null; // null until the new session starts
 	checkpoint: SessionCheckpoint;
-	reason: "compaction" | "crash" | "manual" | "timeout";
+	reason: "compaction" | "crash" | "manual" | "timeout" | "rate_limit_swap";
 	handoffAt: string; // ISO timestamp
 }
 

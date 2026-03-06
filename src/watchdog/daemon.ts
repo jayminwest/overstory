@@ -39,6 +39,7 @@ import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, EventStore, HealthCheck, OverstoryConfig } from "../types.ts";
 import { capturePaneContent, isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
 import { evaluateHealth, transitionState } from "./health.ts";
+import { swapRuntime } from "./swap.ts";
 import { triageAgent } from "./triage.ts";
 
 /** Maximum escalation level (terminate). */
@@ -592,6 +593,32 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 							mailStore.close();
 						} catch {
 							// Mail send failure is non-fatal
+						}
+					}
+
+					// Swap to alternate runtime if configured
+					if (rateLimitConfig.behavior === "swap" && rateLimitConfig.swapRuntime) {
+						const swapPaneContent = await capturePane(session.tmuxSession, 200);
+						const result = await swapRuntime({
+							root,
+							session,
+							targetRuntimeName: rateLimitConfig.swapRuntime,
+							config: options.config!,
+							paneContext: swapPaneContent,
+						});
+						if (result.success) {
+							recordEvent(eventStore, {
+								runId,
+								agentName: session.agentName,
+								eventType: "custom",
+								level: "info",
+								data: {
+									type: "rate_limit_swap",
+									from: session.runtime,
+									to: result.newRuntime,
+								},
+							});
+							continue;
 						}
 					}
 				} else if (!rateLimitState?.limited && session.rateLimitedSince !== null) {
