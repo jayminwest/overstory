@@ -195,7 +195,7 @@ export class CursorRuntime implements AgentRuntime {
 		return model.env ?? {};
 	}
 
-	/** Cursor transcript location not yet verified. */
+	/** Cursor does not expose transcript file locations. */
 	getTranscriptDir(_projectRoot: string): string | null {
 		return null;
 	}

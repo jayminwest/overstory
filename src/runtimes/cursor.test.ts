@@ -485,3 +485,13 @@ describe("CursorRuntime", () => {
 		});
 	});
 });
+
+describe("CursorRuntime integration: registry resolves 'cursor'", () => {
+	test("getRuntime('cursor') returns CursorRuntime", async () => {
+		const { getRuntime } = await import("./registry.ts");
+		const rt = getRuntime("cursor");
+		expect(rt).toBeInstanceOf(CursorRuntime);
+		expect(rt.id).toBe("cursor");
+		expect(rt.instructionPath).toBe(".cursor/rules/overstory.md");
+	});
+});

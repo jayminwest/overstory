@@ -19,6 +19,7 @@ Requires [Bun](https://bun.sh) v1.0+, git, and tmux. At least one supported agen
 - [GitHub Copilot](https://github.com/features/copilot) (`copilot` CLI)
 - [Codex](https://github.com/openai/codex) (`codex` CLI)
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini` CLI)
+- [Cursor CLI](https://cursor.com/docs/cli/overview) (`agent` CLI)
 - [Sapling](https://github.com/jayminwest/sapling) (`sp` CLI)
 - [OpenCode](https://opencode.ai) (`opencode` CLI)
 
@@ -181,6 +182,7 @@ Overstory is runtime-agnostic. The `AgentRuntime` interface (`src/runtimes/types
 | Claude Code | `claude` | `settings.local.json` hooks | Stable |
 | Pi | `pi` | `.pi/extensions/` guard extension | Active development |
 | Copilot | `copilot` | (none — `--allow-all-tools`) | Active development |
+| Cursor | `agent` | (none — `--yolo`) | Active development |
 | Codex | `codex` | OS-level sandbox (Seatbelt/Landlock) | Active development |
 | Gemini | `gemini` | `--sandbox` flag | Active development |
 | Sapling | `sp` | `.sapling/guards.json` | Active development |
