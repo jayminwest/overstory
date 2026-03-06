@@ -21,6 +21,8 @@ export interface SpawnOpts {
 	cwd: string;
 	/** Additional environment variables to pass to the spawned process. */
 	env: Record<string, string>;
+	/** Resume an existing session by ID instead of starting fresh (Claude Code --resume). */
+	resumeSessionId?: string;
 }
 
 // === Readiness ===
@@ -263,9 +265,5 @@ export interface AgentRuntime {
 	 *
 	 * Runtimes that omit this method fall back to tmux pane capture.
 	 */
-	extractConversation?(
-		worktreePath: string,
-		sessionId: string,
-		maxTurns: number,
-	): Promise<string>;
+	extractConversation?(worktreePath: string, sessionId: string, maxTurns: number): Promise<string>;
 }

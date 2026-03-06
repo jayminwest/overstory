@@ -58,6 +58,10 @@ export class ClaudeRuntime implements AgentRuntime {
 		const permMode = opts.permissionMode === "bypass" ? "bypassPermissions" : "default";
 		let cmd = `claude --model ${opts.model} --permission-mode ${permMode}`;
 
+		if (opts.resumeSessionId) {
+			cmd += ` --resume ${opts.resumeSessionId}`;
+		}
+
 		if (opts.appendSystemPromptFile) {
 			// Read from file at shell expansion time — avoids tmux IPC message size
 			// limits (~8-16KB) that cause "command too long" errors when large agent

@@ -248,6 +248,34 @@ describe("getActive", () => {
 	});
 });
 
+// === getResumable ===
+
+describe("getResumable", () => {
+	test("returns empty array when no sessions exist", () => {
+		const result = store.getResumable();
+		expect(result).toEqual([]);
+	});
+
+	test("returns booting, working, and stalled sessions", () => {
+		store.upsert(makeSession({ agentName: "booting-1", id: "s-1", state: "booting" }));
+		store.upsert(makeSession({ agentName: "working-1", id: "s-2", state: "working" }));
+		store.upsert(makeSession({ agentName: "stalled-1", id: "s-3", state: "stalled" }));
+
+		const result = store.getResumable();
+		expect(result).toHaveLength(3);
+	});
+
+	test("excludes completed and zombie sessions", () => {
+		store.upsert(makeSession({ agentName: "working-1", id: "s-1", state: "working" }));
+		store.upsert(makeSession({ agentName: "completed-1", id: "s-2", state: "completed" }));
+		store.upsert(makeSession({ agentName: "zombie-1", id: "s-3", state: "zombie" }));
+
+		const result = store.getResumable();
+		expect(result).toHaveLength(1);
+		expect(result[0]?.agentName).toBe("working-1");
+	});
+});
+
 // === getAll ===
 
 describe("getAll", () => {

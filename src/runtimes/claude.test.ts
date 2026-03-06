@@ -124,6 +124,35 @@ describe("ClaudeRuntime", () => {
 			expect(cmd).not.toContain("--append-system-prompt");
 		});
 
+		test("with resumeSessionId adds --resume flag", () => {
+			const opts: SpawnOpts = {
+				model: "sonnet",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				env: {},
+				resumeSessionId: "abc-123-session",
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--resume abc-123-session");
+			expect(cmd).toBe(
+				"claude --model sonnet --permission-mode bypassPermissions --resume abc-123-session",
+			);
+		});
+
+		test("resumeSessionId combined with appendSystemPrompt", () => {
+			const opts: SpawnOpts = {
+				model: "opus",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				env: {},
+				resumeSessionId: "session-456",
+				appendSystemPrompt: "Continue work.",
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--resume session-456");
+			expect(cmd).toContain("--append-system-prompt 'Continue work.'");
+		});
+
 		test("cwd and env are not embedded in command string", () => {
 			const opts: SpawnOpts = {
 				model: "sonnet",

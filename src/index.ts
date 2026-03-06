@@ -33,6 +33,7 @@ import { createMonitorCommand } from "./commands/monitor.ts";
 import { nudgeCommand } from "./commands/nudge.ts";
 import { primeCommand } from "./commands/prime.ts";
 import { createReplayCommand } from "./commands/replay.ts";
+import { createResumeCommand } from "./commands/resume.ts";
 import { createRunCommand } from "./commands/run.ts";
 import { slingCommand } from "./commands/sling.ts";
 import { specWriteCommand } from "./commands/spec.ts";
@@ -96,6 +97,7 @@ const COMMANDS = [
 	"feed",
 	"errors",
 	"replay",
+	"resume",
 	"run",
 	"costs",
 	"metrics",
@@ -403,6 +405,8 @@ program.addCommand(createEcosystemCommand());
 program.addCommand(createErrorsCommand());
 
 program.addCommand(createReplayCommand());
+
+program.addCommand(createResumeCommand());
 
 program.addCommand(createRunCommand());
 

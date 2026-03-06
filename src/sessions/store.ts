@@ -32,6 +32,8 @@ export interface SessionStore {
 	updateTranscriptPath(agentName: string, path: string): void;
 	/** Update the rate_limited_since timestamp for a session. */
 	updateRateLimitedSince(agentName: string, rateLimitedSince: string | null): void;
+	/** Get sessions that can be resumed (not completed or zombie, with worktree still present). */
+	getResumable(): AgentSession[];
 	/** Remove a session by agent name. */
 	remove(agentName: string): void;
 	/** Purge sessions matching criteria. Returns count of deleted rows. */
@@ -325,6 +327,11 @@ export function createSessionStore(dbPath: string): SessionStore {
 		UPDATE sessions SET transcript_path = $transcript_path WHERE agent_name = $agent_name
 	`);
 
+	const getResumableStmt = db.prepare<SessionRow, Record<string, never>>(`
+		SELECT * FROM sessions WHERE state NOT IN ('completed', 'zombie')
+		ORDER BY started_at ASC
+	`);
+
 	const updateRateLimitedSinceStmt = db.prepare<
 		void,
 		{ $agent_name: string; $rate_limited_since: string | null }
@@ -403,6 +410,11 @@ export function createSessionStore(dbPath: string): SessionStore {
 
 		updateTranscriptPath(agentName: string, path: string): void {
 			updateTranscriptPathStmt.run({ $agent_name: agentName, $transcript_path: path });
+		},
+
+		getResumable(): AgentSession[] {
+			const rows = getResumableStmt.all({});
+			return rows.map(rowToSession);
 		},
 
 		updateRateLimitedSince(agentName: string, rateLimitedSince: string | null): void {
