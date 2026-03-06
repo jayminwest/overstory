@@ -1,0 +1,13 @@
+{
+	"_comment": "Copilot CLI lifecycle hooks — schema reverse-engineered from copilot CLI behavior. Key differences from Claude Code: event names are camelCase (onSessionStart, onToolUse, onError), no matcher field, hook entries are { command } only (no type field).",
+	"hooks": {
+		"onSessionStart": [
+			{
+				"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov prime --agent {{AGENT_NAME}}"
+			},
+			{
+				"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; ov mail check --inject --agent {{AGENT_NAME}}"
+			}
+		]
+	}
+}

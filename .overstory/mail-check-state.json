@@ -1,11 +1,5 @@
 {
-	"inspect-headless-builder": 1772722899850,
-	"sapling-bugs-lead": 1772722839509,
-	"sapling-fix-builder": 1772722776118,
-	"opencode-rt-builder": 1772722722037,
-	"coordinator": 1772723880574,
-	"headless-obs-lead": 1772723172548,
-	"event-tailer-builder": 1772723127879,
-	"opencode-rt-lead": 1772722848681,
-	"lint-fix-builder": 1772723433253
+	"copilot-hooks-builder": 1772726084207,
+	"copilot-hooks-lead": 1772726275659,
+	"coordinator": 1772726319015
 }

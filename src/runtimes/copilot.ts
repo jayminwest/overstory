@@ -2,7 +2,9 @@
 // Implements the AgentRuntime contract for the `copilot` CLI (GitHub Copilot).
 
 import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { deployCopilotHooks } from "../agents/copilot-hooks-deployer.ts";
 import type { ResolvedModel } from "../types.ts";
 import type {
 	AgentRuntime,
@@ -12,6 +14,47 @@ import type {
 	SpawnOpts,
 	TranscriptSummary,
 } from "./types.ts";
+
+const MODEL_MAP: Record<string, string> = {
+	sonnet: "claude-sonnet-4-6",
+	opus: "claude-opus-4-6",
+	haiku: "claude-haiku-4-5",
+};
+
+/**
+ * Add a worktree path to the Copilot trusted folders list.
+ *
+ * Reads `~/.config/github-copilot/config.json`, appends the worktreePath to
+ * the `trustedFolders` array if not already present, and writes back atomically.
+ * Creates the config directory if it does not exist.
+ *
+ * Exported for testability — callers can inject a custom configDir to avoid
+ * touching the real home directory in tests.
+ *
+ * @param worktreePath - Absolute path to the worktree to pre-trust
+ * @param configDir - Override the config directory (default: ~/.config/github-copilot)
+ */
+export async function ensureCopilotTrustedFolders(
+	worktreePath: string,
+	configDir: string = join(homedir(), ".config", "github-copilot"),
+): Promise<void> {
+	const configPath = join(configDir, "config.json");
+	await mkdir(configDir, { recursive: true });
+
+	let config: Record<string, unknown> = {};
+	try {
+		config = JSON.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
+	} catch {
+		// File doesn't exist or contains invalid JSON — start fresh.
+	}
+
+	const trusted = Array.isArray(config.trustedFolders) ? (config.trustedFolders as string[]) : [];
+	if (!trusted.includes(worktreePath)) {
+		trusted.push(worktreePath);
+		config.trustedFolders = trusted;
+		await Bun.write(configPath, `${JSON.stringify(config, null, "\t")}\n`);
+	}
+}
 
 /**
  * GitHub Copilot runtime adapter.
@@ -32,10 +75,24 @@ export class CopilotRuntime implements AgentRuntime {
 	readonly instructionPath = ".github/copilot-instructions.md";
 
 	/**
+	 * Expand a model alias to a fully-qualified Copilot model name.
+	 *
+	 * Looks up the alias in MODEL_MAP. If not found, returns the model unchanged.
+	 * This allows known aliases (sonnet, opus, haiku) to be resolved while
+	 * passing through fully-qualified names (e.g. gpt-4o, openrouter/gpt-5).
+	 *
+	 * @param model - Short alias or fully-qualified model name
+	 * @returns Fully-qualified model name accepted by the copilot CLI
+	 */
+	expandModel(model: string): string {
+		return MODEL_MAP[model] ?? model;
+	}
+
+	/**
 	 * Build the shell command string to spawn an interactive Copilot agent.
 	 *
 	 * Maps SpawnOpts to `copilot` CLI flags:
-	 * - `model` → `--model <model>`
+	 * - `model` → `--model <model>` (aliases expanded via MODEL_MAP)
 	 * - `permissionMode === "bypass"` → `--allow-all-tools`
 	 * - `permissionMode === "ask"` → no permission flag added
 	 * - `appendSystemPrompt` and `appendSystemPromptFile` are IGNORED —
@@ -48,7 +105,7 @@ export class CopilotRuntime implements AgentRuntime {
 	 * @returns Shell command string suitable for tmux new-session -c
 	 */
 	buildSpawnCommand(opts: SpawnOpts): string {
-		let cmd = `copilot --model ${opts.model}`;
+		let cmd = `copilot --model ${this.expandModel(opts.model)}`;
 
 		if (opts.permissionMode === "bypass") {
 			cmd += " --allow-all-tools";
@@ -76,29 +133,27 @@ export class CopilotRuntime implements AgentRuntime {
 	buildPrintCommand(prompt: string, model?: string): string[] {
 		const cmd = ["copilot", "-p", prompt, "--allow-all-tools"];
 		if (model !== undefined) {
-			cmd.push("--model", model);
+			cmd.push("--model", this.expandModel(model));
 		}
 		return cmd;
 	}
 
 	/**
-	 * Deploy per-agent instructions to a worktree.
+	 * Deploy per-agent instructions and lifecycle hooks to a worktree.
 	 *
-	 * For Copilot this writes only the instruction file:
+	 * For Copilot this writes:
 	 * - `.github/copilot-instructions.md` — the agent's task-specific overlay.
 	 *   Skipped when overlay is undefined.
-	 *
-	 * The `hooks` parameter is unused — Copilot does not support Claude Code's
-	 * hook mechanism, so no settings file is deployed.
+	 * - `.github/hooks/hooks.json` — Copilot lifecycle hooks (onSessionStart).
 	 *
 	 * @param worktreePath - Absolute path to the agent's git worktree
 	 * @param overlay - Overlay content to write as copilot-instructions.md, or undefined to skip
-	 * @param _hooks - Unused for Copilot runtime
+	 * @param hooks - Hook config providing agentName for hook command substitution
 	 */
 	async deployConfig(
 		worktreePath: string,
 		overlay: OverlayContent | undefined,
-		_hooks: HooksDef,
+		hooks: HooksDef,
 	): Promise<void> {
 		if (overlay) {
 			const githubDir = join(worktreePath, ".github");
@@ -106,7 +161,8 @@ export class CopilotRuntime implements AgentRuntime {
 			await Bun.write(join(githubDir, "copilot-instructions.md"), overlay.content);
 		}
 
-		// No hook deployment for Copilot — the runtime has no hook mechanism.
+		// Deploy Copilot lifecycle hooks (Phase 1: onSessionStart only).
+		await deployCopilotHooks(worktreePath, hooks.agentName);
 	}
 
 	/**
@@ -227,5 +283,24 @@ export class CopilotRuntime implements AgentRuntime {
 	/** Copilot does not produce transcript files. */
 	getTranscriptDir(_projectRoot: string): string | null {
 		return null;
+	}
+
+	/**
+	 * Pre-trust the worktree path in the Copilot config.
+	 *
+	 * Copilot shows an interactive folder trust dialog when it encounters a new
+	 * worktree path. Pre-writing the path to ~/.config/github-copilot/config.json
+	 * before spawn prevents this dialog from blocking the agent session.
+	 *
+	 * Errors are non-fatal: a warning is emitted to stderr and spawn continues.
+	 *
+	 * @param worktreePath - Absolute path to the agent's worktree
+	 */
+	async prepareWorktree(worktreePath: string): Promise<void> {
+		try {
+			await ensureCopilotTrustedFolders(worktreePath);
+		} catch {
+			process.stderr.write(`Warning: Could not pre-trust Copilot folder: ${worktreePath}\n`);
+		}
 	}
 }
