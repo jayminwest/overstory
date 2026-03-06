@@ -24,8 +24,8 @@ export function createResumeCommand(): Command {
 		.argument("[agent-name]", "Resume a specific agent (default: all)")
 		.option("--list", "List resumable sessions without resuming")
 		.option("--json", "JSON output")
-		.action(async (agentName: string | undefined, opts: { list?: boolean; json?: boolean }) => {
-			await resumeCommand(agentName, opts);
+		.action(async (agentName: string | undefined, _opts: unknown, cmd: Command) => {
+			await resumeCommand(agentName, cmd.optsWithGlobals());
 		});
 }
 
@@ -72,23 +72,14 @@ async function resumeCommand(
 				return;
 			}
 
+			const pad = (str: string, len: number) => str.padEnd(len);
 			console.log("Resumable sessions:\n");
 			console.log(
-				"  %-24s %-14s %-10s %-14s %s",
-				"Agent",
-				"Task",
-				"Runtime",
-				"Interrupted",
-				"Branch",
+				`  ${pad("Agent", 24)} ${pad("Task", 14)} ${pad("Runtime", 10)} ${pad("Interrupted", 14)} Branch`,
 			);
 			for (const s of resumable) {
 				console.log(
-					"  %-24s %-14s %-10s %-14s %s",
-					s.agentName,
-					s.taskId,
-					s.runtime ?? "claude",
-					formatRelativeTime(s.lastActivity),
-					s.branchName,
+					`  ${pad(s.agentName, 24)} ${pad(s.taskId, 14)} ${pad(s.runtime ?? "claude", 10)} ${pad(formatRelativeTime(s.lastActivity), 14)} ${s.branchName}`,
 				);
 			}
 			return;

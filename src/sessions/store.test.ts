@@ -265,14 +265,16 @@ describe("getResumable", () => {
 		expect(result).toHaveLength(3);
 	});
 
-	test("excludes completed and zombie sessions", () => {
+	test("excludes completed but includes zombie (dead tmux is expected for resume)", () => {
 		store.upsert(makeSession({ agentName: "working-1", id: "s-1", state: "working" }));
 		store.upsert(makeSession({ agentName: "completed-1", id: "s-2", state: "completed" }));
 		store.upsert(makeSession({ agentName: "zombie-1", id: "s-3", state: "zombie" }));
 
 		const result = store.getResumable();
-		expect(result).toHaveLength(1);
-		expect(result[0]?.agentName).toBe("working-1");
+		expect(result).toHaveLength(2);
+		const names = result.map((s) => s.agentName);
+		expect(names).toContain("working-1");
+		expect(names).toContain("zombie-1");
 	});
 });
 
