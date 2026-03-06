@@ -264,7 +264,18 @@ export async function extractRecentTurns(
 				let content = "";
 				if (type === "user") {
 					const c = msg.content;
-					content = typeof c === "string" ? c : JSON.stringify(c);
+					if (typeof c === "string") {
+						content = c;
+					} else if (Array.isArray(c)) {
+						// Filter out tool_result blocks — they're responses to tool calls,
+						// not real user messages. Keep only text blocks.
+						for (const block of c as Array<Record<string, unknown>>) {
+							if (block.type === "text" && typeof block.text === "string") {
+								content += `${block.text}\n`;
+							}
+							// Skip tool_result — noise for handoff context
+						}
+					}
 				} else {
 					// Assistant: extract text blocks, skip thinking/signatures
 					const blocks = msg.content as Array<Record<string, unknown>> | undefined;
@@ -273,7 +284,18 @@ export async function extractRecentTurns(
 							if (block.type === "text" && typeof block.text === "string") {
 								content += `${block.text}\n`;
 							} else if (block.type === "tool_use") {
-								content += `[Tool: ${block.name}]\n`;
+								const name = block.name as string;
+								const input = block.input as Record<string, unknown> | undefined;
+								// Show tool name + brief input summary
+								if (input && name === "Bash") {
+									const cmd = input.command as string | undefined;
+									content += `[Bash: ${cmd?.slice(0, 100) ?? "..."}]\n`;
+								} else if (input && (name === "Read" || name === "Write" || name === "Edit")) {
+									const fp = input.file_path as string | undefined;
+									content += `[${name}: ${fp ?? "..."}]\n`;
+								} else {
+									content += `[Tool: ${name}]\n`;
+								}
 							}
 						}
 					}
