@@ -460,7 +460,7 @@ describe("startCoordinator", () => {
 		expect(session?.taskId).toBe("");
 		expect(session?.branchName).toBe("main");
 		expect(session?.worktreePath).toBe(tempDir);
-		expect(session?.id).toMatch(/^session-\d+-coordinator$/);
+		expect(session?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 
 		// Verify tmux createSession was called
 		expect(calls.createSession).toHaveLength(1);

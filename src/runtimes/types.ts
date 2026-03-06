@@ -21,6 +21,8 @@ export interface SpawnOpts {
 	cwd: string;
 	/** Additional environment variables to pass to the spawned process. */
 	env: Record<string, string>;
+	/** Force a specific session ID at spawn (Claude Code --session-id). */
+	sessionId?: string;
 	/** Resume an existing session by ID instead of starting fresh (Claude Code --resume). */
 	resumeSessionId?: string;
 }

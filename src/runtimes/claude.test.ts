@@ -153,6 +153,33 @@ describe("ClaudeRuntime", () => {
 			expect(cmd).toContain("--append-system-prompt 'Continue work.'");
 		});
 
+		test("sessionId adds --session-id flag for new sessions", () => {
+			const opts: SpawnOpts = {
+				model: "sonnet",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				env: {},
+				sessionId: "9c9a6ad0-83db-49c2-927a-79ada95448ec",
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--session-id 9c9a6ad0-83db-49c2-927a-79ada95448ec");
+			expect(cmd).not.toContain("--resume");
+		});
+
+		test("resumeSessionId takes precedence over sessionId", () => {
+			const opts: SpawnOpts = {
+				model: "sonnet",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				env: {},
+				sessionId: "new-uuid",
+				resumeSessionId: "old-uuid",
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--resume old-uuid");
+			expect(cmd).not.toContain("--session-id");
+		});
+
 		test("cwd and env are not embedded in command string", () => {
 			const opts: SpawnOpts = {
 				model: "sonnet",

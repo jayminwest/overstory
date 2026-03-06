@@ -177,9 +177,11 @@ async function startSupervisor(opts: {
 		if (await agentDefFile.exists()) {
 			appendSystemPromptFile = agentDefPath;
 		}
+		const sessionId = crypto.randomUUID();
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
+			sessionId,
 			cwd: projectRoot,
 			appendSystemPromptFile,
 			env: {
@@ -213,7 +215,7 @@ async function startSupervisor(opts: {
 
 		// Record session
 		const session: AgentSession = {
-			id: `session-${Date.now()}-${opts.name}`,
+			id: sessionId,
 			agentName: opts.name,
 			capability: "supervisor",
 			runtime: runtime.id,

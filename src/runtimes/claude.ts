@@ -60,6 +60,8 @@ export class ClaudeRuntime implements AgentRuntime {
 
 		if (opts.resumeSessionId) {
 			cmd += ` --resume ${opts.resumeSessionId}`;
+		} else if (opts.sessionId) {
+			cmd += ` --session-id ${opts.sessionId}`;
 		}
 
 		if (opts.appendSystemPromptFile) {

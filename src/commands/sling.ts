@@ -889,7 +889,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 				// 13. Record session with empty tmuxSession (no tmux pane for headless agents).
 				const session: AgentSession = {
-					id: `session-${Date.now()}-${name}`,
+					id: crypto.randomUUID(),
 					agentName: name,
 					capability,
 					worktreePath,
@@ -941,9 +941,11 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 				// 12. Create tmux session running claude in interactive mode
 				const tmuxSessionName = `overstory-${config.project.name}-${name}`;
+				const sessionId = crypto.randomUUID();
 				const spawnCmd = runtime.buildSpawnCommand({
 					model: resolvedModel.model,
 					permissionMode: "bypass",
+					sessionId,
 					cwd: worktreePath,
 					env: {
 						...runtime.buildEnv(resolvedModel),
@@ -962,7 +964,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				// Without this, a race exists: hooks fire before the session is persisted,
 				// leaving the agent stuck in "booting" (overstory-036f).
 				const session: AgentSession = {
-					id: `session-${Date.now()}-${name}`,
+					id: sessionId,
 					agentName: name,
 					capability,
 					worktreePath,

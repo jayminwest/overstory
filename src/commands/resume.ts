@@ -150,12 +150,13 @@ async function resumeAgent(
 		OVERSTORY_WORKTREE_PATH: session.worktreePath,
 	};
 
+	// session.id IS the Claude Code session UUID (set via --session-id at spawn)
 	const spawnCmd = runtime.buildSpawnCommand({
 		model: config.runtime?.default === runtime.id ? "default" : "default",
 		permissionMode: "bypass",
 		cwd: session.worktreePath,
 		env,
-		resumeSessionId: session.id,
+		resumeSessionId: runtime.id === "claude" ? session.id : undefined,
 	});
 
 	const pid = await createSession(session.tmuxSession, session.worktreePath, spawnCmd, env);
