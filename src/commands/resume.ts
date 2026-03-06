@@ -16,7 +16,7 @@ import { formatRelativeTime } from "../logging/format.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, OverstoryConfig } from "../types.ts";
-import { createSession, listSessions } from "../worktree/tmux.ts";
+import { createSession, listSessions, sendKeys, waitForTuiReady } from "../worktree/tmux.ts";
 
 export function createResumeCommand(): Command {
 	return new Command("resume")
@@ -103,21 +103,25 @@ async function resumeCommand(
 			return;
 		}
 
-		const results: Array<{ agentName: string; success: boolean; error?: string }> = [];
-
-		for (const session of resumable) {
+		// Resume all agents in parallel — each waits for TUI ready independently
+		const promises = resumable.map(async (session) => {
 			try {
 				await resumeAgent(session, config, root);
-				results.push({ agentName: session.agentName, success: true });
-				if (!json) {
-					printSuccess(`Resumed ${session.agentName}`, session.id);
-				}
+				return { agentName: session.agentName, success: true } as const;
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				results.push({ agentName: session.agentName, success: false, error: msg });
-				if (!json) {
-					printWarning(`Failed to resume ${session.agentName}: ${msg}`);
-				}
+				return { agentName: session.agentName, success: false, error: msg } as const;
+			}
+		});
+
+		const results = await Promise.all(promises);
+
+		for (const r of results) {
+			if (json) continue;
+			if (r.success) {
+				printSuccess(`Resumed ${r.agentName}`);
+			} else {
+				printWarning(`Failed to resume ${r.agentName}: ${r.error}`);
 			}
 		}
 
@@ -127,6 +131,18 @@ async function resumeCommand(
 	} finally {
 		store.close();
 	}
+}
+
+/**
+ * Build a resume nudge message for a restarted agent.
+ * Tells the agent it was interrupted and gives it a recovery protocol.
+ */
+function buildResumeNudge(session: AgentSession): string {
+	const parts = [
+		`[OVERSTORY RESUME] ${session.agentName} (${session.capability}) — session restored after interruption.`,
+		`Recovery: check git status, run ov mail check --agent ${session.agentName}, then continue task ${session.taskId}.`,
+	];
+	return parts.join(" ");
 }
 
 async function resumeAgent(
@@ -153,6 +169,7 @@ async function resumeAgent(
 
 	const pid = await createSession(session.tmuxSession, session.worktreePath, spawnCmd, env);
 
+	// Update session store immediately so hooks can find the entry
 	const { store } = openSessionStore(overstoryDir);
 	try {
 		store.upsert({
@@ -165,5 +182,18 @@ async function resumeAgent(
 		});
 	} finally {
 		store.close();
+	}
+
+	// Wait for TUI to be ready, then send resume nudge
+	const ready = await waitForTuiReady(session.tmuxSession, (content) =>
+		runtime.detectReady(content),
+	);
+	if (ready) {
+		await Bun.sleep(1_000);
+		const nudge = buildResumeNudge(session);
+		await sendKeys(session.tmuxSession, nudge);
+		// Follow-up Enter to ensure submission
+		await Bun.sleep(1_000);
+		await sendKeys(session.tmuxSession, "");
 	}
 }
