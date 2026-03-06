@@ -3,11 +3,13 @@
 // Phase 0: file exists and compiles. Callers are not rewired until Phase 2.
 
 import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { estimateCost } from "../metrics/pricing.ts";
 import { parseTranscriptUsage } from "../metrics/transcript.ts";
 import type { ResolvedModel } from "../types.ts";
+import { tailReadLines } from "../watchdog/swap.ts";
 import type {
 	AgentRuntime,
 	HooksDef,
@@ -236,6 +238,91 @@ export class ClaudeRuntime implements AgentRuntime {
 		if (home.length === 0) return null;
 		const projectKey = projectRoot.replace(/\//g, "-");
 		return join(home, ".claude", "projects", projectKey);
+	}
+
+	/**
+	 * Extract recent conversation from Claude Code JSONL transcript.
+	 * Uses tail-read (last 100KB) for performance on large transcripts.
+	 */
+	async extractConversation(
+		worktreePath: string,
+		sessionId: string,
+		maxTurns: number,
+	): Promise<string> {
+		const claudeProjectPath = worktreePath.replace(/[/.]/g, "-");
+		const jsonlPath = join(
+			homedir(),
+			".claude",
+			"projects",
+			claudeProjectPath,
+			`${sessionId}.jsonl`,
+		);
+
+		const lines = await tailReadLines(jsonlPath);
+		if (lines.length === 0) return "";
+
+		const turns: Array<{ type: string; content: string }> = [];
+		for (const line of lines) {
+			try {
+				const obj = JSON.parse(line) as Record<string, unknown>;
+				const type = obj.type as string | undefined;
+				if (type !== "user" && type !== "assistant") continue;
+
+				const msg = obj.message as Record<string, unknown> | undefined;
+				if (!msg) continue;
+
+				let content = "";
+				if (type === "user") {
+					const c = msg.content;
+					if (typeof c === "string") {
+						content = c;
+					} else if (Array.isArray(c)) {
+						for (const block of c as Array<Record<string, unknown>>) {
+							if (block.type === "text" && typeof block.text === "string") {
+								content += `${block.text}\n`;
+							}
+						}
+					}
+				} else {
+					const blocks = msg.content as Array<Record<string, unknown>> | undefined;
+					if (Array.isArray(blocks)) {
+						for (const block of blocks) {
+							if (block.type === "text" && typeof block.text === "string") {
+								content += `${block.text}\n`;
+							} else if (block.type === "tool_use") {
+								const name = block.name as string;
+								const input = block.input as Record<string, unknown> | undefined;
+								if (input && name === "Bash") {
+									const cmd = input.command as string | undefined;
+									content += `[Bash: ${cmd?.slice(0, 100) ?? "..."}]\n`;
+								} else if (input && (name === "Read" || name === "Write" || name === "Edit")) {
+									const fp = input.file_path as string | undefined;
+									content += `[${name}: ${fp ?? "..."}]\n`;
+								} else {
+									content += `[Tool: ${name}]\n`;
+								}
+							}
+						}
+					}
+				}
+
+				if (content.trim()) {
+					turns.push({ type, content: content.trim() });
+				}
+			} catch {
+				// Skip malformed lines
+			}
+		}
+
+		const recent = turns.slice(-maxTurns * 2);
+		if (recent.length === 0) return "";
+
+		let md = "";
+		for (const turn of recent) {
+			const label = turn.type === "user" ? "User" : "Assistant";
+			md += `### ${label}\n${turn.content}\n\n`;
+		}
+		return md.trim();
 	}
 
 	/**

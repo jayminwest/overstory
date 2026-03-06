@@ -12,9 +12,9 @@
  * 6. Updates the session store
  */
 
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { initiateHandoff } from "../agents/lifecycle.ts";
+import { nudgeAgent } from "../commands/nudge.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, OverstoryConfig } from "../types.ts";
@@ -79,12 +79,23 @@ export async function swapRuntime(options: SwapOptions): Promise<SwapResult> {
 	try {
 		// 1. Build handoff context
 		const gitContext = await getGitContext(session.worktreePath);
-		const conversationContext = await extractRecentTurns(
-			session.worktreePath,
-			session.id,
-			MAX_RECENT_TURNS,
-		);
 
+		// Try runtime-native conversation extraction, fall back to tmux pane
+		let conversationContext = "";
+		if (oldRuntime.extractConversation) {
+			conversationContext = await oldRuntime.extractConversation(
+				session.worktreePath,
+				session.id,
+				MAX_RECENT_TURNS,
+			);
+		}
+		if (!conversationContext && paneContext) {
+			conversationContext = `## Terminal Output (tmux fallback)\n\`\`\`\n${paneContext.slice(-10_000)}\n\`\`\``;
+		}
+
+		// If conversation context was built from pane, don't duplicate it
+		const usedPaneFallback =
+			!oldRuntime.extractConversation || !conversationContext.includes("###");
 		const handoffMd = buildHandoffDocument({
 			fromRuntime: session.runtime,
 			toRuntime: targetRuntimeName,
@@ -92,7 +103,7 @@ export async function swapRuntime(options: SwapOptions): Promise<SwapResult> {
 			branchName: session.branchName,
 			gitContext,
 			conversationContext,
-			paneContext,
+			paneContext: usedPaneFallback ? null : paneContext,
 		});
 
 		// 2. Write HANDOFF.md to worktree
@@ -173,6 +184,13 @@ export async function swapRuntime(options: SwapOptions): Promise<SwapResult> {
 		});
 		store.close();
 
+		// 8. Nudge new session to check mail
+		try {
+			await nudgeAgent(root, session.agentName, `ov mail check --agent ${session.agentName}`, true);
+		} catch {
+			// Nudge failure is non-fatal
+		}
+
 		return {
 			success: true,
 			newTmuxSession,
@@ -190,7 +208,25 @@ export async function swapRuntime(options: SwapOptions): Promise<SwapResult> {
 	}
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Shared Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Read only the last `maxBytes` of a file and split into lines.
+ * Drops the first line (likely truncated by byte boundary).
+ * Safe to call on nonexistent files — returns [].
+ */
+export async function tailReadLines(filePath: string, maxBytes = 100_000): Promise<string[]> {
+	const file = Bun.file(filePath);
+	if (!(await file.exists())) return [];
+	const size = file.size;
+	const blob = size > maxBytes ? file.slice(size - maxBytes) : file;
+	const text = await blob.text();
+	const lines = text.split("\n").filter((l) => l.trim().length > 0);
+	if (size > maxBytes) lines.shift();
+	return lines;
+}
+
+// ─── Private Helpers ─────────────────────────────────────────────────────────
 
 interface GitContext {
 	diffStat: string;
@@ -227,99 +263,17 @@ async function getGitContext(worktreePath: string): Promise<GitContext> {
 }
 
 /**
- * Extract last N user/assistant turns from Claude Code JSONL transcript.
- *
- * Derives path from worktreePath:
- *   /home/user/projects/foo/.overstory/worktrees/agent-1
- *   → ~/.claude/projects/-home-user-projects-foo--overstory-worktrees-agent-1/<sessionId>.jsonl
+ * Extract conversation from Claude JSONL transcripts.
+ * @deprecated Use ClaudeRuntime.extractConversation() directly. Kept for test compatibility.
  */
 export async function extractRecentTurns(
 	worktreePath: string,
 	sessionId: string,
 	maxTurns: number,
 ): Promise<string> {
-	// Convert worktree path to Claude projects path
-	// Claude Code replaces both / and . with - in project directory names
-	const claudeProjectPath = worktreePath.replace(/[/.]/g, "-");
-	const jsonlPath = join(homedir(), ".claude", "projects", claudeProjectPath, `${sessionId}.jsonl`);
-
-	const file = Bun.file(jsonlPath);
-	if (!(await file.exists())) return "";
-
-	try {
-		const text = await file.text();
-		const lines = text.split("\n").filter((l) => l.trim().length > 0);
-
-		// Collect user/assistant messages
-		const turns: Array<{ type: string; content: string }> = [];
-		for (const line of lines) {
-			try {
-				const obj = JSON.parse(line) as Record<string, unknown>;
-				const type = obj.type as string | undefined;
-				if (type !== "user" && type !== "assistant") continue;
-
-				const msg = obj.message as Record<string, unknown> | undefined;
-				if (!msg) continue;
-
-				let content = "";
-				if (type === "user") {
-					const c = msg.content;
-					if (typeof c === "string") {
-						content = c;
-					} else if (Array.isArray(c)) {
-						// Filter out tool_result blocks — they're responses to tool calls,
-						// not real user messages. Keep only text blocks.
-						for (const block of c as Array<Record<string, unknown>>) {
-							if (block.type === "text" && typeof block.text === "string") {
-								content += `${block.text}\n`;
-							}
-							// Skip tool_result — noise for handoff context
-						}
-					}
-				} else {
-					// Assistant: extract text blocks, skip thinking/signatures
-					const blocks = msg.content as Array<Record<string, unknown>> | undefined;
-					if (Array.isArray(blocks)) {
-						for (const block of blocks) {
-							if (block.type === "text" && typeof block.text === "string") {
-								content += `${block.text}\n`;
-							} else if (block.type === "tool_use") {
-								const name = block.name as string;
-								const input = block.input as Record<string, unknown> | undefined;
-								// Show tool name + brief input summary
-								if (input && name === "Bash") {
-									const cmd = input.command as string | undefined;
-									content += `[Bash: ${cmd?.slice(0, 100) ?? "..."}]\n`;
-								} else if (input && (name === "Read" || name === "Write" || name === "Edit")) {
-									const fp = input.file_path as string | undefined;
-									content += `[${name}: ${fp ?? "..."}]\n`;
-								} else {
-									content += `[Tool: ${name}]\n`;
-								}
-							}
-						}
-					}
-				}
-
-				if (content.trim()) {
-					turns.push({ type, content: content.trim() });
-				}
-			} catch {}
-		}
-
-		// Take last N turns
-		const recent = turns.slice(-maxTurns * 2);
-		if (recent.length === 0) return "";
-
-		let md = "";
-		for (const turn of recent) {
-			const label = turn.type === "user" ? "User" : "Assistant";
-			md += `### ${label}\n${turn.content}\n\n`;
-		}
-		return md.trim();
-	} catch {
-		return "";
-	}
+	const { ClaudeRuntime } = await import("../runtimes/claude.ts");
+	const runtime = new ClaudeRuntime();
+	return runtime.extractConversation(worktreePath, sessionId, maxTurns);
 }
 
 export function buildHandoffDocument(opts: {

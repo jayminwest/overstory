@@ -4,6 +4,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { PiRuntimeConfig, ResolvedModel } from "../types.ts";
+import { tailReadLines } from "../watchdog/swap.ts";
 import { generatePiGuardExtension } from "./pi-guards.ts";
 import type {
 	AgentRuntime,
@@ -298,5 +299,67 @@ export class PiRuntime implements AgentRuntime {
 		// Pi encodes the project path: replace separators with dashes, wrap with --
 		const encoded = `--${projectRoot.replace(/[\\/]/g, "-").replace(/:/g, "")}--`;
 		return join(home, ".pi", "agent", "sessions", encoded);
+	}
+
+	/**
+	 * Extract recent conversation from Pi JSONL transcript.
+	 * Pi format: type=message, message.role=user|assistant, message.content=string|array.
+	 * Uses tail-read (last 100KB) for performance.
+	 */
+	async extractConversation(
+		worktreePath: string,
+		sessionId: string,
+		maxTurns: number,
+	): Promise<string> {
+		const transcriptDir = this.getTranscriptDir(worktreePath);
+		if (!transcriptDir) return "";
+		const jsonlPath = join(transcriptDir, `${sessionId}.jsonl`);
+
+		const lines = await tailReadLines(jsonlPath);
+		if (lines.length === 0) return "";
+
+		const turns: Array<{ type: string; content: string }> = [];
+		for (const line of lines) {
+			try {
+				const obj = JSON.parse(line) as Record<string, unknown>;
+				if (obj.type !== "message") continue;
+
+				const msg = obj.message as Record<string, unknown> | undefined;
+				if (!msg) continue;
+
+				const role = msg.role as string | undefined;
+				if (role !== "user" && role !== "assistant") continue;
+
+				const c = msg.content;
+				let content = "";
+				if (typeof c === "string") {
+					content = c;
+				} else if (Array.isArray(c)) {
+					for (const block of c as Array<Record<string, unknown>>) {
+						if (block.type === "text" && typeof block.text === "string") {
+							content += `${block.text}\n`;
+						} else if (block.type === "tool_use") {
+							content += `[Tool: ${block.name}]\n`;
+						}
+					}
+				}
+
+				if (content.trim()) {
+					turns.push({ type: role, content: content.trim() });
+				}
+			} catch {
+				// Skip malformed lines
+			}
+		}
+
+		const recent = turns.slice(-maxTurns * 2);
+		if (recent.length === 0) return "";
+
+		let md = "";
+		for (const turn of recent) {
+			const label = turn.type === "user" ? "User" : "Assistant";
+			md += `### ${label}\n${turn.content}\n\n`;
+		}
+		return md.trim();
 	}
 }

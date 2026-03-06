@@ -598,7 +598,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 
 					// Swap to alternate runtime if configured
 					if (rateLimitConfig.behavior === "swap" && rateLimitConfig.swapRuntime) {
-						const swapPaneContent = await capturePane(session.tmuxSession, 200);
+						const swapPaneContent = await capturePane(session.tmuxSession, 500);
 						const result = await swapRuntime({
 							root,
 							session,

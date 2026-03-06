@@ -253,4 +253,19 @@ export interface AgentRuntime {
 	 * Runtimes that omit this method are assumed to never be rate-limited.
 	 */
 	detectRateLimit?(paneContent: string): RateLimitState;
+
+	/**
+	 * Extract recent conversation context from a transcript file for handoff.
+	 * Returns markdown-formatted last N turns, or empty string if unavailable.
+	 *
+	 * Performance: implementations MUST tail-read (last ~100KB), never the full file.
+	 * Called only during swap, not on every tick.
+	 *
+	 * Runtimes that omit this method fall back to tmux pane capture.
+	 */
+	extractConversation?(
+		worktreePath: string,
+		sessionId: string,
+		maxTurns: number,
+	): Promise<string>;
 }
