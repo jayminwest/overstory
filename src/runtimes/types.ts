@@ -134,6 +134,11 @@ export interface AgentEvent {
 	[key: string]: unknown;
 }
 
+/** Result of rate limit detection from agent TUI output. */
+export type RateLimitState =
+	| { limited: false }
+	| { limited: true; resumesAt: Date | null; message: string };
+
 // === Runtime Interface ===
 
 /**
@@ -241,4 +246,11 @@ export interface AgentRuntime {
 	 * The caller provides the raw stdout ReadableStream from Bun.spawn().
 	 */
 	parseEvents?(stream: ReadableStream<Uint8Array>): AsyncIterable<AgentEvent>;
+
+	/**
+	 * Detect rate limit state from tmux pane content.
+	 * Returns { limited: false } when no rate limit is detected.
+	 * Runtimes that omit this method are assumed to never be rate-limited.
+	 */
+	detectRateLimit?(paneContent: string): RateLimitState;
 }

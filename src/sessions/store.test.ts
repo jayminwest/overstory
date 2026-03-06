@@ -34,6 +34,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 		id: "session-001-test-agent",
 		agentName: "test-agent",
 		capability: "builder",
+		runtime: "claude",
 		worktreePath: "/tmp/worktrees/test-agent",
 		branchName: "overstory/test-agent/task-1",
 		taskId: "task-1",
@@ -47,6 +48,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 		lastActivity: "2026-01-15T10:00:00.000Z",
 		escalationLevel: 0,
 		stalledSince: null,
+		rateLimitedSince: null,
 		transcriptPath: null,
 		...overrides,
 	};

@@ -170,6 +170,7 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 			id: `session-${Date.now()}-${MONITOR_NAME}`,
 			agentName: MONITOR_NAME,
 			capability: "monitor",
+			runtime: runtime.id,
 			worktreePath: projectRoot, // Monitor uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			taskId: "", // No specific task assignment
@@ -183,6 +184,7 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 

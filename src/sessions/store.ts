@@ -30,6 +30,8 @@ export interface SessionStore {
 	updateEscalation(agentName: string, level: number, stalledSince: string | null): void;
 	/** Update the transcript path for a session. */
 	updateTranscriptPath(agentName: string, path: string): void;
+	/** Update the rate_limited_since timestamp for a session. */
+	updateRateLimitedSince(agentName: string, rateLimitedSince: string | null): void;
 	/** Remove a session by agent name. */
 	remove(agentName: string): void;
 	/** Purge sessions matching criteria. Returns count of deleted rows. */
@@ -43,6 +45,7 @@ interface SessionRow {
 	id: string;
 	agent_name: string;
 	capability: string;
+	runtime: string;
 	worktree_path: string;
 	branch_name: string;
 	task_id: string;
@@ -56,6 +59,7 @@ interface SessionRow {
 	last_activity: string;
 	escalation_level: number;
 	stalled_since: string | null;
+	rate_limited_since: string | null;
 	transcript_path: string | null;
 }
 
@@ -115,6 +119,7 @@ function rowToSession(row: SessionRow): AgentSession {
 		id: row.id,
 		agentName: row.agent_name,
 		capability: row.capability,
+		runtime: row.runtime ?? "claude",
 		worktreePath: row.worktree_path,
 		branchName: row.branch_name,
 		taskId: row.task_id,
@@ -128,6 +133,7 @@ function rowToSession(row: SessionRow): AgentSession {
 		lastActivity: row.last_activity,
 		escalationLevel: row.escalation_level,
 		stalledSince: row.stalled_since,
+		rateLimitedSince: row.rate_limited_since,
 		transcriptPath: row.transcript_path,
 	};
 }
@@ -153,6 +159,21 @@ function migrateAddTranscriptPath(db: Database): void {
 	const existingColumns = new Set(rows.map((r) => r.name));
 	if (!existingColumns.has("transcript_path")) {
 		db.exec("ALTER TABLE sessions ADD COLUMN transcript_path TEXT");
+	}
+}
+
+/**
+ * Migrate an existing sessions table to add rate_limited_since and runtime columns.
+ * Safe to call multiple times — only adds columns if they do not exist.
+ */
+function migrateAddRateLimitFields(db: Database): void {
+	const rows = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+	const existingColumns = new Set(rows.map((r) => r.name));
+	if (!existingColumns.has("rate_limited_since")) {
+		db.exec("ALTER TABLE sessions ADD COLUMN rate_limited_since TEXT");
+	}
+	if (!existingColumns.has("runtime")) {
+		db.exec("ALTER TABLE sessions ADD COLUMN runtime TEXT DEFAULT 'claude'");
 	}
 }
 
@@ -192,6 +213,8 @@ export function createSessionStore(dbPath: string): SessionStore {
 	migrateBeadIdToTaskId(db);
 	// Migrate: add transcript_path column to existing tables
 	migrateAddTranscriptPath(db);
+	// Migrate: add rate_limited_since and runtime columns
+	migrateAddRateLimitFields(db);
 
 	// Prepare statements for frequent operations
 	const upsertStmt = db.prepare<
@@ -200,6 +223,7 @@ export function createSessionStore(dbPath: string): SessionStore {
 			$id: string;
 			$agent_name: string;
 			$capability: string;
+			$runtime: string;
 			$worktree_path: string;
 			$branch_name: string;
 			$task_id: string;
@@ -213,20 +237,24 @@ export function createSessionStore(dbPath: string): SessionStore {
 			$last_activity: string;
 			$escalation_level: number;
 			$stalled_since: string | null;
+			$rate_limited_since: string | null;
 			$transcript_path: string | null;
 		}
 	>(`
 		INSERT INTO sessions
-			(id, agent_name, capability, worktree_path, branch_name, task_id,
+			(id, agent_name, capability, runtime, worktree_path, branch_name, task_id,
 			 tmux_session, state, pid, parent_agent, depth, run_id,
-			 started_at, last_activity, escalation_level, stalled_since, transcript_path)
+			 started_at, last_activity, escalation_level, stalled_since,
+			 rate_limited_since, transcript_path)
 		VALUES
-			($id, $agent_name, $capability, $worktree_path, $branch_name, $task_id,
+			($id, $agent_name, $capability, $runtime, $worktree_path, $branch_name, $task_id,
 			 $tmux_session, $state, $pid, $parent_agent, $depth, $run_id,
-			 $started_at, $last_activity, $escalation_level, $stalled_since, $transcript_path)
+			 $started_at, $last_activity, $escalation_level, $stalled_since,
+			 $rate_limited_since, $transcript_path)
 		ON CONFLICT(agent_name) DO UPDATE SET
 			id = excluded.id,
 			capability = excluded.capability,
+			runtime = excluded.runtime,
 			worktree_path = excluded.worktree_path,
 			branch_name = excluded.branch_name,
 			task_id = excluded.task_id,
@@ -240,6 +268,7 @@ export function createSessionStore(dbPath: string): SessionStore {
 			last_activity = excluded.last_activity,
 			escalation_level = excluded.escalation_level,
 			stalled_since = excluded.stalled_since,
+			rate_limited_since = excluded.rate_limited_since,
 			transcript_path = excluded.transcript_path
 	`);
 
@@ -296,12 +325,20 @@ export function createSessionStore(dbPath: string): SessionStore {
 		UPDATE sessions SET transcript_path = $transcript_path WHERE agent_name = $agent_name
 	`);
 
+	const updateRateLimitedSinceStmt = db.prepare<
+		void,
+		{ $agent_name: string; $rate_limited_since: string | null }
+	>(`
+		UPDATE sessions SET rate_limited_since = $rate_limited_since WHERE agent_name = $agent_name
+	`);
+
 	return {
 		upsert(session: AgentSession): void {
 			upsertStmt.run({
 				$id: session.id,
 				$agent_name: session.agentName,
 				$capability: session.capability,
+				$runtime: session.runtime ?? "claude",
 				$worktree_path: session.worktreePath,
 				$branch_name: session.branchName,
 				$task_id: session.taskId,
@@ -315,6 +352,7 @@ export function createSessionStore(dbPath: string): SessionStore {
 				$last_activity: session.lastActivity,
 				$escalation_level: session.escalationLevel,
 				$stalled_since: session.stalledSince,
+				$rate_limited_since: session.rateLimitedSince,
 				$transcript_path: session.transcriptPath,
 			});
 		},
@@ -365,6 +403,13 @@ export function createSessionStore(dbPath: string): SessionStore {
 
 		updateTranscriptPath(agentName: string, path: string): void {
 			updateTranscriptPathStmt.run({ $agent_name: agentName, $transcript_path: path });
+		},
+
+		updateRateLimitedSince(agentName: string, rateLimitedSince: string | null): void {
+			updateRateLimitedSinceStmt.run({
+				$agent_name: agentName,
+				$rate_limited_since: rateLimitedSince,
+			});
 		},
 
 		remove(agentName: string): void {

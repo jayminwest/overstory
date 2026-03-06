@@ -432,6 +432,7 @@ async function startCoordinator(
 			id: `session-${Date.now()}-${COORDINATOR_NAME}`,
 			agentName: COORDINATOR_NAME,
 			capability: "coordinator",
+			runtime: runtime.id,
 			worktreePath: projectRoot, // Coordinator uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			taskId: "", // No specific task assignment
@@ -445,6 +446,7 @@ async function startCoordinator(
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 

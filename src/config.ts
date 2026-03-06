@@ -112,6 +112,14 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 			},
 		},
 	},
+	rateLimit: {
+		enabled: true,
+		behavior: "wait" as const,
+		maxWaitMs: 3_600_000, // 1 hour max wait
+		pollIntervalMs: 30_000, // check every 30s
+		notifyCoordinator: true,
+		swapRuntime: undefined,
+	},
 };
 
 const CONFIG_FILENAME = "config.yaml";

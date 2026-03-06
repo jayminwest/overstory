@@ -29,12 +29,15 @@ import {
 	type TailerHandle,
 	type TailerOptions,
 } from "../events/tailer.ts";
+import { createMailClient } from "../mail/client.ts";
+import { createMailStore } from "../mail/store.ts";
 import { createMulchClient } from "../mulch/client.ts";
 import { getConnection, removeConnection } from "../runtimes/connections.ts";
-import type { RuntimeConnection } from "../runtimes/types.ts";
+import { getRuntime } from "../runtimes/registry.ts";
+import type { RateLimitState, RuntimeConnection } from "../runtimes/types.ts";
 import { openSessionStore } from "../sessions/compat.ts";
-import type { AgentSession, EventStore, HealthCheck } from "../types.ts";
-import { isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
+import type { AgentSession, EventStore, HealthCheck, OverstoryConfig } from "../types.ts";
+import { capturePaneContent, isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
 import { evaluateHealth, transitionState } from "./health.ts";
 import { triageAgent } from "./triage.ts";
 
@@ -268,6 +271,8 @@ export interface DaemonOptions {
 	zombieThresholdMs: number;
 	nudgeIntervalMs?: number;
 	tier1Enabled?: boolean;
+	/** Full config for rate limit detection and runtime resolution. */
+	config?: OverstoryConfig;
 	onHealthCheck?: (check: HealthCheck) => void;
 	/** Dependency injection for testing. Uses real implementations when omitted. */
 	_tmux?: {
@@ -312,6 +317,8 @@ export interface DaemonOptions {
 	_tailerFactory?: (opts: TailerOptions) => TailerHandle;
 	/** Dependency injection for testing. Uses findLatestStdoutLog when omitted. */
 	_findLatestStdoutLog?: (overstoryDir: string, agentName: string) => Promise<string | null>;
+	/** Dependency injection for testing. Uses real capturePaneContent when omitted. */
+	_capturePaneContent?: (name: string, lines?: number) => Promise<string | null>;
 }
 
 /**
@@ -413,6 +420,8 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 	const tailerRegistry = options._tailerRegistry ?? _defaultTailerRegistry;
 	const tailerFactory = options._tailerFactory ?? startEventTailer;
 	const findStdoutLog = options._findLatestStdoutLog ?? findLatestStdoutLog;
+	const capturePane = options._capturePaneContent ?? capturePaneContent;
+	const rateLimitConfig = options.config?.rateLimit;
 
 	const overstoryDir = join(root, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
@@ -524,7 +533,83 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 			}
 
 			const tmuxAlive = await tmux.isSessionAlive(session.tmuxSession);
-			const check = evaluateHealth(session, tmuxAlive, thresholds);
+
+			// Rate limit detection: capture pane content and check via runtime adapter
+			let rateLimitState: RateLimitState | undefined;
+			if (tmuxAlive && session.tmuxSession !== "" && rateLimitConfig?.enabled) {
+				try {
+					const runtime = getRuntime(session.runtime, options.config, session.capability);
+					if (runtime.detectRateLimit) {
+						const paneContent = await capturePane(session.tmuxSession);
+						if (paneContent) {
+							rateLimitState = runtime.detectRateLimit(paneContent);
+						}
+					}
+				} catch {
+					// Runtime resolution or pane capture failure is non-fatal
+				}
+
+				// Track rate limit state transitions in session store
+				if (rateLimitState?.limited && session.rateLimitedSince === null) {
+					// Newly rate-limited — record timestamp and notify
+					const now = new Date().toISOString();
+					store.updateRateLimitedSince(session.agentName, now);
+					session.rateLimitedSince = now;
+
+					recordEvent(eventStore, {
+						runId,
+						agentName: session.agentName,
+						eventType: "custom",
+						level: "warn",
+						data: {
+							type: "rate_limited",
+							runtime: session.runtime,
+							message: rateLimitState.message,
+							resumesAt: rateLimitState.resumesAt?.toISOString() ?? null,
+						},
+					});
+
+					// Notify coordinator if configured
+					if (rateLimitConfig.notifyCoordinator) {
+						try {
+							const mailDbPath = join(overstoryDir, "mail.db");
+							const mailStore = createMailStore(mailDbPath);
+							const mailClient = createMailClient(mailStore);
+							mailClient.sendProtocol({
+								from: "watchdog",
+								to: "coordinator",
+								subject: `Rate limited: ${session.agentName}`,
+								body: `Agent ${session.agentName} (${session.runtime}) hit rate limit. ${rateLimitState.message}`,
+								type: "rate_limited",
+								priority: "high",
+								payload: {
+									agentName: session.agentName,
+									runtime: session.runtime,
+									resumesAt: rateLimitState.resumesAt?.toISOString() ?? null,
+									message: rateLimitState.message,
+								},
+							});
+							mailStore.close();
+						} catch {
+							// Mail send failure is non-fatal
+						}
+					}
+				} else if (!rateLimitState?.limited && session.rateLimitedSince !== null) {
+					// Rate limit lifted — clear tracking
+					store.updateRateLimitedSince(session.agentName, null);
+					session.rateLimitedSince = null;
+
+					recordEvent(eventStore, {
+						runId,
+						agentName: session.agentName,
+						eventType: "custom",
+						level: "info",
+						data: { type: "rate_limit_cleared", runtime: session.runtime },
+					});
+				}
+			}
+
+			const check = evaluateHealth(session, tmuxAlive, thresholds, rateLimitState);
 
 			// Transition state forward only (investigate action holds state)
 			const newState = transitionState(session.state, check);

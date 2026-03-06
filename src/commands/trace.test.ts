@@ -539,6 +539,7 @@ describe("traceCommand", () => {
 				id: "sess-001",
 				agentName: "builder-for-task",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "feat/task",
 				taskId: "overstory-rj1k",
@@ -552,6 +553,7 @@ describe("traceCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStore.close();

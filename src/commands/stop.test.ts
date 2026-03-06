@@ -187,6 +187,7 @@ function makeAgentSession(overrides: Partial<AgentSession> = {}): AgentSession {
 		id: `session-${Date.now()}-my-builder`,
 		agentName: "my-builder",
 		capability: "builder",
+		runtime: "claude",
 		worktreePath: join(tempDir, ".overstory", "worktrees", "my-builder"),
 		branchName: "overstory/my-builder/bead-123",
 		taskId: "bead-123",
@@ -200,6 +201,7 @@ function makeAgentSession(overrides: Partial<AgentSession> = {}): AgentSession {
 		lastActivity: new Date().toISOString(),
 		escalationLevel: 0,
 		stalledSince: null,
+		rateLimitedSince: null,
 		transcriptPath: null,
 		...overrides,
 	};

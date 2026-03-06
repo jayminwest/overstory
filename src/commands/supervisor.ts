@@ -216,6 +216,7 @@ async function startSupervisor(opts: {
 			id: `session-${Date.now()}-${opts.name}`,
 			agentName: opts.name,
 			capability: "supervisor",
+			runtime: runtime.id,
 			worktreePath: projectRoot, // Supervisor uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			taskId: opts.task,
@@ -229,6 +230,7 @@ async function startSupervisor(opts: {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 

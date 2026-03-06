@@ -784,6 +784,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			await runtime.deployConfig(worktreePath, undefined, {
 				agentName: name,
 				capability,
+				runtime: runtime.id,
 				worktreePath,
 				qualityGates: config.project.qualityGates,
 			});
@@ -904,6 +905,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				};
 				store.upsert(session);
@@ -976,6 +978,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				};
 

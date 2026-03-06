@@ -297,6 +297,7 @@ function makeCoordinatorSession(overrides: Partial<AgentSession> = {}): AgentSes
 		id: `session-${Date.now()}-coordinator`,
 		agentName: "coordinator",
 		capability: "coordinator",
+		runtime: "claude",
 		worktreePath: tempDir,
 		branchName: "main",
 		taskId: "",
@@ -310,6 +311,7 @@ function makeCoordinatorSession(overrides: Partial<AgentSession> = {}): AgentSes
 		lastActivity: new Date().toISOString(),
 		escalationLevel: 0,
 		stalledSince: null,
+		rateLimitedSince: null,
 		transcriptPath: null,
 		...overrides,
 	};

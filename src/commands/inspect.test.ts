@@ -141,6 +141,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -154,6 +155,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -174,6 +176,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -187,6 +190,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -211,6 +215,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -224,6 +229,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date(Date.now() - 5_000).toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -248,6 +254,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -261,6 +268,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -288,6 +296,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -301,6 +310,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -324,6 +334,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -337,6 +348,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -360,6 +372,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -373,6 +386,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -405,6 +419,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -418,6 +433,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -449,6 +465,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -462,6 +479,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -499,6 +517,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -512,6 +531,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -537,6 +557,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -550,6 +571,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -576,6 +598,7 @@ describe("inspectCommand", () => {
 				id: "sess-h1",
 				agentName: "headless-agent",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/headless/task-1",
 				taskId: "overstory-h01",
@@ -589,6 +612,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -611,6 +635,7 @@ describe("inspectCommand", () => {
 				id: "sess-h2",
 				agentName: "headless-events",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/headless/task-2",
 				taskId: "overstory-h02",
@@ -624,6 +649,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -651,6 +677,7 @@ describe("inspectCommand", () => {
 					id: "sess-h3",
 					agentName: "headless-display",
 					capability: "builder",
+					runtime: "claude",
 					worktreePath: "/tmp/wt",
 					branchName: "overstory/headless/task-3",
 					taskId: "overstory-h03",
@@ -664,6 +691,7 @@ describe("inspectCommand", () => {
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				},
 				timeSinceLastActivity: 5000,
@@ -690,6 +718,7 @@ describe("inspectCommand", () => {
 					id: "sess-h4",
 					agentName: "headless-activity",
 					capability: "builder",
+					runtime: "claude",
 					worktreePath: "/tmp/wt",
 					branchName: "overstory/headless/task-4",
 					taskId: "overstory-h04",
@@ -703,6 +732,7 @@ describe("inspectCommand", () => {
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				},
 				timeSinceLastActivity: 5000,
@@ -1128,6 +1158,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -1141,6 +1172,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -1166,6 +1198,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -1179,6 +1212,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();
@@ -1205,6 +1239,7 @@ describe("inspectCommand", () => {
 				id: "sess-1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt",
 				branchName: "overstory/builder-1/test",
 				taskId: "overstory-001",
@@ -1218,6 +1253,7 @@ describe("inspectCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			store.close();

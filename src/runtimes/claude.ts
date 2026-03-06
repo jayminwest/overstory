@@ -12,6 +12,7 @@ import type {
 	AgentRuntime,
 	HooksDef,
 	OverlayContent,
+	RateLimitState,
 	ReadyState,
 	SpawnOpts,
 	TranscriptSummary,
@@ -235,6 +236,58 @@ export class ClaudeRuntime implements AgentRuntime {
 		if (home.length === 0) return null;
 		const projectKey = projectRoot.replace(/\//g, "-");
 		return join(home, ".claude", "projects", projectKey);
+	}
+
+	/**
+	 * Detect Claude Code rate limit state from tmux pane content.
+	 *
+	 * Detects several patterns:
+	 * - "You've hit your limit" with optional "resets Xpm" / "resets X:XXam/pm"
+	 * - "rate limit" text
+	 * - "/rate-limit-options" dialog
+	 */
+	detectRateLimit(paneContent: string): RateLimitState {
+		const lower = paneContent.toLowerCase();
+
+		// Pattern 1: Claude's usage cap message
+		if (lower.includes("you've hit your limit") || lower.includes("usage cap")) {
+			const minuteMatch = paneContent.match(/resets?\s+(?:in\s+)?(\d+)\s*(?:m|min|minutes?)/i);
+			const timeMatch = paneContent.match(/resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+
+			let resumesAt: Date | null = null;
+			if (minuteMatch?.[1]) {
+				resumesAt = new Date(Date.now() + parseInt(minuteMatch[1], 10) * 60_000);
+			} else if (timeMatch?.[1] && timeMatch[3]) {
+				const now = new Date();
+				let hours = parseInt(timeMatch[1], 10);
+				const minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+				const period = timeMatch[3].toLowerCase();
+				if (period === "pm" && hours < 12) hours += 12;
+				if (period === "am" && hours === 12) hours = 0;
+				resumesAt = new Date(now);
+				resumesAt.setHours(hours, minutes, 0, 0);
+				if (resumesAt.getTime() <= now.getTime()) {
+					resumesAt.setDate(resumesAt.getDate() + 1);
+				}
+			}
+
+			return {
+				limited: true,
+				resumesAt,
+				message: "Claude usage cap reached",
+			};
+		}
+
+		// Pattern 2: Rate limit dialog or text
+		if (lower.includes("rate-limit-options") || lower.includes("rate limit")) {
+			return {
+				limited: true,
+				resumesAt: null,
+				message: "Claude rate limited",
+			};
+		}
+
+		return { limited: false };
 	}
 }
 

@@ -113,6 +113,14 @@ export interface OverstoryConfig {
 		/** Conditions that trigger automatic coordinator shutdown. */
 		exitTriggers: CoordinatorExitTriggers;
 	};
+	rateLimit?: {
+		enabled: boolean;
+		behavior: "wait" | "swap" | "kill";
+		maxWaitMs: number;
+		pollIntervalMs: number;
+		notifyCoordinator: boolean;
+		swapRuntime?: string;
+	};
 	runtime?: {
 		/** Default runtime adapter name (default: "claude"). */
 		default: string;
@@ -179,6 +187,7 @@ export interface AgentSession {
 	id: string; // Unique session ID
 	agentName: string; // Unique per-session name
 	capability: string; // Which agent definition
+	runtime: string; // Runtime adapter name (e.g. "claude", "pi")
 	worktreePath: string;
 	branchName: string;
 	taskId: string; // Task being worked
@@ -192,6 +201,7 @@ export interface AgentSession {
 	lastActivity: string;
 	escalationLevel: number; // Progressive nudge stage: 0=warn, 1=nudge, 2=escalate, 3=terminate
 	stalledSince: string | null; // ISO timestamp when agent first entered stalled state
+	rateLimitedSince: string | null; // ISO timestamp when agent was first rate-limited
 	transcriptPath: string | null; // Runtime-provided transcript JSONL path (decoupled from ~/.claude/)
 }
 
@@ -224,7 +234,8 @@ export type MailProtocolType =
 	| "escalation"
 	| "health_check"
 	| "dispatch"
-	| "assign";
+	| "assign"
+	| "rate_limited";
 
 /** All valid mail message types. */
 export type MailMessageType = MailSemanticType | MailProtocolType;
@@ -243,6 +254,7 @@ export const MAIL_MESSAGE_TYPES: readonly MailMessageType[] = [
 	"health_check",
 	"dispatch",
 	"assign",
+	"rate_limited",
 ] as const;
 
 export interface MailMessage {
@@ -327,6 +339,14 @@ export interface AssignPayload {
 	branch: string;
 }
 
+/** Agent signals it has been rate-limited by the provider. */
+export interface RateLimitedPayload {
+	agentName: string;
+	runtime: string;
+	resumesAt: string | null;
+	message: string;
+}
+
 /** Maps protocol message types to their payload interfaces. */
 export interface MailPayloadMap {
 	worker_done: WorkerDonePayload;
@@ -337,6 +357,7 @@ export interface MailPayloadMap {
 	health_check: HealthCheckPayload;
 	dispatch: DispatchPayload;
 	assign: AssignPayload;
+	rate_limited: RateLimitedPayload;
 }
 
 // === Overlay ===

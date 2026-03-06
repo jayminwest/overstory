@@ -152,6 +152,7 @@ describe("--all", () => {
 			id: "s1",
 			agentName: "test-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: "/tmp/wt",
 			branchName: "overstory/test/task",
 			taskId: "task-1",
@@ -165,6 +166,7 @@ describe("--all", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -297,6 +299,7 @@ describe("individual flags", () => {
 			id: "s1",
 			agentName: "test-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: "/tmp/wt",
 			branchName: "overstory/test/task",
 			taskId: "task-1",
@@ -310,6 +313,7 @@ describe("individual flags", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -419,6 +423,7 @@ describe("synthetic session-end events", () => {
 			id: "s1",
 			agentName: "test-builder",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: "/tmp/wt",
 			branchName: "overstory/test-builder/task-1",
 			taskId: "task-1",
@@ -432,6 +437,7 @@ describe("synthetic session-end events", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 			...overrides,
 		};
