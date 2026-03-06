@@ -410,6 +410,8 @@ describe("daemon tailer integration", () => {
 			escalationLevel: 0,
 			stalledSince: null,
 			transcriptPath: null,
+			runtime: "claude",
+			rateLimitedSince: null,
 		});
 		sessionStore.close();
 

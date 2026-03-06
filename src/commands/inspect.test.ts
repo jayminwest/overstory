@@ -781,6 +781,8 @@ describe("inspectCommand", () => {
 				escalationLevel: 0,
 				stalledSince: null,
 				transcriptPath: null,
+				runtime: "claude",
+				rateLimitedSince: null,
 			});
 			store.close();
 			return overstoryDir;
@@ -1041,6 +1043,8 @@ describe("inspectCommand", () => {
 					escalationLevel: 0,
 					stalledSince: null,
 					transcriptPath: null,
+					runtime: "claude",
+					rateLimitedSince: null,
 				},
 				timeSinceLastActivity: 1000,
 				recentToolCalls: [],
@@ -1084,6 +1088,8 @@ describe("inspectCommand", () => {
 					escalationLevel: 0,
 					stalledSince: null,
 					transcriptPath: null,
+					runtime: "claude",
+					rateLimitedSince: null,
 				},
 				timeSinceLastActivity: 500,
 				recentToolCalls: [],
