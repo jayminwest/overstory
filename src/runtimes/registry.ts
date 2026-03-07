@@ -2,10 +2,13 @@
 // This is the ONLY module that imports concrete adapter classes.
 
 import type { OverstoryConfig } from "../types.ts";
+import { AiderRuntime } from "./aider.ts";
+import { AmpRuntime } from "./amp.ts";
 import { ClaudeRuntime } from "./claude.ts";
 import { CodexRuntime } from "./codex.ts";
 import { CopilotRuntime } from "./copilot.ts";
 import { GeminiRuntime } from "./gemini.ts";
+import { GooseRuntime } from "./goose.ts";
 import { OpenCodeRuntime } from "./opencode.ts";
 import { PiRuntime } from "./pi.ts";
 import { SaplingRuntime } from "./sapling.ts";
@@ -13,13 +16,16 @@ import type { AgentRuntime } from "./types.ts";
 
 /** Registry of config-independent runtime adapters (name → factory). */
 const runtimes = new Map<string, () => AgentRuntime>([
+	["aider", () => new AiderRuntime()],
+	["amp", () => new AmpRuntime()],
 	["claude", () => new ClaudeRuntime()],
 	["codex", () => new CodexRuntime()],
-	["pi", () => new PiRuntime()],
 	["copilot", () => new CopilotRuntime()],
 	["gemini", () => new GeminiRuntime()],
-	["sapling", () => new SaplingRuntime()],
+	["goose", () => new GooseRuntime()],
 	["opencode", () => new OpenCodeRuntime()],
+	["pi", () => new PiRuntime()],
+	["sapling", () => new SaplingRuntime()],
 ]);
 
 /**
@@ -33,13 +39,16 @@ const runtimes = new Map<string, () => AgentRuntime>([
  */
 export function getAllRuntimes(): AgentRuntime[] {
 	return [
+		new AiderRuntime(),
+		new AmpRuntime(),
 		new ClaudeRuntime(),
 		new CodexRuntime(),
-		new PiRuntime(),
 		new CopilotRuntime(),
 		new GeminiRuntime(),
-		new SaplingRuntime(),
+		new GooseRuntime(),
 		new OpenCodeRuntime(),
+		new PiRuntime(),
+		new SaplingRuntime(),
 	];
 }
 
