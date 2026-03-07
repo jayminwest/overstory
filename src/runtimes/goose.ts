@@ -33,6 +33,9 @@ import type {
 export class GooseRuntime implements AgentRuntime {
 	readonly id = "goose";
 
+	/** Experimental — community-contributed adapter, not yet battle-tested in production. */
+	readonly stability = "experimental" as const;
+
 	/**
 	 * Goose reads .goosehints from the repo root for project-level instructions.
 	 */

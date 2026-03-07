@@ -32,6 +32,9 @@ import type {
 export class AmpRuntime implements AgentRuntime {
 	readonly id = "amp";
 
+	/** Experimental — community-contributed adapter, not yet battle-tested in production. */
+	readonly stability = "experimental" as const;
+
 	/**
 	 * Amp reads .amp/AGENT.md from the repo for project-level instructions.
 	 */
@@ -118,8 +121,9 @@ export class AmpRuntime implements AgentRuntime {
 		// Prompt indicator: ">" or "amp>" at end of a line
 		const hasPrompt = /(?:amp)?>\s*$/.test(paneContent);
 
-		// Branding indicator: "amp" keyword in pane content
-		const hasBranding = lower.includes("amp");
+		// Branding indicator: "amp" as a standalone word (word boundary prevents
+		// matching inside "example", "stamp", "&amp;", etc.)
+		const hasBranding = /\bamp\b/.test(lower);
 
 		// Both required (AND logic) to prevent premature ready detection
 		// during startup messages like "amp v1.2.3 starting..."

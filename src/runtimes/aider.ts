@@ -33,6 +33,9 @@ import type {
 export class AiderRuntime implements AgentRuntime {
 	readonly id = "aider";
 
+	/** Experimental — community-contributed adapter, not yet battle-tested in production. */
+	readonly stability = "experimental" as const;
+
 	/**
 	 * Aider reads CONVENTIONS.md from the repo root for project-level instructions.
 	 * We write the overlay here so Aider picks it up natively.

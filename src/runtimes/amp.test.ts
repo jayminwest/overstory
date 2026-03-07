@@ -134,6 +134,10 @@ describe("AmpRuntime", () => {
 
 		// Neither → loading
 		expect(runtime.detectReady("Initializing...").phase).toBe("loading");
+
+		// Substring false-positive prevention: "amp" inside other words must NOT match branding
+		expect(runtime.detectReady("this is an example output\n> ").phase).toBe("loading");
+		expect(runtime.detectReady("stamped result\n> ").phase).toBe("loading");
 	});
 
 	it("does not require beacon verification", () => {
