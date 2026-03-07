@@ -87,6 +87,7 @@ export async function createSession(
 	cwd: string,
 	command: string,
 	env?: Record<string, string>,
+	maxRetries = 3,
 ): Promise<number> {
 	// Build environment exports for the tmux session
 	const exports: string[] = [];
@@ -123,12 +124,19 @@ export async function createSession(
 		});
 	}
 
-	// Retrieve the actual PID of the process running inside the tmux pane
-	const pidResult = await runCommand(["tmux", "list-panes", "-t", name, "-F", "#{pane_pid}"]);
+	// Retrieve the actual PID of the process running inside the tmux pane.
+	// Retry up to maxRetries times with backoff for WSL2 race conditions where
+	// the session exists but the pane hasn't been registered yet (#73).
+	let pidResult: { stdout: string; stderr: string; exitCode: number } | undefined;
+	for (let attempt = 0; attempt < maxRetries; attempt++) {
+		pidResult = await runCommand(["tmux", "list-panes", "-t", name, "-F", "#{pane_pid}"]);
+		if (pidResult.exitCode === 0) break;
+		await Bun.sleep(250 * (attempt + 1));
+	}
 
-	if (pidResult.exitCode !== 0) {
+	if (!pidResult || pidResult.exitCode !== 0) {
 		throw new AgentError(
-			`Created tmux session "${name}" but failed to retrieve PID: ${pidResult.stderr.trim()}`,
+			`Created tmux session "${name}" but failed to retrieve PID: ${pidResult?.stderr.trim() ?? "unknown error"}`,
 			{ agentName: name },
 		);
 	}
@@ -534,32 +542,57 @@ export async function ensureTmuxAvailable(): Promise<void> {
 }
 
 /**
- * Send keys to a tmux session.
+ * Send keys to a tmux session, with retry for WSL2 pane registration race.
+ *
+ * On WSL2, tmux occasionally reports "can't find pane" immediately after session
+ * creation even though the session exists. This is a timing issue where the pane
+ * hasn't been fully registered yet. We retry with backoff to handle this.
  *
  * @param name - Session name to send keys to
  * @param keys - The keys/text to send
- * @throws AgentError if the session does not exist or send fails
+ * @param maxRetries - Maximum retry attempts for transient pane errors (default 3)
+ * @throws AgentError if the session does not exist or send fails after retries
  */
-export async function sendKeys(name: string, keys: string): Promise<void> {
+export async function sendKeys(name: string, keys: string, maxRetries = 3): Promise<void> {
 	// Flatten newlines to spaces — multiline text via tmux send-keys causes
 	// Claude Code's TUI to receive embedded Enter keystrokes which prevent
 	// the final "Enter" from triggering message submission (overstory-y2ob).
 	const flatKeys = keys.replace(/\n/g, " ");
-	const { exitCode, stderr } = await runCommand([
-		"tmux",
-		"send-keys",
-		"-t",
-		name,
-		flatKeys,
-		"Enter",
-	]);
 
-	if (exitCode !== 0) {
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		const { exitCode, stderr } = await runCommand([
+			"tmux",
+			"send-keys",
+			"-t",
+			name,
+			flatKeys,
+			"Enter",
+		]);
+
+		if (exitCode === 0) {
+			return;
+		}
+
 		const trimmedStderr = stderr.trim();
 
 		if (trimmedStderr.includes("no server running")) {
 			throw new AgentError(
 				`Tmux server is not running (cannot reach session "${name}"). This often happens when running as root (UID 0) or when tmux crashed. Original error: ${trimmedStderr}`,
+				{ agentName: name },
+			);
+		}
+
+		// "can't find pane" is a transient race condition on WSL2 — the session
+		// exists but the pane hasn't been fully registered yet. Retry with backoff.
+		if (trimmedStderr.includes("can't find pane") || trimmedStderr.includes("cant find pane")) {
+			if (attempt < maxRetries) {
+				const delayMs = 250 * (attempt + 1);
+				await Bun.sleep(delayMs);
+				continue;
+			}
+			// Exhausted retries — report as pane-specific error
+			throw new AgentError(
+				`Tmux pane for session "${name}" not found after ${maxRetries + 1} attempts. On WSL2, this can indicate a tmux startup race condition. Try increasing the retry count or adding a delay after session creation.`,
 				{ agentName: name },
 			);
 		}

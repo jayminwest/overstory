@@ -242,6 +242,53 @@ describe("createSession", () => {
 		const tmuxCmd = cmd[7] as string;
 		expect(tmuxCmd).toContain("echo test");
 	});
+
+	test("retries list-panes on transient failure", async () => {
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) {
+				// which overstory
+				return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			}
+			if (callCount === 2) {
+				// tmux new-session
+				return mockSpawnResult("", "", 0);
+			}
+			if (callCount === 3) {
+				// First list-panes fails (WSL2 race)
+				return mockSpawnResult("", "can't find pane\n", 1);
+			}
+			// Second list-panes succeeds
+			return mockSpawnResult("42\n", "", 0);
+		});
+
+		const pid = await createSession("retry-session", "/work/dir", "echo hello");
+		expect(pid).toBe(42);
+		// which + new-session + list-panes(fail) + list-panes(ok)
+		expect(spawnSpy).toHaveBeenCalledTimes(4);
+	});
+
+	test("throws after exhausting all list-panes retries", async () => {
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) {
+				// which overstory
+				return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			}
+			if (callCount === 2) {
+				// tmux new-session
+				return mockSpawnResult("", "", 0);
+			}
+			// All list-panes attempts fail
+			return mockSpawnResult("", "can't find pane\n", 1);
+		});
+
+		await expect(
+			createSession("retry-exhaust", "/work/dir", "echo hello", undefined, 2),
+		).rejects.toThrow(/failed to retrieve PID/);
+	});
 });
 
 describe("listSessions", () => {
@@ -931,6 +978,38 @@ describe("sendKeys", () => {
 	test("throws generic error for other failures", async () => {
 		spawnSpy.mockImplementation(() => mockSpawnResult("", "some other error\n", 1));
 		await expect(sendKeys("overstory-agent-fake", "hello")).rejects.toThrow(/Failed to send keys/);
+	});
+
+	test("retries on transient 'can't find pane' error", async () => {
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) {
+				// First send-keys fails with transient pane error
+				return mockSpawnResult("", "can't find pane\n", 1);
+			}
+			// Second attempt succeeds
+			return mockSpawnResult("", "", 0);
+		});
+
+		await sendKeys("overstory-retry-agent", "hello world");
+		expect(spawnSpy).toHaveBeenCalledTimes(2);
+	});
+
+	test("does not retry on permanent 'session not found' error", async () => {
+		spawnSpy.mockImplementation(() => mockSpawnResult("", "cant find session: gone-agent\n", 1));
+
+		await expect(sendKeys("gone-agent", "hello", 3)).rejects.toThrow(/does not exist/);
+		// Only called once — no retries for permanent errors
+		expect(spawnSpy).toHaveBeenCalledTimes(1);
+	});
+
+	test("throws after exhausting retries on transient error", async () => {
+		spawnSpy.mockImplementation(() => mockSpawnResult("", "can't find pane\n", 1));
+
+		await expect(sendKeys("overstory-exhaust", "hello", 2)).rejects.toThrow(/not found after/);
+		// Initial + 2 retries = 3 calls
+		expect(spawnSpy).toHaveBeenCalledTimes(3);
 	});
 });
 
