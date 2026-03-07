@@ -40,7 +40,7 @@ import { openSessionStore } from "../sessions/compat.ts";
 import type { SessionStore } from "../sessions/store.ts";
 import { createTrackerClient, resolveBackend } from "../tracker/factory.ts";
 import type { TrackerIssue } from "../tracker/types.ts";
-import type { EventStore, MailMessage, StoredEvent } from "../types.ts";
+import type { EventStore, MailMessage, OverstoryConfig, StoredEvent } from "../types.ts";
 import { evaluateHealth } from "../watchdog/health.ts";
 import { isProcessAlive } from "../worktree/tmux.ts";
 import { getCachedTmuxSessions, getCachedWorktrees, type StatusData } from "./status.ts";
@@ -309,6 +309,8 @@ interface DashboardData {
 	tasks: TrackerIssue[];
 	recentEvents: StoredEvent[];
 	feedColorMap: Map<string, (s: string) => string>;
+	/** Runtime config for resolving per-capability runtime names in the agent panel. */
+	runtimeConfig?: OverstoryConfig["runtime"];
 }
 
 /**
@@ -336,6 +338,7 @@ async function loadDashboardData(
 	runId?: string | null,
 	thresholds?: { staleMs: number; zombieMs: number },
 	eventBuffer?: EventBuffer,
+	runtimeConfig?: OverstoryConfig["runtime"],
 ): Promise<DashboardData> {
 	// Get all sessions from the pre-opened session store
 	const allSessions = stores.sessionStore.getAll();
@@ -519,6 +522,7 @@ async function loadDashboardData(
 		tasks,
 		recentEvents,
 		feedColorMap,
+		runtimeConfig,
 	};
 }
 
@@ -534,6 +538,18 @@ function renderHeader(width: number, interval: number, currentRunId?: string | n
 	const line = left + " ".repeat(Math.max(0, padding)) + right;
 	const separator = horizontalLine(width, BOX.topLeft, BOX.horizontal, BOX.topRight);
 	return `${line}\n${separator}`;
+}
+
+/**
+ * Resolve the runtime name for a given capability from config.
+ * Mirrors the lookup chain in runtimes/registry.ts getRuntime():
+ *   capabilities[cap] > runtime.default > "claude"
+ */
+function resolveRuntimeName(
+	capability: string,
+	runtimeConfig?: OverstoryConfig["runtime"],
+): string {
+	return runtimeConfig?.capabilities?.[capability] ?? runtimeConfig?.default ?? "claude";
 }
 
 /**
@@ -556,7 +572,7 @@ export function renderAgentPanel(
 	output += `${CURSOR.cursorTo(startRow, 1)}${headerLine}${headerPadding}${dimBox.vertical}\n`;
 
 	// Column headers
-	const colStr = `${dimBox.vertical} St Name            Capability    State      Task ID          Duration  Live `;
+	const colStr = `${dimBox.vertical} St Name            Capability    Runtime   State      Task ID          Duration  Live `;
 	const colPadding = " ".repeat(
 		Math.max(0, leftWidth - visibleLength(colStr) - visibleLength(dimBox.vertical)),
 	);
@@ -588,6 +604,8 @@ export function renderAgentPanel(
 		const stateColorFn = stateColor(agent.state);
 		const name = accent(pad(truncate(agent.agentName, 15), 15));
 		const capability = pad(truncate(agent.capability, 12), 12);
+		const runtimeName = resolveRuntimeName(agent.capability, data.runtimeConfig);
+		const runtime = pad(truncate(runtimeName, 8), 8);
 		const state = pad(agent.state, 10);
 		const taskId = accent(pad(truncate(agent.taskId, 16), 16));
 		const endTime =
@@ -602,7 +620,7 @@ export function renderAgentPanel(
 			: data.status.tmuxSessions.some((s) => s.name === agent.tmuxSession);
 		const aliveDot = alive ? color.green(">") : color.red("x");
 
-		const lineContent = `${dimBox.vertical} ${stateColorFn(icon)}  ${name} ${capability} ${stateColorFn(state)} ${taskId} ${durationPadded} ${aliveDot}    `;
+		const lineContent = `${dimBox.vertical} ${stateColorFn(icon)}  ${name} ${capability} ${color.dim(runtime)} ${stateColorFn(state)} ${taskId} ${durationPadded} ${aliveDot}    `;
 		const linePadding = " ".repeat(
 			Math.max(0, leftWidth - visibleLength(lineContent) - visibleLength(dimBox.vertical)),
 		);
@@ -1022,7 +1040,14 @@ async function executeDashboard(opts: DashboardOpts): Promise<void> {
 
 	// Poll loop
 	while (running) {
-		const data = await loadDashboardData(root, stores, runId, thresholds, eventBuffer);
+		const data = await loadDashboardData(
+			root,
+			stores,
+			runId,
+			thresholds,
+			eventBuffer,
+			config.runtime,
+		);
 		renderDashboard(data, interval);
 		await Bun.sleep(interval);
 	}
