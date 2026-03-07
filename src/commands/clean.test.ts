@@ -677,6 +677,7 @@ describe("--agent", () => {
 			id: "s1",
 			agentName: "test-builder",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(tempDir, ".overstory", "worktrees", "test-builder"),
 			branchName: "overstory/test-builder/task-1",
 			taskId: "task-1",
@@ -690,6 +691,7 @@ describe("--agent", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 			...overrides,
 		};

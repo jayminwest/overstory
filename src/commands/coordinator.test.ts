@@ -2148,6 +2148,7 @@ describe("checkComplete", () => {
 				id: "s1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "feat/x",
 				taskId: "t1",
@@ -2161,6 +2162,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			};
 			store.upsert(base);
@@ -2200,6 +2202,7 @@ describe("checkComplete", () => {
 				id: "s1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "feat/x",
 				taskId: "t1",
@@ -2213,6 +2216,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			};
 			store.upsert(session);
@@ -2252,6 +2256,7 @@ describe("checkComplete", () => {
 				id: "coord",
 				agentName: "coordinator",
 				capability: "coordinator",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "main",
 				taskId: "",
@@ -2265,6 +2270,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			// worker session that is completed
@@ -2272,6 +2278,7 @@ describe("checkComplete", () => {
 				id: "worker",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "feat/x",
 				taskId: "t1",
@@ -2285,6 +2292,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 		} finally {
@@ -2413,6 +2421,7 @@ describe("checkComplete", () => {
 				id: "s1",
 				agentName: "lead-1",
 				capability: "lead",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "overstory/lead-1/task-1",
 				taskId: "task-1",
@@ -2426,6 +2435,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 		} finally {
@@ -2479,6 +2489,7 @@ describe("checkComplete", () => {
 				id: "s1",
 				agentName: "lead-1",
 				capability: "lead",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "overstory/lead-1/task-1",
 				taskId: "task-1",
@@ -2492,6 +2503,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 		} finally {

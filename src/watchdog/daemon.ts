@@ -37,7 +37,13 @@ import { getRuntime } from "../runtimes/registry.ts";
 import type { RateLimitState, RuntimeConnection } from "../runtimes/types.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, EventStore, HealthCheck, OverstoryConfig } from "../types.ts";
-import { capturePaneContent, isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
+import {
+	capturePaneContent,
+	isProcessAlive,
+	isSessionAlive,
+	killProcessTree,
+	killSession,
+} from "../worktree/tmux.ts";
 import { evaluateHealth, transitionState } from "./health.ts";
 import { swapRuntime } from "./swap.ts";
 import { triageAgent } from "./triage.ts";
