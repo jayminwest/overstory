@@ -87,6 +87,7 @@ export async function createSession(
 	cwd: string,
 	command: string,
 	env?: Record<string, string>,
+	maxRetries = 3,
 ): Promise<number> {
 	// Build environment exports for the tmux session
 	const exports: string[] = [];
@@ -123,15 +124,11 @@ export async function createSession(
 		});
 	}
 
-	// Brief delay before querying pane PID — on WSL2, tmux needs time to
-	// register the pane after session creation (see #73).
-	await Bun.sleep(100);
-
 	// Retrieve the actual PID of the process running inside the tmux pane.
-	// Retry up to 3 times with backoff for WSL2 race conditions where the
-	// session exists but the pane hasn't been registered yet.
+	// Retry up to maxRetries times with backoff for WSL2 race conditions where
+	// the session exists but the pane hasn't been registered yet (#73).
 	let pidResult: { stdout: string; stderr: string; exitCode: number } | undefined;
-	for (let attempt = 0; attempt < 3; attempt++) {
+	for (let attempt = 0; attempt < maxRetries; attempt++) {
 		pidResult = await runCommand(["tmux", "list-panes", "-t", name, "-F", "#{pane_pid}"]);
 		if (pidResult.exitCode === 0) break;
 		await Bun.sleep(250 * (attempt + 1));
