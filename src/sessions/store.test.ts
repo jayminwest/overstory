@@ -34,6 +34,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 		id: "session-001-test-agent",
 		agentName: "test-agent",
 		capability: "builder",
+		runtime: "claude",
 		worktreePath: "/tmp/worktrees/test-agent",
 		branchName: "overstory/test-agent/task-1",
 		taskId: "task-1",
@@ -47,6 +48,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 		lastActivity: "2026-01-15T10:00:00.000Z",
 		escalationLevel: 0,
 		stalledSince: null,
+		rateLimitedSince: null,
 		transcriptPath: null,
 		...overrides,
 	};
@@ -243,6 +245,36 @@ describe("getActive", () => {
 		const result = store.getActive();
 		expect(result[0]?.agentName).toBe("early");
 		expect(result[1]?.agentName).toBe("late");
+	});
+});
+
+// === getResumable ===
+
+describe("getResumable", () => {
+	test("returns empty array when no sessions exist", () => {
+		const result = store.getResumable();
+		expect(result).toEqual([]);
+	});
+
+	test("returns booting, working, and stalled sessions", () => {
+		store.upsert(makeSession({ agentName: "booting-1", id: "s-1", state: "booting" }));
+		store.upsert(makeSession({ agentName: "working-1", id: "s-2", state: "working" }));
+		store.upsert(makeSession({ agentName: "stalled-1", id: "s-3", state: "stalled" }));
+
+		const result = store.getResumable();
+		expect(result).toHaveLength(3);
+	});
+
+	test("excludes completed but includes zombie (dead tmux is expected for resume)", () => {
+		store.upsert(makeSession({ agentName: "working-1", id: "s-1", state: "working" }));
+		store.upsert(makeSession({ agentName: "completed-1", id: "s-2", state: "completed" }));
+		store.upsert(makeSession({ agentName: "zombie-1", id: "s-3", state: "zombie" }));
+
+		const result = store.getResumable();
+		expect(result).toHaveLength(2);
+		const names = result.map((s) => s.agentName);
+		expect(names).toContain("working-1");
+		expect(names).toContain("zombie-1");
 	});
 });
 

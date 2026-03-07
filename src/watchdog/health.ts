@@ -30,6 +30,7 @@
  * table are always up-to-date because they reflect real kernel state.
  */
 
+import type { RateLimitState } from "../runtimes/types.ts";
 import type { AgentSession, AgentState, HealthCheck } from "../types.ts";
 
 /**
@@ -94,7 +95,20 @@ function evaluateTimeBased(
 	base: Pick<HealthCheck, "agentName" | "timestamp" | "tmuxAlive" | "pidAlive" | "lastActivity">,
 	elapsedMs: number,
 	thresholds: { staleMs: number; zombieMs: number },
+	rateLimitState?: RateLimitState,
 ): HealthCheck {
+	// Rate-limited agents are waiting, not stalled — skip time-based escalation
+	if (rateLimitState?.limited) {
+		const state = session.state === "booting" ? "working" : session.state;
+		return {
+			...base,
+			processAlive: true,
+			state: state === "stalled" ? "working" : state,
+			action: "none",
+			reconciliationNote: `Rate limited: ${rateLimitState.message}`,
+		};
+	}
+
 	// Persistent capabilities (coordinator, monitor) are expected to have long idle
 	// periods waiting for mail/events. Skip time-based stale/zombie detection for
 	// them — only tmux/pid liveness matters (checked above).
@@ -189,6 +203,7 @@ export function evaluateHealth(
 	session: AgentSession,
 	tmuxAlive: boolean,
 	thresholds: { staleMs: number; zombieMs: number },
+	rateLimitState?: RateLimitState,
 ): HealthCheck {
 	const now = new Date();
 	const lastActivityTime = new Date(session.lastActivity).getTime();
@@ -248,7 +263,7 @@ export function evaluateHealth(
 		}
 
 		// pid alive → fall through to time-based checks
-		return evaluateTimeBased(session, base, elapsedMs, thresholds);
+		return evaluateTimeBased(session, base, elapsedMs, thresholds, rateLimitState);
 	}
 
 	// === TUI/tmux path ===
@@ -297,7 +312,7 @@ export function evaluateHealth(
 	}
 
 	// Time-based checks (both tmux and pid confirmed alive, or pid unavailable)
-	return evaluateTimeBased(session, base, elapsedMs, thresholds);
+	return evaluateTimeBased(session, base, elapsedMs, thresholds, rateLimitState);
 }
 
 /**

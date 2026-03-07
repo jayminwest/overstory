@@ -297,6 +297,7 @@ function makeCoordinatorSession(overrides: Partial<AgentSession> = {}): AgentSes
 		id: `session-${Date.now()}-coordinator`,
 		agentName: "coordinator",
 		capability: "coordinator",
+		runtime: "claude",
 		worktreePath: tempDir,
 		branchName: "main",
 		taskId: "",
@@ -310,6 +311,7 @@ function makeCoordinatorSession(overrides: Partial<AgentSession> = {}): AgentSes
 		lastActivity: new Date().toISOString(),
 		escalationLevel: 0,
 		stalledSince: null,
+		rateLimitedSince: null,
 		transcriptPath: null,
 		...overrides,
 	};
@@ -458,7 +460,7 @@ describe("startCoordinator", () => {
 		expect(session?.taskId).toBe("");
 		expect(session?.branchName).toBe("main");
 		expect(session?.worktreePath).toBe(tempDir);
-		expect(session?.id).toMatch(/^session-\d+-coordinator$/);
+		expect(session?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 
 		// Verify tmux createSession was called
 		expect(calls.createSession).toHaveLength(1);
@@ -2146,6 +2148,7 @@ describe("checkComplete", () => {
 				id: "s1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "feat/x",
 				taskId: "t1",
@@ -2159,6 +2162,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			};
 			store.upsert(base);
@@ -2198,6 +2202,7 @@ describe("checkComplete", () => {
 				id: "s1",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "feat/x",
 				taskId: "t1",
@@ -2211,6 +2216,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			};
 			store.upsert(session);
@@ -2250,6 +2256,7 @@ describe("checkComplete", () => {
 				id: "coord",
 				agentName: "coordinator",
 				capability: "coordinator",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "main",
 				taskId: "",
@@ -2263,6 +2270,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			// worker session that is completed
@@ -2270,6 +2278,7 @@ describe("checkComplete", () => {
 				id: "worker",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "feat/x",
 				taskId: "t1",
@@ -2283,6 +2292,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 		} finally {
@@ -2411,6 +2421,7 @@ describe("checkComplete", () => {
 				id: "s1",
 				agentName: "lead-1",
 				capability: "lead",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "overstory/lead-1/task-1",
 				taskId: "task-1",
@@ -2424,6 +2435,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 		} finally {
@@ -2477,6 +2489,7 @@ describe("checkComplete", () => {
 				id: "s1",
 				agentName: "lead-1",
 				capability: "lead",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "overstory/lead-1/task-1",
 				taskId: "task-1",
@@ -2490,6 +2503,7 @@ describe("checkComplete", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 		} finally {

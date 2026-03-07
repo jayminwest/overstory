@@ -409,9 +409,11 @@ async function startCoordinator(
 		if (await agentDefFile.exists()) {
 			appendSystemPromptFile = agentDefPath;
 		}
+		const sessionId = crypto.randomUUID();
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
+			sessionId,
 			cwd: projectRoot,
 			appendSystemPromptFile,
 			env: {
@@ -429,9 +431,10 @@ async function startCoordinator(
 		// Without this, a race exists: hooks fire before the session is persisted,
 		// leaving the coordinator stuck in "booting" (overstory-036f).
 		const session: AgentSession = {
-			id: `session-${Date.now()}-${COORDINATOR_NAME}`,
+			id: sessionId,
 			agentName: COORDINATOR_NAME,
 			capability: "coordinator",
+			runtime: runtime.id,
 			worktreePath: projectRoot, // Coordinator uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			taskId: "", // No specific task assignment
@@ -445,6 +448,7 @@ async function startCoordinator(
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 

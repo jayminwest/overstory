@@ -194,6 +194,7 @@ describe("checkConsistency", () => {
 			id: "session-1",
 			agentName: "dead-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(overstoryDir, "worktrees", "dead-agent"),
 			branchName: "overstory/dead-agent/test-123",
 			taskId: "test-123",
@@ -207,6 +208,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -231,6 +233,7 @@ describe("checkConsistency", () => {
 			id: "session-1",
 			agentName: "live-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(overstoryDir, "worktrees", "live-agent"),
 			branchName: "overstory/live-agent/test-123",
 			taskId: "test-123",
@@ -244,6 +247,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -267,6 +271,7 @@ describe("checkConsistency", () => {
 			id: "session-1",
 			agentName: "missing-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: missingWorktreePath,
 			branchName: "overstory/missing-agent/test-123",
 			taskId: "test-123",
@@ -280,6 +285,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -304,6 +310,7 @@ describe("checkConsistency", () => {
 			id: "session-1",
 			agentName: "agent-without-tmux",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath,
 			branchName: "overstory/agent-without-tmux/test-123",
 			taskId: "test-123",
@@ -317,6 +324,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -344,6 +352,7 @@ describe("checkConsistency", () => {
 			id: "session-1",
 			agentName: "consistent-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath,
 			branchName: "overstory/consistent-agent/test-123",
 			taskId: "test-123",
@@ -357,6 +366,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -418,6 +428,7 @@ describe("checkConsistency", () => {
 			id: "session-1",
 			agentName: "builder-1",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(overstoryDir, "worktrees", "builder-1"),
 			branchName: "overstory/builder-1/test-123",
 			taskId: "test-123",
@@ -431,6 +442,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 
@@ -438,6 +450,7 @@ describe("checkConsistency", () => {
 			id: "session-2",
 			agentName: "builder-2",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(overstoryDir, "worktrees", "builder-2"),
 			branchName: "overstory/builder-2/test-456",
 			taskId: "test-456",
@@ -451,6 +464,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -475,6 +489,7 @@ describe("checkConsistency", () => {
 				id: `session-builder-${i}`,
 				agentName: `builder-${i}`,
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: join(overstoryDir, "worktrees", `builder-${i}`),
 				branchName: `overstory/builder-${i}/test-${i}`,
 				taskId: `test-${i}`,
@@ -488,6 +503,7 @@ describe("checkConsistency", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 		}
@@ -496,6 +512,7 @@ describe("checkConsistency", () => {
 			id: "session-reviewer-1",
 			agentName: "reviewer-1",
 			capability: "reviewer",
+			runtime: "claude",
 			worktreePath: join(overstoryDir, "worktrees", "reviewer-1"),
 			branchName: "overstory/reviewer-1/test-r1",
 			taskId: "test-r1",
@@ -509,6 +526,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
@@ -531,6 +549,7 @@ describe("checkConsistency", () => {
 				id: `session-builder-${i}`,
 				agentName: `builder-${i}`,
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: join(overstoryDir, "worktrees", `builder-${i}`),
 				branchName: `overstory/builder-${i}/test-${i}`,
 				taskId: `test-${i}`,
@@ -544,6 +563,7 @@ describe("checkConsistency", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 
@@ -551,6 +571,7 @@ describe("checkConsistency", () => {
 				id: `session-reviewer-${i}`,
 				agentName: `reviewer-${i}`,
 				capability: "reviewer",
+				runtime: "claude",
 				worktreePath: join(overstoryDir, "worktrees", `reviewer-${i}`),
 				branchName: `overstory/reviewer-${i}/test-r${i}`,
 				taskId: `test-r${i}`,
@@ -564,6 +585,7 @@ describe("checkConsistency", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 		}
@@ -595,6 +617,7 @@ describe("checkConsistency", () => {
 			id: "session-builder-1",
 			agentName: "builder-1",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(overstoryDir, "worktrees", "builder-1"),
 			branchName: "overstory/builder-1/test-1",
 			taskId: "test-1",
@@ -608,6 +631,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 
@@ -615,6 +639,7 @@ describe("checkConsistency", () => {
 			id: "session-reviewer-1",
 			agentName: "reviewer-1",
 			capability: "reviewer",
+			runtime: "claude",
 			worktreePath: join(overstoryDir, "worktrees", "reviewer-1"),
 			branchName: "overstory/reviewer-1/test-r1",
 			taskId: "test-r1",
@@ -628,6 +653,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 
@@ -636,6 +662,7 @@ describe("checkConsistency", () => {
 			id: "session-builder-2",
 			agentName: "builder-2",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(overstoryDir, "worktrees", "builder-2"),
 			branchName: "overstory/builder-2/test-2",
 			taskId: "test-2",
@@ -649,6 +676,7 @@ describe("checkConsistency", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		});
 		store.close();
