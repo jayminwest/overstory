@@ -113,8 +113,17 @@ export class GooseRuntime implements AgentRuntime {
 	 * @returns Readiness phase
 	 */
 	detectReady(paneContent: string): ReadyState {
-		// Goose prompt: "( O)> " or variants with the goose character
-		if (/[>❯]\s*$/.test(paneContent) || paneContent.includes("Goose")) {
+		const lower = paneContent.toLowerCase();
+
+		// Prompt indicator: ">" or "❯" at end of a line
+		const hasPrompt = /[>❯]\s*$/.test(paneContent);
+
+		// Branding indicator: "goose" or the goose emoji "( O)" in pane content
+		const hasBranding = lower.includes("goose") || paneContent.includes("( O)");
+
+		// Both required (AND logic) to prevent premature ready detection
+		// during startup messages like "Loading Goose..."
+		if (hasPrompt && hasBranding) {
 			return { phase: "ready" };
 		}
 		return { phase: "loading" };

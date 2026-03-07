@@ -119,9 +119,20 @@ describe("AmpRuntime", () => {
 		expect(await file.exists()).toBe(false);
 	});
 
-	it("detectReady recognizes amp prompt", () => {
+	it("detectReady requires both prompt AND branding (AND logic)", () => {
+		// Both prompt and branding → ready
 		expect(runtime.detectReady("some output\namp> ").phase).toBe("ready");
-		expect(runtime.detectReady("amp v1.0.0").phase).toBe("ready");
+		expect(runtime.detectReady("amp v1.0.0\n> ").phase).toBe("ready");
+		expect(runtime.detectReady("AMP CLI\n> ").phase).toBe("ready");
+
+		// Prompt only (no branding) → loading
+		expect(runtime.detectReady("some output\n> ").phase).toBe("loading");
+
+		// Branding only (no prompt) → loading
+		expect(runtime.detectReady("amp v1.0.0").phase).toBe("loading");
+		expect(runtime.detectReady("amp v1.2.3 starting...").phase).toBe("loading");
+
+		// Neither → loading
 		expect(runtime.detectReady("Initializing...").phase).toBe("loading");
 	});
 

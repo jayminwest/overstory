@@ -92,9 +92,20 @@ describe("GooseRuntime", () => {
 		expect(await file.exists()).toBe(false);
 	});
 
-	it("detectReady recognizes goose prompt", () => {
-		expect(runtime.detectReady("thinking...\n> ").phase).toBe("ready");
-		expect(runtime.detectReady("Goose v1.2.3").phase).toBe("ready");
+	it("detectReady requires both prompt AND branding (AND logic)", () => {
+		// Both prompt and branding → ready
+		expect(runtime.detectReady("Goose v1.2.3\n> ").phase).toBe("ready");
+		expect(runtime.detectReady("goose-agent\n❯ ").phase).toBe("ready");
+		expect(runtime.detectReady("( O) ready\n> ").phase).toBe("ready");
+
+		// Prompt only (no branding) → loading
+		expect(runtime.detectReady("thinking...\n> ").phase).toBe("loading");
+
+		// Branding only (no prompt) → loading
+		expect(runtime.detectReady("Goose v1.2.3").phase).toBe("loading");
+		expect(runtime.detectReady("Loading Goose...").phase).toBe("loading");
+
+		// Neither → loading
 		expect(runtime.detectReady("Loading models...").phase).toBe("loading");
 	});
 

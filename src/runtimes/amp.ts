@@ -113,8 +113,17 @@ export class AmpRuntime implements AgentRuntime {
 	 * @returns Readiness phase
 	 */
 	detectReady(paneContent: string): ReadyState {
-		// Amp shows ">" or "amp>" when ready for input
-		if (/(?:amp)?>\s*$/.test(paneContent) || paneContent.includes("amp v")) {
+		const lower = paneContent.toLowerCase();
+
+		// Prompt indicator: ">" or "amp>" at end of a line
+		const hasPrompt = /(?:amp)?>\s*$/.test(paneContent);
+
+		// Branding indicator: "amp" keyword in pane content
+		const hasBranding = lower.includes("amp");
+
+		// Both required (AND logic) to prevent premature ready detection
+		// during startup messages like "amp v1.2.3 starting..."
+		if (hasPrompt && hasBranding) {
 			return { phase: "ready" };
 		}
 		return { phase: "loading" };
