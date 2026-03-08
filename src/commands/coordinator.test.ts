@@ -845,9 +845,10 @@ describe("startCoordinator", () => {
 		}
 	});
 
-	test("continues when waitForTuiReady times out but session is still alive", async () => {
-		// waitForTuiReady returns false (timeout) but session IS alive
-		const { deps } = makeDeps(
+	test("kills the coordinator and throws when waitForTuiReady times out but session is still alive", async () => {
+		// waitForTuiReady returns false (timeout) and the session is still alive,
+		// so startup should fail explicitly instead of sending the beacon blindly.
+		const { deps, calls } = makeDeps(
 			{ "overstory-test-project-coordinator": true },
 			undefined,
 			undefined,
@@ -866,8 +867,11 @@ describe("startCoordinator", () => {
 			Bun.sleep = originalSleep;
 		}
 
-		// Should NOT throw — session is alive, just slow TUI
-		expect(thrownError).toBeUndefined();
+		expect(thrownError).toBeInstanceOf(AgentError);
+		const agentErr = thrownError as AgentError;
+		expect(agentErr.message).toContain("did not become ready during startup");
+		expect(calls.killSession).toHaveLength(1);
+		expect(calls.killSession[0]?.name).toBe("overstory-test-project-coordinator");
 	});
 });
 

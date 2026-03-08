@@ -1249,6 +1249,39 @@ describe("waitForTuiReady", () => {
 		expect(sendKeysCalls[1]).toEqual(["tmux", "send-keys", "-t", "overstory-agent", "", "Enter"]);
 	});
 
+	test("retries typed bypass dialog action when the same dialog persists", async () => {
+		const sendKeysCalls: string[][] = [];
+		let captureCallCount = 0;
+		spawnSpy.mockImplementation((...args: unknown[]) => {
+			const cmd = args[0] as string[];
+			if (cmd[1] === "capture-pane") {
+				captureCallCount++;
+				if (captureCallCount <= 3) {
+					return mockSpawnResult(
+						"WARNING: Claude Code running in Bypass Permissions mode\n❯ 1. No, exit\n2. Yes, I accept",
+						"",
+						0,
+					);
+				}
+				return mockSpawnResult('Try "help"\nshift+tab', "", 0);
+			}
+			if (cmd[1] === "send-keys") {
+				sendKeysCalls.push(cmd);
+				return mockSpawnResult("", "", 0);
+			}
+			return mockSpawnResult("", "", 0);
+		});
+
+		const ready = await waitForTuiReady("overstory-agent", claudeDetectReady, 10_000, 500);
+
+		expect(ready).toBe(true);
+		expect(sendKeysCalls).toHaveLength(4);
+		expect(sendKeysCalls[0]).toEqual(["tmux", "send-keys", "-t", "overstory-agent", "2"]);
+		expect(sendKeysCalls[1]).toEqual(["tmux", "send-keys", "-t", "overstory-agent", "", "Enter"]);
+		expect(sendKeysCalls[2]).toEqual(["tmux", "send-keys", "-t", "overstory-agent", "2"]);
+		expect(sendKeysCalls[3]).toEqual(["tmux", "send-keys", "-t", "overstory-agent", "", "Enter"]);
+	});
+
 	test("handles trust dialog only once (trustHandled flag)", async () => {
 		const sendKeysCalls: string[][] = [];
 		let captureCallCount = 0;

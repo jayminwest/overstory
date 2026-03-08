@@ -42,8 +42,11 @@ import { createWorktree, rollbackWorktree } from "../worktree/manager.ts";
 import { spawnHeadlessAgent } from "../worktree/process.ts";
 import {
 	capturePaneContent,
+	checkSessionState,
 	createSession,
 	ensureTmuxAvailable,
+	isSessionAlive,
+	killSession,
 	sendKeys,
 	waitForTuiReady,
 } from "../worktree/tmux.ts";
@@ -1020,7 +1023,31 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				// Wait for Claude Code TUI to render before sending input.
 				// Polling capture-pane is more reliable than a fixed sleep because
 				// TUI init time varies by machine load and model state.
-				await waitForTuiReady(tmuxSessionName, (content) => runtime.detectReady(content));
+				const tuiReady = await waitForTuiReady(tmuxSessionName, (content) =>
+					runtime.detectReady(content),
+				);
+				if (!tuiReady) {
+					const alive = await isSessionAlive(tmuxSessionName);
+					store.updateState(name, "completed");
+
+					if (alive) {
+						await killSession(tmuxSessionName);
+						throw new AgentError(
+							`Agent tmux session "${tmuxSessionName}" did not become ready during startup. The runtime may still be waiting on an interactive dialog or initializing too slowly.`,
+							{ agentName: name },
+						);
+					}
+
+					const sessionState = await checkSessionState(tmuxSessionName);
+					const detail =
+						sessionState === "no_server"
+							? "The tmux server is no longer running. It may have crashed or been killed externally."
+							: "The agent process may have crashed or exited immediately before the TUI became ready.";
+					throw new AgentError(
+						`Agent tmux session "${tmuxSessionName}" died during startup. ${detail}`,
+						{ agentName: name },
+					);
+				}
 				// Buffer for the input handler to attach after initial render
 				await Bun.sleep(1_000);
 

@@ -477,7 +477,12 @@ export async function capturePaneContent(name: string, lines = 50): Promise<stri
  * Delegates all readiness detection to the provided `detectReady` callback,
  * making this function runtime-agnostic. The callback inspects pane content
  * and returns a ReadyState phase: "loading" (keep waiting), "dialog" (send
- * Enter to dismiss, then continue), or "ready" (return true).
+ * the requested action, then continue), or "ready" (return true).
+ *
+ * Dialog actions that type raw text (for example Claude Code's `type:2`
+ * bypass confirmation) are retried if the same dialog is still visible on
+ * later polls. This avoids one-shot startup flakes when tmux or the TUI drops
+ * the first keypress during initialization.
  *
  * @param name - Tmux session name to poll
  * @param detectReady - Callback that inspects pane content and returns ReadyState
@@ -492,18 +497,28 @@ export async function waitForTuiReady(
 	pollIntervalMs = 500,
 ): Promise<boolean> {
 	const maxAttempts = Math.ceil(timeoutMs / pollIntervalMs);
-	const handledDialogs = new Set<string>();
+	const handledDialogs = new Map<string, number>();
+	const typedDialogRetryPolls = Math.max(2, Math.ceil(1_000 / pollIntervalMs));
 
 	for (let i = 0; i < maxAttempts; i++) {
 		const content = await capturePaneContent(name);
 		if (content !== null) {
 			const state = detectReady(content);
 
-			if (state.phase === "dialog" && !handledDialogs.has(state.action)) {
-				await handleDialogAction(name, state.action, pollIntervalMs);
-				handledDialogs.add(state.action);
-				await Bun.sleep(pollIntervalMs);
-				continue;
+			if (state.phase === "dialog") {
+				const lastHandledAttempt = handledDialogs.get(state.action);
+				const shouldRetryTypedDialog =
+					state.action.startsWith("type:") &&
+					lastHandledAttempt !== undefined &&
+					i - lastHandledAttempt >= typedDialogRetryPolls;
+				const shouldHandleDialog = lastHandledAttempt === undefined || shouldRetryTypedDialog;
+
+				if (shouldHandleDialog) {
+					await handleDialogAction(name, state.action, pollIntervalMs);
+					handledDialogs.set(state.action, i);
+					await Bun.sleep(pollIntervalMs);
+					continue;
+				}
 			}
 
 			if (state.phase === "ready") {
