@@ -31,6 +31,7 @@ const AGENT_DEF_FILES = [
 	"orchestrator.md",
 	"reviewer.md",
 	"scout.md",
+	"verifier.md",
 ];
 
 /** Resolve the source agents directory (same logic as init.ts). */
