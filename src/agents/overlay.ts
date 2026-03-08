@@ -55,7 +55,7 @@ function formatMulchExpertise(expertise: string | undefined): string {
 }
 
 /** Capabilities that are read-only and should not get quality gates for commits/tests/lint. */
-const READ_ONLY_CAPABILITIES = new Set(["scout", "reviewer"]);
+const READ_ONLY_CAPABILITIES = new Set(["scout", "reviewer", "verifier"]);
 
 /**
  * The skip-scout section injected into lead overlays when --skip-scout is passed.

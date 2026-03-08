@@ -161,6 +161,7 @@ export const SUPPORTED_CAPABILITIES = [
 	"scout",
 	"builder",
 	"reviewer",
+	"verifier",
 	"lead",
 	"merger",
 	"coordinator",

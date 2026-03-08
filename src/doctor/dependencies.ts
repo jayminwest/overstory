@@ -79,8 +79,110 @@ export const checkDependencies: DoctorCheckFn = async (
 		}
 	}
 
+	// agent-browser: optional dependency for verifier agents
+	const agentBrowserChecks = await checkAgentBrowser();
+	checks.push(...agentBrowserChecks);
+
 	return checks;
 };
+
+/** Minimum agent-browser version required for verifier agents. */
+const AGENT_BROWSER_MIN_VERSION = "0.9.0";
+
+/**
+ * Compare two semver version strings.
+ * Returns true if version >= minVersion.
+ */
+function isVersionSufficient(version: string, minVersion: string): boolean {
+	const parse = (v: string) => v.split(".").map((n) => Number.parseInt(n, 10));
+	const current = parse(version);
+	const min = parse(minVersion);
+	for (let i = 0; i < Math.max(current.length, min.length); i++) {
+		const c = current[i] ?? 0;
+		const m = min[i] ?? 0;
+		if (c > m) return true;
+		if (c < m) return false;
+	}
+	return true;
+}
+
+/**
+ * Check agent-browser availability and version.
+ * agent-browser is optional — only needed for projects using browser verification.
+ * Returns warn (not fail) if missing or outdated.
+ */
+async function checkAgentBrowser(): Promise<DoctorCheck[]> {
+	const checks: DoctorCheck[] = [];
+
+	try {
+		const proc = Bun.spawn(["agent-browser", "--version"], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const exitCode = await proc.exited;
+
+		if (exitCode !== 0) {
+			checks.push({
+				name: "agent-browser availability",
+				category: "dependencies",
+				status: "warn",
+				message:
+					"agent-browser not found. Install with: npm install -g agent-browser && agent-browser install",
+				details: [
+					"agent-browser is optional — only needed for projects using browser verification (verifier agents).",
+					"Install: npm install -g agent-browser && agent-browser install",
+				],
+				fixable: true,
+			});
+			return checks;
+		}
+
+		const stdout = await new Response(proc.stdout).text();
+		const versionLine = stdout.trim().split("\n")[0] ?? "";
+		// Extract version number from output (e.g., "agent-browser 0.9.3" or "0.9.3")
+		const versionMatch = versionLine.match(/(\d+\.\d+\.\d+)/);
+		const version = versionMatch?.[1] ?? "";
+
+		if (version && !isVersionSufficient(version, AGENT_BROWSER_MIN_VERSION)) {
+			checks.push({
+				name: "agent-browser availability",
+				category: "dependencies",
+				status: "warn",
+				message: `agent-browser version ${version} found, >=${AGENT_BROWSER_MIN_VERSION} required`,
+				details: [
+					`Current version: ${version}`,
+					`Minimum required: ${AGENT_BROWSER_MIN_VERSION}`,
+					"Upgrade: npm install -g agent-browser@latest",
+				],
+				fixable: true,
+			});
+			return checks;
+		}
+
+		checks.push({
+			name: "agent-browser availability",
+			category: "dependencies",
+			status: "pass",
+			message: "agent-browser is available",
+			details: [versionLine],
+		});
+	} catch {
+		checks.push({
+			name: "agent-browser availability",
+			category: "dependencies",
+			status: "warn",
+			message:
+				"agent-browser not found. Install with: npm install -g agent-browser && agent-browser install",
+			details: [
+				"agent-browser is optional — only needed for projects using browser verification (verifier agents).",
+				"Install: npm install -g agent-browser && agent-browser install",
+			],
+			fixable: true,
+		});
+	}
+
+	return checks;
+}
 
 /**
  * Probe whether bd's Dolt database backend is functional.
