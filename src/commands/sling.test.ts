@@ -22,6 +22,7 @@ import {
 	extractMulchRecordIds,
 	generateAgentName,
 	getCurrentBranch,
+	getSharedWritableDirs,
 	inferDomainsFromFiles,
 	isRunningAsRoot,
 	parentHasScouts,
@@ -340,6 +341,17 @@ describe("shouldShowScoutWarning", () => {
 
 	test("returns true with empty sessions and a parent (no scouts ever spawned)", () => {
 		expect(shouldShowScoutWarning("builder", "lead-alpha", empty, false, false)).toBe(true);
+	});
+});
+
+describe("getSharedWritableDirs", () => {
+	test("returns only .overstory for non-lead agents", () => {
+		expect(getSharedWritableDirs("/repo", "builder")).toEqual(["/repo/.overstory"]);
+		expect(getSharedWritableDirs("/repo", "scout")).toEqual(["/repo/.overstory"]);
+	});
+
+	test("includes canonical .git for lead agents", () => {
+		expect(getSharedWritableDirs("/repo", "lead")).toEqual(["/repo/.overstory", "/repo/.git"]);
 	});
 });
 

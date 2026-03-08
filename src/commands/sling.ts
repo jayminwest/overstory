@@ -275,6 +275,27 @@ export function shouldShowScoutWarning(
 }
 
 /**
+ * Resolve which canonical repo directories should be writable to an
+ * interactive agent runtime in addition to its worktree sandbox.
+ *
+ * All interactive agents need `.overstory` so they can access shared mail,
+ * metrics, and session state. Only `lead` agents need canonical `.git`
+ * because they can spawn child worktrees from inside the runtime.
+ *
+ * @param projectRoot - Absolute path to the canonical repository root
+ * @param capability - Capability being launched
+ */
+export function getSharedWritableDirs(projectRoot: string, capability: string): string[] {
+	const sharedWritableDirs = [join(projectRoot, ".overstory")];
+
+	if (capability === "lead") {
+		sharedWritableDirs.push(join(projectRoot, ".git"));
+	}
+
+	return sharedWritableDirs;
+}
+
+/**
  * Check if any active agent is already working on the given task ID.
  * Returns the agent name if locked, or null if the task is free.
  *
@@ -943,10 +964,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					model: resolvedModel.model,
 					permissionMode: "bypass",
 					cwd: worktreePath,
-					sharedWritableDirs: [
-						join(config.project.root, ".overstory"),
-						join(config.project.root, ".git"),
-					],
+					sharedWritableDirs: getSharedWritableDirs(config.project.root, capability),
 					env: {
 						...runtime.buildEnv(resolvedModel),
 						OVERSTORY_AGENT_NAME: name,
