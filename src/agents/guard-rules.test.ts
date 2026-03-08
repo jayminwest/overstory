@@ -343,6 +343,10 @@ describe("SAFE_BASH_PREFIXES", () => {
 		expect(SAFE_BASH_PREFIXES).toContain("mulch ");
 	});
 
+	test("includes agent-browser CLI 'agent-browser '", () => {
+		expect(SAFE_BASH_PREFIXES).toContain("agent-browser ");
+	});
+
 	test("includes read-only git commands", () => {
 		expect(SAFE_BASH_PREFIXES).toContain("git status");
 		expect(SAFE_BASH_PREFIXES).toContain("git log");
@@ -368,5 +372,7 @@ describe("SAFE_BASH_PREFIXES", () => {
 		expect(isSafe("git status")).toBe(true);
 		expect(isSafe("git log --oneline")).toBe(true);
 		expect(isSafe("git diff HEAD")).toBe(true);
+		expect(isSafe("agent-browser open http://localhost:3000 --session test")).toBe(true);
+		expect(isSafe("agent-browser snapshot -i --json")).toBe(true);
 	});
 });

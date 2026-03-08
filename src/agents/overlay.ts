@@ -55,7 +55,7 @@ function formatMulchExpertise(expertise: string | undefined): string {
 }
 
 /** Capabilities that are read-only and should not get quality gates for commits/tests/lint. */
-const READ_ONLY_CAPABILITIES = new Set(["scout", "reviewer"]);
+const READ_ONLY_CAPABILITIES = new Set(["scout", "reviewer", "verifier"]);
 
 /**
  * The skip-scout section injected into lead overlays when --skip-scout is passed.
@@ -172,6 +172,42 @@ export function formatQualityGatesCapabilities(gates: QualityGate[] | undefined)
 	return resolveGates(gates)
 		.map((g) => `  - \`${g.command}\` (${g.description})`)
 		.join("\n");
+}
+
+/**
+ * Format the verification config section for verifier agent overlays.
+ * Returns empty string when not applicable (non-verifier or no config).
+ */
+function formatVerificationConfig(config: OverlayConfig): string {
+	if (config.capability !== "verifier" || !config.verification) {
+		return "";
+	}
+
+	const v = config.verification;
+	const sections: string[] = [
+		"## Verification Config",
+		"",
+		"Browser verification settings for this task:",
+		"",
+	];
+
+	if (v.devServerCommand) {
+		sections.push(`- **Dev server command:** \`${v.devServerCommand}\``);
+	}
+	if (v.baseUrl) {
+		sections.push(`- **Base URL:** ${v.baseUrl}`);
+	}
+	if (v.port !== undefined) {
+		sections.push(`- **Port:** ${v.port}`);
+	}
+	if (v.routes && v.routes.length > 0) {
+		sections.push(`- **Routes to verify:** ${v.routes.map((r) => `\`${r}\``).join(", ")}`);
+	}
+	if (v.viewports && v.viewports.length > 0) {
+		sections.push(`- **Viewports:** ${v.viewports.join(", ")}`);
+	}
+
+	return sections.join("\n");
 }
 
 function formatQualityGates(config: OverlayConfig): string {
@@ -321,6 +357,7 @@ export async function generateOverlay(config: OverlayConfig): Promise<string> {
 		"{{TRACKER_CLI}}": config.trackerCli ?? "sd",
 		"{{TRACKER_NAME}}": config.trackerName ?? "seeds",
 		"{{INSTRUCTION_PATH}}": config.instructionPath ?? ".claude/CLAUDE.md",
+		"{{VERIFICATION_CONFIG}}": formatVerificationConfig(config),
 	};
 
 	let result = template;

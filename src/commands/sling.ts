@@ -1080,3 +1080,22 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 		store.close();
 	}
 }
+
+/**
+ * Patterns that identify frontend files by extension or directory path.
+ * Used by lead agents to determine whether a verifier should be spawned.
+ */
+const FRONTEND_PATTERNS = [
+	/\.(tsx|jsx|svelte|vue|html|css|scss|less)$/,
+	/^src\/(app|pages|components|views|layouts|routes)\//,
+	/^public\//,
+	/^static\//,
+];
+
+/**
+ * Check whether a list of file paths includes frontend files.
+ * Used by lead agents to decide whether to dispatch a verifier agent.
+ */
+export function hasFrontendFiles(files: string[]): boolean {
+	return files.some((f) => FRONTEND_PATTERNS.some((p) => p.test(f)));
+}

@@ -974,3 +974,72 @@ describe("quality gate placeholders in base definitions", () => {
 		expect(output).not.toContain("{{QUALITY_GATE");
 	});
 });
+
+describe("VERIFICATION_CONFIG template variable", () => {
+	test("is empty when verification config is absent", async () => {
+		const config = makeConfig({ capability: "verifier" });
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("## Verification Config");
+	});
+
+	test("is empty for non-verifier capability even with verification config", async () => {
+		const config = makeConfig({
+			capability: "builder",
+			verification: {
+				devServerCommand: "bun run dev",
+				baseUrl: "http://localhost:3000",
+				port: 3000,
+				routes: ["/"],
+				viewports: ["1280x720"],
+			},
+		});
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("## Verification Config");
+	});
+
+	test("is populated for verifier capability with config", async () => {
+		const config = makeConfig({
+			capability: "verifier",
+			verification: {
+				devServerCommand: "bun run dev",
+				baseUrl: "http://localhost:3000",
+				port: 3000,
+				routes: ["/", "/login", "/dashboard"],
+				viewports: ["1280x720", "375x812"],
+			},
+		});
+		const output = await generateOverlay(config);
+		expect(output).toContain("## Verification Config");
+		expect(output).toContain("`bun run dev`");
+		expect(output).toContain("http://localhost:3000");
+		expect(output).toContain("3000");
+		expect(output).toContain("`/`");
+		expect(output).toContain("`/login`");
+		expect(output).toContain("`/dashboard`");
+		expect(output).toContain("1280x720");
+		expect(output).toContain("375x812");
+	});
+
+	test("renders correctly with minimal verification config", async () => {
+		const config = makeConfig({
+			capability: "verifier",
+			verification: {
+				baseUrl: "http://localhost:8080",
+			},
+		});
+		const output = await generateOverlay(config);
+		expect(output).toContain("## Verification Config");
+		expect(output).toContain("http://localhost:8080");
+	});
+
+	test("placeholder is replaced (not left as raw template)", async () => {
+		const config = makeConfig({
+			capability: "verifier",
+			verification: {
+				devServerCommand: "npm run dev",
+			},
+		});
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("{{VERIFICATION_CONFIG}}");
+	});
+});

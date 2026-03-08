@@ -22,6 +22,8 @@ Requires [Bun](https://bun.sh) v1.0+, git, and tmux. At least one supported agen
 - [Sapling](https://github.com/jayminwest/sapling) (`sp` CLI)
 - [OpenCode](https://opencode.ai) (`opencode` CLI)
 
+Optional: [agent-browser](https://github.com/vercel-labs/agent-browser) (`agent-browser` CLI) for browser-based UI verification. See [docs/browser-verification.md](docs/browser-verification.md).
+
 ```bash
 bun install -g @os-eco/overstory-cli
 ```
@@ -207,6 +209,7 @@ Orchestrator (multi-repo coordinator of coordinators)
 | **Scout** | Read-only exploration and research | Read-only |
 | **Builder** | Implementation and code changes | Read-write |
 | **Reviewer** | Validation and code review | Read-only |
+| **Verifier** | Frontend/UI validation via browser ([agent-browser](https://github.com/vercel-labs/agent-browser)) | Read-only |
 | **Lead** | Team coordination, can spawn sub-workers | Read-write |
 | **Merger** | Branch merge specialist | Read-write |
 | **Monitor** | Tier 2 continuous fleet patrol — ongoing health monitoring | Read-only |

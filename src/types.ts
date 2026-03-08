@@ -62,12 +62,27 @@ export interface QualityGate {
 	description: string;
 }
 
+/** Browser verification settings for verifier agents. */
+export interface VerificationConfig {
+	/** Command to start the dev server (e.g., "bun run dev"). */
+	devServerCommand?: string;
+	/** Base URL of the dev server (default: "http://localhost:3000"). */
+	baseUrl?: string;
+	/** Port to use (default: 3000). */
+	port?: number;
+	/** Routes to verify (e.g., ["/", "/login", "/dashboard"]). */
+	routes?: string[];
+	/** Viewport sizes to test (e.g., ["1280x720", "375x812"]). */
+	viewports?: string[];
+}
+
 export interface OverstoryConfig {
 	project: {
 		name: string;
 		root: string; // Absolute path to target repo
 		canonicalBranch: string; // "main" | "develop"
 		qualityGates?: QualityGate[];
+		verification?: VerificationConfig;
 	};
 	agents: {
 		manifestPath: string; // Path to agent-manifest.json
@@ -161,6 +176,7 @@ export const SUPPORTED_CAPABILITIES = [
 	"scout",
 	"builder",
 	"reviewer",
+	"verifier",
 	"lead",
 	"merger",
 	"coordinator",
@@ -369,6 +385,8 @@ export interface OverlayConfig {
 	qualityGates?: QualityGate[];
 	/** Relative path to the instruction file within the worktree (runtime-specific). Defaults to .claude/CLAUDE.md. */
 	instructionPath?: string;
+	/** Browser verification config for verifier agents. */
+	verification?: VerificationConfig;
 }
 
 // === Merge Queue ===

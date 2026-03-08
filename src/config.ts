@@ -5,6 +5,7 @@ import type {
 	OverstoryConfig,
 	QualityGate,
 	TaskTrackerBackend,
+	VerificationConfig,
 } from "./types.ts";
 
 // Module-level project root override (set by --project global flag)
@@ -112,6 +113,15 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 			},
 		},
 	},
+};
+
+/** Default verification config applied when verification section exists but is partial. */
+export const DEFAULT_VERIFICATION_CONFIG: Required<VerificationConfig> = {
+	devServerCommand: "",
+	baseUrl: "http://localhost:3000",
+	port: 3000,
+	routes: ["/"],
+	viewports: ["1280x720"],
 };
 
 const CONFIG_FILENAME = "config.yaml";
@@ -972,6 +982,14 @@ export async function loadConfig(projectRoot: string): Promise<OverstoryConfig> 
 
 	// Ensure project.root is always set to the resolved project root
 	merged.project.root = resolvedRoot;
+
+	// Merge verification defaults when section is present but partial
+	if (merged.project.verification) {
+		merged.project.verification = {
+			...DEFAULT_VERIFICATION_CONFIG,
+			...merged.project.verification,
+		};
+	}
 
 	validateConfig(merged);
 

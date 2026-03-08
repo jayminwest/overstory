@@ -236,4 +236,27 @@ describe("checkDependencies", () => {
 		expect(ovCheck).toBeDefined();
 		expect(ovCheck?.category).toBe("dependencies");
 	});
+
+	test("includes agent-browser availability check", async () => {
+		const checks = await checkDependencies(mockConfig, "/tmp/.overstory");
+		const abCheck = checks.find((c) => c.name === "agent-browser availability");
+		expect(abCheck).toBeDefined();
+		expect(abCheck?.category).toBe("dependencies");
+		// agent-browser is optional — should never be "fail"
+		expect(abCheck?.status).not.toBe("fail");
+	});
+
+	test("agent-browser check has required DoctorCheck fields", async () => {
+		const checks = await checkDependencies(mockConfig, "/tmp/.overstory");
+		const abCheck = checks.find((c) => c.name === "agent-browser availability");
+		expect(abCheck).toBeDefined();
+		if (abCheck) {
+			expect(abCheck.category).toBe("dependencies");
+			expect(["pass", "warn"]).toContain(abCheck.status);
+			expect(typeof abCheck.message).toBe("string");
+			if (abCheck.details) {
+				expect(abCheck.details).toBeArray();
+			}
+		}
+	});
 });

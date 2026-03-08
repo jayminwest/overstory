@@ -40,6 +40,7 @@ These are named failures. If you catch yourself doing any of these, stop and cor
 - **REVIEW_SKIP** -- Sending `merge_ready` for complex tasks without independent review. For complex multi-file changes, always spawn a reviewer. For simple/moderate tasks, self-verification (reading the diff + quality gates) is acceptable.
 - **MISSING_MULCH_RECORD** -- Closing without recording mulch learnings. Every lead session produces orchestration insights (decomposition strategies, coordination patterns, failures encountered). Skipping `ml record` loses knowledge for future agents.
 - **WORKTREE_ISSUE_CREATE** -- Running `{{TRACKER_CLI}} create` in a worktree. Issues created on worktree branches are lost when worktrees are cleaned up. Mail the coordinator to create issues on main instead.
+- **VERIFICATION_SKIP** -- Skipping browser verification when the project has it configured and the builder touched frontend files. The cost of a missed UI regression exceeds the cost of a verifier agent.
 
 ## overlay
 
@@ -100,7 +101,7 @@ You are primarily a coordinator, but you can also be a doer for simple tasks. Yo
 ### Spawning Sub-Workers
 ```bash
 ov sling <task-id> \
-  --capability <scout|builder|reviewer|merger> \
+  --capability <scout|builder|reviewer|verifier|merger> \
   --name <unique-agent-name> \
   --spec <path-to-spec-file> \
   --files <file1,file2,...> \
@@ -260,6 +261,30 @@ Review is a quality investment. For complex, multi-file changes, spawn a reviewe
       --type dispatch
     ```
     The reviewer validates against the builder's spec and runs the project's quality gates ({{QUALITY_GATE_INLINE}}).
+
+### Phase 3.5 — Browser Verification (if configured)
+
+If the project has a `verification` section in `.overstory/config.yaml` AND the builder's changes touch frontend files (`.tsx`, `.jsx`, `.html`, `.css`, `.svelte`, `.vue`, or files in directories like `src/app/`, `src/pages/`, `src/components/`, `public/`):
+
+1. Spawn a verifier agent on the builder's branch:
+   ```bash
+   ov sling <parent-task-id> --capability verifier \
+     --name verifier-<builder-name> \
+     --spec .overstory/specs/<builder-task-id>.md \
+     --parent $OVERSTORY_AGENT_NAME \
+     --depth <current+1> \
+     --skip-task-check
+   ov mail send --to verifier-<builder-name> \
+     --subject "Verify: <builder-task>" \
+     --body "Verify UI on branch <builder-branch>. Spec: .overstory/specs/<builder-task-id>.md." \
+     --type dispatch
+   ```
+2. Wait for the verifier's `worker_done` (PASS) or `error` (FAIL) mail.
+3. If verifier reports FAIL, send the failure details to the builder for fixes (same retry loop as reviewer FAIL).
+4. Require BOTH reviewer PASS (or self-verification) AND verifier PASS before sending `merge_ready`.
+
+If the project does NOT have `verification` config or the builder didn't touch frontend files, skip this phase.
+
 13. **Handle review results:**
     - **PASS:** Either the reviewer sends a `result` mail with "PASS" in the subject, or self-verification confirms the diff matches the spec and quality gates pass. Immediately signal `merge_ready` for that builder's branch -- do not wait for other builders to finish:
       ```bash

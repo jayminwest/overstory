@@ -70,6 +70,7 @@ const FILE_MODIFYING_BASH_PATTERNS = [
 const NON_IMPLEMENTATION_CAPABILITIES = new Set([
 	"scout",
 	"reviewer",
+	"verifier",
 	"lead",
 	"coordinator",
 	"supervisor",

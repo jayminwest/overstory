@@ -26,6 +26,7 @@ import type { HooksDef } from "./types.ts";
 const NON_IMPLEMENTATION_CAPABILITIES = new Set([
 	"scout",
 	"reviewer",
+	"verifier",
 	"lead",
 	"coordinator",
 	"supervisor",

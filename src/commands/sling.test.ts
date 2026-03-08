@@ -22,6 +22,7 @@ import {
 	extractMulchRecordIds,
 	generateAgentName,
 	getCurrentBranch,
+	hasFrontendFiles,
 	inferDomainsFromFiles,
 	isRunningAsRoot,
 	parentHasScouts,
@@ -1358,5 +1359,74 @@ describe("getCurrentBranch", () => {
 		} finally {
 			await cleanupTempDir(tmpDir);
 		}
+	});
+});
+
+describe("hasFrontendFiles", () => {
+	test("returns false for empty file list", () => {
+		expect(hasFrontendFiles([])).toBe(false);
+	});
+
+	test("returns false for pure backend files", () => {
+		expect(
+			hasFrontendFiles([
+				"src/config.ts",
+				"src/commands/sling.ts",
+				"src/mail/store.ts",
+				"package.json",
+			]),
+		).toBe(false);
+	});
+
+	test("returns true for .tsx files", () => {
+		expect(hasFrontendFiles(["src/App.tsx"])).toBe(true);
+	});
+
+	test("returns true for .jsx files", () => {
+		expect(hasFrontendFiles(["components/Button.jsx"])).toBe(true);
+	});
+
+	test("returns true for .html files", () => {
+		expect(hasFrontendFiles(["index.html"])).toBe(true);
+	});
+
+	test("returns true for .css files", () => {
+		expect(hasFrontendFiles(["styles/main.css"])).toBe(true);
+	});
+
+	test("returns true for .svelte files", () => {
+		expect(hasFrontendFiles(["src/routes/+page.svelte"])).toBe(true);
+	});
+
+	test("returns true for .vue files", () => {
+		expect(hasFrontendFiles(["src/components/Header.vue"])).toBe(true);
+	});
+
+	test("returns true for .scss files", () => {
+		expect(hasFrontendFiles(["src/styles/theme.scss"])).toBe(true);
+	});
+
+	test("returns true for files in src/components/", () => {
+		expect(hasFrontendFiles(["src/components/Modal.ts"])).toBe(true);
+	});
+
+	test("returns true for files in src/pages/", () => {
+		expect(hasFrontendFiles(["src/pages/index.ts"])).toBe(true);
+	});
+
+	test("returns true for files in src/app/", () => {
+		expect(hasFrontendFiles(["src/app/layout.ts"])).toBe(true);
+	});
+
+	test("returns true for files in public/", () => {
+		expect(hasFrontendFiles(["public/favicon.ico"])).toBe(true);
+	});
+
+	test("returns true for files in static/", () => {
+		expect(hasFrontendFiles(["static/logo.png"])).toBe(true);
+	});
+
+	test("returns true for mixed backend and frontend files", () => {
+		expect(hasFrontendFiles(["src/config.ts", "src/App.tsx", "package.json"])).toBe(true);
 	});
 });

@@ -94,4 +94,5 @@ export const SAFE_BASH_PREFIXES = [
 	"git blame",
 	"git branch",
 	"mulch ",
+	"agent-browser ",
 ];

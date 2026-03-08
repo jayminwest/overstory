@@ -1205,3 +1205,94 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_QUALITY_GATES[2]?.name).toBe("Typecheck");
 	});
 });
+
+describe("verification config", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-test-"));
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tempDir);
+	});
+
+	async function writeConfig(yaml: string): Promise<void> {
+		await mkdir(join(tempDir, ".overstory"), { recursive: true });
+		await Bun.write(join(tempDir, ".overstory", "config.yaml"), yaml);
+	}
+
+	test("verification is undefined when not configured", async () => {
+		await writeConfig("project:\n  name: test\n  root: /tmp\n  canonicalBranch: main\n");
+		const config = await loadConfig(tempDir);
+		expect(config.project.verification).toBeUndefined();
+	});
+
+	test("verification config is populated with defaults when section exists", async () => {
+		await writeConfig(
+			[
+				"project:",
+				"  name: test",
+				"  root: /tmp",
+				"  canonicalBranch: main",
+				"  verification:",
+				'    devServerCommand: "bun run dev"',
+			].join("\n"),
+		);
+		const config = await loadConfig(tempDir);
+		expect(config.project.verification).toBeDefined();
+		expect(config.project.verification?.devServerCommand).toBe("bun run dev");
+		expect(config.project.verification?.baseUrl).toBe("http://localhost:3000");
+		expect(config.project.verification?.port).toBe(3000);
+		expect(config.project.verification?.routes).toEqual(["/"]);
+		expect(config.project.verification?.viewports).toEqual(["1280x720"]);
+	});
+
+	test("verification config merges partial values with defaults", async () => {
+		await writeConfig(
+			[
+				"project:",
+				"  name: test",
+				"  root: /tmp",
+				"  canonicalBranch: main",
+				"  verification:",
+				'    baseUrl: "http://localhost:8080"',
+				"    port: 8080",
+			].join("\n"),
+		);
+		const config = await loadConfig(tempDir);
+		expect(config.project.verification?.baseUrl).toBe("http://localhost:8080");
+		expect(config.project.verification?.port).toBe(8080);
+		// Defaults fill in unspecified fields
+		expect(config.project.verification?.routes).toEqual(["/"]);
+		expect(config.project.verification?.viewports).toEqual(["1280x720"]);
+	});
+
+	test("verification config with full values overrides all defaults", async () => {
+		await writeConfig(
+			[
+				"project:",
+				"  name: test",
+				"  root: /tmp",
+				"  canonicalBranch: main",
+				"  verification:",
+				'    devServerCommand: "npm run dev"',
+				'    baseUrl: "http://localhost:4000"',
+				"    port: 4000",
+				"    routes:",
+				'      - "/"',
+				'      - "/login"',
+				'      - "/dashboard"',
+				"    viewports:",
+				'      - "1920x1080"',
+				'      - "375x812"',
+			].join("\n"),
+		);
+		const config = await loadConfig(tempDir);
+		expect(config.project.verification?.devServerCommand).toBe("npm run dev");
+		expect(config.project.verification?.baseUrl).toBe("http://localhost:4000");
+		expect(config.project.verification?.port).toBe(4000);
+		expect(config.project.verification?.routes).toEqual(["/", "/login", "/dashboard"]);
+		expect(config.project.verification?.viewports).toEqual(["1920x1080", "375x812"]);
+	});
+});
