@@ -235,6 +235,20 @@ describe("ClaudeRuntime", () => {
 			expect(state).toEqual({ phase: "dialog", action: "Enter" });
 		});
 
+		test("returns dialog for bypass permissions confirmation", () => {
+			const state = runtime.detectReady(
+				"WARNING: Claude Code running in Bypass Permissions mode\n❯ 1. No, exit\n2. Yes, I accept",
+			);
+			expect(state).toEqual({ phase: "dialog", action: "type:2" });
+		});
+
+		test("bypass permissions confirmation takes precedence over ready indicators", () => {
+			const state = runtime.detectReady(
+				"WARNING: Claude Code running in Bypass Permissions mode\n❯ 1. No, exit\n2. Yes, I accept\nbypass permissions",
+			);
+			expect(state).toEqual({ phase: "dialog", action: "type:2" });
+		});
+
 		test("trust dialog takes precedence over ready indicators", () => {
 			const state = runtime.detectReady("trust this folder\n\u276f\nbypass permissions");
 			expect(state).toEqual({ phase: "dialog", action: "Enter" });
@@ -596,6 +610,14 @@ describe("ClaudeRuntime integration: detectReady matches pre-refactor tmux behav
 		const state = runtime.detectReady("Do you trust this folder? trust this folder");
 		expect(state.phase).toBe("dialog");
 		expect((state as { phase: "dialog"; action: string }).action).toBe("Enter");
+	});
+
+	test("dialog: bypass permissions confirmation", () => {
+		const state = runtime.detectReady(
+			"WARNING: Claude Code running in Bypass Permissions mode\n❯ 1. No, exit\n2. Yes, I accept",
+		);
+		expect(state.phase).toBe("dialog");
+		expect((state as { phase: "dialog"; action: string }).action).toBe("type:2");
 	});
 });
 

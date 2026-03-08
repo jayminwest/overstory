@@ -144,6 +144,17 @@ export class ClaudeRuntime implements AgentRuntime {
 	 * @returns Current readiness phase
 	 */
 	detectReady(paneContent: string): ReadyState {
+		// Claude Code v2.1.71+ shows a dedicated bypass confirmation screen.
+		// It already contains both a prompt marker and the phrase "bypass permissions",
+		// so it must be detected before the normal ready heuristics.
+		if (
+			paneContent.includes("WARNING: Claude Code running in Bypass Permissions mode") &&
+			paneContent.includes("1. No, exit") &&
+			paneContent.includes("2. Yes, I accept")
+		) {
+			return { phase: "dialog", action: "type:2" };
+		}
+
 		// Trust dialog takes precedence — it replaces the normal TUI temporarily.
 		// The caller should send the action key to dismiss it.
 		if (paneContent.includes("trust this folder")) {

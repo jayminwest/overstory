@@ -19,6 +19,8 @@ export interface SpawnOpts {
 	appendSystemPromptFile?: string;
 	/** Working directory for the spawned process. */
 	cwd: string;
+	/** Additional directories that the runtime may need to write outside cwd. */
+	sharedWritableDirs?: string[];
 	/** Additional environment variables to pass to the spawned process. */
 	env: Record<string, string>;
 }

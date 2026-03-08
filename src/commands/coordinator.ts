@@ -476,7 +476,12 @@ async function startCoordinator(
 					{ agentName: COORDINATOR_NAME },
 				);
 			}
-			// Session is alive but TUI didn't render in time — proceed with warning
+			await tmux.killSession(tmuxSession);
+			store.updateState(COORDINATOR_NAME, "completed");
+			throw new AgentError(
+				`Coordinator tmux session "${tmuxSession}" did not become ready during startup. Claude Code may still be waiting on an interactive dialog or initializing too slowly.`,
+				{ agentName: COORDINATOR_NAME },
+			);
 		}
 		await Bun.sleep(1_000);
 

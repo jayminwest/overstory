@@ -151,6 +151,19 @@ describe("CodexRuntime", () => {
 			expect(cmd).not.toContain("This inline content should be ignored");
 		});
 
+		test("sharedWritableDirs are exposed with --add-dir", () => {
+			const opts: SpawnOpts = {
+				model: "gpt-5-codex",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				sharedWritableDirs: ["/project/.overstory", "/project/.git"],
+				env: {},
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--add-dir '/project/.overstory'");
+			expect(cmd).toContain("--add-dir '/project/.git'");
+		});
+
 		test("without appendSystemPrompt uses default AGENTS.md prompt", () => {
 			const opts: SpawnOpts = {
 				model: "gpt-5-codex",

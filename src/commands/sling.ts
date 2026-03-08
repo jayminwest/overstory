@@ -42,8 +42,11 @@ import { createWorktree, rollbackWorktree } from "../worktree/manager.ts";
 import { spawnHeadlessAgent } from "../worktree/process.ts";
 import {
 	capturePaneContent,
+	checkSessionState,
 	createSession,
 	ensureTmuxAvailable,
+	isSessionAlive,
+	killSession,
 	sendKeys,
 	waitForTuiReady,
 } from "../worktree/tmux.ts";
@@ -272,6 +275,27 @@ export function shouldShowScoutWarning(
 	if (noScoutCheck) return false;
 	if (skipScout) return false;
 	return !parentHasScouts(sessions, parentAgent);
+}
+
+/**
+ * Resolve which canonical repo directories should be writable to an
+ * interactive agent runtime in addition to its worktree sandbox.
+ *
+ * All interactive agents need `.overstory` so they can access shared mail,
+ * metrics, and session state. Only `lead` agents need canonical `.git`
+ * because they can spawn child worktrees from inside the runtime.
+ *
+ * @param projectRoot - Absolute path to the canonical repository root
+ * @param capability - Capability being launched
+ */
+export function getSharedWritableDirs(projectRoot: string, capability: string): string[] {
+	const sharedWritableDirs = [join(projectRoot, ".overstory")];
+
+	if (capability === "lead") {
+		sharedWritableDirs.push(join(projectRoot, ".git"));
+	}
+
+	return sharedWritableDirs;
 }
 
 /**
@@ -943,6 +967,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					model: resolvedModel.model,
 					permissionMode: "bypass",
 					cwd: worktreePath,
+					sharedWritableDirs: getSharedWritableDirs(config.project.root, capability),
 					env: {
 						...runtime.buildEnv(resolvedModel),
 						OVERSTORY_AGENT_NAME: name,
@@ -998,7 +1023,31 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				// Wait for Claude Code TUI to render before sending input.
 				// Polling capture-pane is more reliable than a fixed sleep because
 				// TUI init time varies by machine load and model state.
-				await waitForTuiReady(tmuxSessionName, (content) => runtime.detectReady(content));
+				const tuiReady = await waitForTuiReady(tmuxSessionName, (content) =>
+					runtime.detectReady(content),
+				);
+				if (!tuiReady) {
+					const alive = await isSessionAlive(tmuxSessionName);
+					store.updateState(name, "completed");
+
+					if (alive) {
+						await killSession(tmuxSessionName);
+						throw new AgentError(
+							`Agent tmux session "${tmuxSessionName}" did not become ready during startup. The runtime may still be waiting on an interactive dialog or initializing too slowly.`,
+							{ agentName: name },
+						);
+					}
+
+					const sessionState = await checkSessionState(tmuxSessionName);
+					const detail =
+						sessionState === "no_server"
+							? "The tmux server is no longer running. It may have crashed or been killed externally."
+							: "The agent process may have crashed or exited immediately before the TUI became ready.";
+					throw new AgentError(
+						`Agent tmux session "${tmuxSessionName}" died during startup. ${detail}`,
+						{ agentName: name },
+					);
+				}
 				// Buffer for the input handler to attach after initial render
 				await Bun.sleep(1_000);
 
