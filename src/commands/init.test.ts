@@ -22,6 +22,7 @@ const AGENT_DEF_FILES = [
 	"scout.md",
 	"builder.md",
 	"reviewer.md",
+	"verifier.md",
 	"lead.md",
 	"merger.md",
 	"coordinator.md",
@@ -53,7 +54,7 @@ describe("initCommand: agent-defs deployment", () => {
 		await cleanupTempDir(tempDir);
 	});
 
-	test("creates .overstory/agent-defs/ with all 8 agent definition files (supervisor deprecated)", async () => {
+	test("creates .overstory/agent-defs/ with all 9 agent definition files (supervisor deprecated)", async () => {
 		await initCommand({ _spawner: noopSpawner });
 
 		const agentDefsDir = join(tempDir, ".overstory", "agent-defs");

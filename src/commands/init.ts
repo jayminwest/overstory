@@ -382,6 +382,18 @@ export function buildAgentManifest(): AgentManifest {
 			canSpawn: false,
 			constraints: ["read-only", "no-worktree"],
 		},
+		verifier: {
+			file: "verifier.md",
+			model: "sonnet",
+			tools: ["Read", "Glob", "Grep", "Bash"],
+			capabilities: ["verification", "browser-testing"],
+			canSpawn: false,
+			constraints: [
+				"READ_ONLY: Cannot modify files",
+				"Must use --session flag for browser isolation",
+				"Must clean up browser session on exit",
+			],
+		},
 	};
 
 	// Build capability index: map each capability to agent names that declare it
