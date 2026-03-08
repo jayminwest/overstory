@@ -492,16 +492,16 @@ export async function waitForTuiReady(
 	pollIntervalMs = 500,
 ): Promise<boolean> {
 	const maxAttempts = Math.ceil(timeoutMs / pollIntervalMs);
-	let dialogHandled = false;
+	const handledDialogs = new Set<string>();
 
 	for (let i = 0; i < maxAttempts; i++) {
 		const content = await capturePaneContent(name);
 		if (content !== null) {
 			const state = detectReady(content);
 
-			if (state.phase === "dialog" && !dialogHandled) {
-				await sendKeys(name, "");
-				dialogHandled = true;
+			if (state.phase === "dialog" && !handledDialogs.has(state.action)) {
+				await handleDialogAction(name, state.action, pollIntervalMs);
+				handledDialogs.add(state.action);
 				await Bun.sleep(pollIntervalMs);
 				continue;
 			}
@@ -579,4 +579,50 @@ export async function sendKeys(name: string, keys: string): Promise<void> {
 			agentName: name,
 		});
 	}
+}
+
+async function sendRawKeys(name: string, keys: string): Promise<void> {
+	const flatKeys = keys.replace(/\n/g, " ");
+	const { exitCode, stderr } = await runCommand(["tmux", "send-keys", "-t", name, flatKeys]);
+
+	if (exitCode !== 0) {
+		const trimmedStderr = stderr.trim();
+
+		if (trimmedStderr.includes("no server running")) {
+			throw new AgentError(
+				`Tmux server is not running (cannot reach session "${name}"). This often happens when running as root (UID 0) or when tmux crashed. Original error: ${trimmedStderr}`,
+				{ agentName: name },
+			);
+		}
+
+		if (
+			trimmedStderr.includes("session not found") ||
+			trimmedStderr.includes("can't find session") ||
+			trimmedStderr.includes("cant find session")
+		) {
+			throw new AgentError(
+				`Tmux session "${name}" does not exist. The agent may have crashed or been killed before receiving input.`,
+				{ agentName: name },
+			);
+		}
+
+		throw new AgentError(`Failed to send keys to tmux session "${name}": ${trimmedStderr}`, {
+			agentName: name,
+		});
+	}
+}
+
+async function handleDialogAction(
+	name: string,
+	action: string,
+	pollIntervalMs: number,
+): Promise<void> {
+	if (action.startsWith("type:")) {
+		await sendRawKeys(name, action.slice("type:".length));
+		await Bun.sleep(Math.min(pollIntervalMs, 250));
+		await sendKeys(name, "");
+		return;
+	}
+
+	await sendKeys(name, action === "Enter" ? "" : action);
 }

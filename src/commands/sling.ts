@@ -943,6 +943,10 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					model: resolvedModel.model,
 					permissionMode: "bypass",
 					cwd: worktreePath,
+					sharedWritableDirs: [
+						join(config.project.root, ".overstory"),
+						join(config.project.root, ".git"),
+					],
 					env: {
 						...runtime.buildEnv(resolvedModel),
 						OVERSTORY_AGENT_NAME: name,
