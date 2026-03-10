@@ -3,6 +3,7 @@ import type { OverstoryConfig } from "../types.ts";
 import { ClaudeRuntime } from "./claude.ts";
 import { CodexRuntime } from "./codex.ts";
 import { CopilotRuntime } from "./copilot.ts";
+import { CursorRuntime } from "./cursor.ts";
 import { GeminiRuntime } from "./gemini.ts";
 import { OpenCodeRuntime } from "./opencode.ts";
 import { PiRuntime } from "./pi.ts";
@@ -23,7 +24,7 @@ describe("getRuntime", () => {
 
 	it("throws with a helpful message for an unknown runtime", () => {
 		expect(() => getRuntime("unknown-runtime")).toThrow(
-			'Unknown runtime: "unknown-runtime". Available: claude, codex, pi, copilot, gemini, sapling, opencode',
+			'Unknown runtime: "unknown-runtime". Available: claude, codex, pi, copilot, cursor, gemini, sapling, opencode',
 		);
 	});
 
@@ -103,6 +104,25 @@ describe("getRuntime", () => {
 	it("copilot runtime returns a new instance on each call", () => {
 		const a = getRuntime("copilot");
 		const b = getRuntime("copilot");
+		expect(a).not.toBe(b);
+	});
+
+	it("returns CursorRuntime when name is 'cursor'", () => {
+		const runtime = getRuntime("cursor");
+		expect(runtime).toBeInstanceOf(CursorRuntime);
+		expect(runtime.id).toBe("cursor");
+	});
+
+	it("uses config.runtime.default 'cursor' when name is omitted", () => {
+		const config = { runtime: { default: "cursor" } } as OverstoryConfig;
+		const runtime = getRuntime(undefined, config);
+		expect(runtime).toBeInstanceOf(CursorRuntime);
+		expect(runtime.id).toBe("cursor");
+	});
+
+	it("cursor runtime returns a new instance on each call", () => {
+		const a = getRuntime("cursor");
+		const b = getRuntime("cursor");
 		expect(a).not.toBe(b);
 	});
 
