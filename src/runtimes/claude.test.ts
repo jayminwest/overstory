@@ -220,14 +220,16 @@ describe("ClaudeRuntime", () => {
 			expect(state).toEqual({ phase: "ready" });
 		});
 
-		test("returns ready for prompt indicator + shift+tab", () => {
+		test("returns loading for prompt indicator + shift+tab (no bypass permissions)", () => {
+			// shift+tab appears in ALL Claude Code sessions — it must NOT trigger ready
 			const state = runtime.detectReady("Claude Code\n\u276f\nshift+tab to chat");
-			expect(state).toEqual({ phase: "ready" });
+			expect(state).toEqual({ phase: "loading" });
 		});
 
-		test('returns ready for Try " + shift+tab', () => {
+		test('returns loading for Try " + shift+tab (no bypass permissions)', () => {
+			// False-positive scenario: shift+tab alone is not a reliable readiness signal
 			const state = runtime.detectReady('Try "help"\nshift+tab');
-			expect(state).toEqual({ phase: "ready" });
+			expect(state).toEqual({ phase: "loading" });
 		});
 
 		test("returns dialog for trust dialog", () => {
@@ -591,9 +593,10 @@ describe("ClaudeRuntime integration: detectReady matches pre-refactor tmux behav
 		expect(state.phase).toBe("ready");
 	});
 
-	test("ready: 'Try \"help\"' + 'shift+tab'", () => {
+	test("loading: 'Try \"help\"' + 'shift+tab' (no bypass permissions — false-positive fix)", () => {
+		// shift+tab appears in all Claude Code sessions, must not trigger ready without bypass permissions
 		const state = runtime.detectReady('Try "help"\nshift+tab');
-		expect(state.phase).toBe("ready");
+		expect(state.phase).toBe("loading");
 	});
 
 	test("not ready: only prompt (no status bar)", () => {

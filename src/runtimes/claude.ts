@@ -139,8 +139,8 @@ export class ClaudeRuntime implements AgentRuntime {
 	 *
 	 * Detection phases:
 	 * - Trust dialog: "trust this folder" detected → `{ phase: "dialog", action: "Enter" }`
-	 * - Ready: prompt indicator (❯ or 'Try "') AND status bar ("bypass permissions"
-	 *   or "shift+tab") both present → `{ phase: "ready" }`
+	 * - Ready: prompt indicator (❯ or 'Try "') AND status bar ("bypass permissions")
+	 *   both present → `{ phase: "ready" }`
 	 * - Otherwise → `{ phase: "loading" }`
 	 *
 	 * @param paneContent - Captured tmux pane content to analyze
@@ -169,8 +169,9 @@ export class ClaudeRuntime implements AgentRuntime {
 		const hasPrompt = paneContent.includes("\u276f") || paneContent.includes('Try "');
 
 		// Phase 2: status bar text confirms full TUI render.
-		const hasStatusBar =
-			paneContent.includes("bypass permissions") || paneContent.includes("shift+tab");
+		// Only match 'bypass permissions' — 'shift+tab' appears in ALL Claude Code sessions
+		// regardless of permission mode and would cause false-positive ready detection.
+		const hasStatusBar = paneContent.includes("bypass permissions");
 
 		if (hasPrompt && hasStatusBar) {
 			return { phase: "ready" };
