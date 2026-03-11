@@ -96,6 +96,7 @@ describe("discoverAgents", () => {
 			id: "session-1",
 			agentName: "builder-test",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(tempDir, ".overstory", "worktrees", "builder-test"),
 			branchName: "overstory/builder-test/task-123",
 			taskId: "task-123",
@@ -109,6 +110,7 @@ describe("discoverAgents", () => {
 			lastActivity: "2024-01-01T00:01:00Z",
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 
@@ -129,6 +131,7 @@ describe("discoverAgents", () => {
 			id: "session-1",
 			agentName: "builder-test",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(tempDir, ".overstory", "worktrees", "builder-test"),
 			branchName: "overstory/builder-test/task-123",
 			taskId: "task-123",
@@ -142,6 +145,7 @@ describe("discoverAgents", () => {
 			lastActivity: "2024-01-01T00:01:00Z",
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 
@@ -149,6 +153,7 @@ describe("discoverAgents", () => {
 			id: "session-2",
 			agentName: "scout-test",
 			capability: "scout",
+			runtime: "claude",
 			worktreePath: join(tempDir, ".overstory", "worktrees", "scout-test"),
 			branchName: "overstory/scout-test/task-456",
 			taskId: "task-456",
@@ -162,6 +167,7 @@ describe("discoverAgents", () => {
 			lastActivity: "2024-01-01T00:01:00Z",
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 
@@ -182,6 +188,7 @@ describe("discoverAgents", () => {
 			id: "session-1",
 			agentName: "builder-working",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(tempDir, ".overstory", "worktrees", "builder-working"),
 			branchName: "overstory/builder-working/task-123",
 			taskId: "task-123",
@@ -195,6 +202,7 @@ describe("discoverAgents", () => {
 			lastActivity: "2024-01-01T00:01:00Z",
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 
@@ -202,6 +210,7 @@ describe("discoverAgents", () => {
 			id: "session-2",
 			agentName: "builder-completed",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: join(tempDir, ".overstory", "worktrees", "builder-completed"),
 			branchName: "overstory/builder-completed/task-456",
 			taskId: "task-456",
@@ -215,6 +224,7 @@ describe("discoverAgents", () => {
 			lastActivity: "2024-01-01T00:02:00Z",
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 
