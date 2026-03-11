@@ -761,6 +761,7 @@ describe("mailCommand", () => {
 					id: "session-orchestrator",
 					agentName: "orchestrator",
 					capability: "coordinator",
+					runtime: "claude",
 					worktreePath: "/worktrees/orchestrator",
 					branchName: "main",
 					taskId: "bead-001",
@@ -774,12 +775,14 @@ describe("mailCommand", () => {
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				},
 				{
 					id: "session-builder-1",
 					agentName: "builder-1",
 					capability: "builder",
+					runtime: "claude",
 					worktreePath: "/worktrees/builder-1",
 					branchName: "builder-1",
 					taskId: "bead-002",
@@ -793,12 +796,14 @@ describe("mailCommand", () => {
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				},
 				{
 					id: "session-builder-2",
 					agentName: "builder-2",
 					capability: "builder",
+					runtime: "claude",
 					worktreePath: "/worktrees/builder-2",
 					branchName: "builder-2",
 					taskId: "bead-003",
@@ -812,12 +817,14 @@ describe("mailCommand", () => {
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				},
 				{
 					id: "session-scout-1",
 					agentName: "scout-1",
 					capability: "scout",
+					runtime: "claude",
 					worktreePath: "/worktrees/scout-1",
 					branchName: "scout-1",
 					taskId: "bead-004",
@@ -831,6 +838,7 @@ describe("mailCommand", () => {
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				},
 			];
@@ -1139,6 +1147,7 @@ describe("mailCommand", () => {
 						| "merger"
 						| "supervisor"
 						| "monitor",
+					runtime: "claude",
 					worktreePath: `/worktrees/${session.agentName}`,
 					branchName: session.agentName,
 					taskId: `bead-${idx}`,
@@ -1152,6 +1161,7 @@ describe("mailCommand", () => {
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				});
 			}

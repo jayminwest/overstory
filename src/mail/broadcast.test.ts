@@ -28,6 +28,7 @@ describe("resolveGroupAddress", () => {
 			id: `session-${agentName}`,
 			agentName,
 			capability,
+			runtime: "claude",
 			worktreePath: `/worktrees/${agentName}`,
 			branchName: `branch-${agentName}`,
 			taskId: "bead-001",
@@ -41,6 +42,7 @@ describe("resolveGroupAddress", () => {
 			lastActivity: "2024-01-01T00:01:00Z",
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 	}

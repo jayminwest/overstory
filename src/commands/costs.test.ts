@@ -768,6 +768,7 @@ describe("costsCommand", () => {
 				id: "sess-001",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt1",
 				branchName: "feat/task1",
 				taskId: "task-001",
@@ -781,6 +782,7 @@ describe("costsCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStore.close();
@@ -826,6 +828,7 @@ describe("costsCommand", () => {
 				id: "sess-001",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt1",
 				branchName: "feat/task1",
 				taskId: "task-001",
@@ -839,6 +842,7 @@ describe("costsCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStore.close();
@@ -892,6 +896,7 @@ describe("costsCommand", () => {
 				id: "sess-001",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt1",
 				branchName: "feat/task1",
 				taskId: "task-001",
@@ -905,12 +910,14 @@ describe("costsCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStore.upsert({
 				id: "sess-002",
 				agentName: "scout-1",
 				capability: "scout",
+				runtime: "claude",
 				worktreePath: "/tmp/wt2",
 				branchName: "feat/task2",
 				taskId: "task-002",
@@ -924,6 +931,7 @@ describe("costsCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStore.close();
@@ -973,6 +981,7 @@ describe("costsCommand", () => {
 				id: "sess-001",
 				agentName: "builder-1",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: "/tmp/wt1",
 				branchName: "feat/task1",
 				taskId: "task-001",
@@ -986,6 +995,7 @@ describe("costsCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStore.close();

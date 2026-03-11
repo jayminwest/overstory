@@ -14,6 +14,7 @@ import type {
 	AgentRuntime,
 	HooksDef,
 	OverlayContent,
+	RateLimitState,
 	ReadyState,
 	SpawnOpts,
 	TranscriptSummary,
@@ -250,5 +251,24 @@ export class CodexRuntime implements AgentRuntime {
 	/** Codex does not produce transcript files. */
 	getTranscriptDir(_projectRoot: string): string | null {
 		return null;
+	}
+
+	/**
+	 * Detect rate limiting from tmux pane content.
+	 *
+	 * Checks for OpenAI rate limit patterns: HTTP 429, quota exceeded, etc.
+	 */
+	detectRateLimit(paneContent: string): RateLimitState {
+		const lower = paneContent.toLowerCase();
+		if (lower.includes("429") || lower.includes("rate limit") || lower.includes("rate_limit")) {
+			return { limited: true, resumesAt: null, message: "OpenAI rate limited (429)" };
+		}
+		if (lower.includes("too many requests")) {
+			return { limited: true, resumesAt: null, message: "OpenAI too many requests" };
+		}
+		if (lower.includes("quota exceeded") || lower.includes("insufficient_quota")) {
+			return { limited: true, resumesAt: null, message: "OpenAI quota exceeded" };
+		}
+		return { limited: false };
 	}
 }

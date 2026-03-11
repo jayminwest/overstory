@@ -23,6 +23,7 @@ function normalizeSession(raw: Record<string, unknown>): AgentSession {
 		id: raw.id as string,
 		agentName: raw.agentName as string,
 		capability: raw.capability as string,
+		runtime: (raw.runtime as string) ?? "claude",
 		worktreePath: raw.worktreePath as string,
 		branchName: raw.branchName as string,
 		taskId: raw.taskId as string,
@@ -36,6 +37,7 @@ function normalizeSession(raw: Record<string, unknown>): AgentSession {
 		lastActivity: raw.lastActivity as string,
 		escalationLevel: (raw.escalationLevel as number) ?? 0,
 		stalledSince: (raw.stalledSince as string | null) ?? null,
+		rateLimitedSince: (raw.rateLimitedSince as string | null) ?? null,
 		transcriptPath: (raw.transcriptPath as string | null) ?? null,
 	};
 }

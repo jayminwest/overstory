@@ -149,9 +149,11 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 		if (await agentDefFile.exists()) {
 			appendSystemPromptFile = agentDefPath;
 		}
+		const sessionId = crypto.randomUUID();
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
+			sessionId,
 			cwd: projectRoot,
 			appendSystemPromptFile,
 			env: {
@@ -167,9 +169,10 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 		// Record session BEFORE sending the beacon so that hook-triggered
 		// updateLastActivity() can find the entry and transition booting->working.
 		const session: AgentSession = {
-			id: `session-${Date.now()}-${MONITOR_NAME}`,
+			id: sessionId,
 			agentName: MONITOR_NAME,
 			capability: "monitor",
+			runtime: runtime.id,
 			worktreePath: projectRoot, // Monitor uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			taskId: "", // No specific task assignment
@@ -183,6 +186,7 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 

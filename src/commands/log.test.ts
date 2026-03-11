@@ -233,6 +233,7 @@ describe("logCommand", () => {
 			id: "session-001",
 			agentName: "test-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: "/tmp/test",
 			branchName: "test-branch",
 			taskId: "bead-001",
@@ -246,6 +247,7 @@ describe("logCommand", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);
@@ -289,6 +291,7 @@ describe("logCommand", () => {
 			id: "session-002",
 			agentName: "metrics-agent",
 			capability: "scout",
+			runtime: "claude",
 			worktreePath: "/tmp/metrics",
 			branchName: "metrics-branch",
 			taskId: "bead-002",
@@ -302,6 +305,7 @@ describe("logCommand", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const sessStore = createSessionStore(sessionsDbPath);
@@ -330,6 +334,7 @@ describe("logCommand", () => {
 			id: "session-coord",
 			agentName: "coordinator",
 			capability: "coordinator",
+			runtime: "claude",
 			worktreePath: tempDir,
 			branchName: "main",
 			taskId: "",
@@ -343,6 +348,7 @@ describe("logCommand", () => {
 			lastActivity: new Date(Date.now() - 60_000).toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);
@@ -370,6 +376,7 @@ describe("logCommand", () => {
 			id: "session-mon",
 			agentName: "monitor",
 			capability: "monitor",
+			runtime: "claude",
 			worktreePath: tempDir,
 			branchName: "main",
 			taskId: "",
@@ -383,6 +390,7 @@ describe("logCommand", () => {
 			lastActivity: new Date(Date.now() - 60_000).toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);
@@ -410,6 +418,7 @@ describe("logCommand", () => {
 				id: "session-coord-run",
 				agentName: "coordinator",
 				capability: "coordinator",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "main",
 				taskId: "",
@@ -423,6 +432,7 @@ describe("logCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStoreLocal.close();
@@ -465,6 +475,7 @@ describe("logCommand", () => {
 				id: "session-coord-no-run",
 				agentName: "coordinator-no-run",
 				capability: "coordinator",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "main",
 				taskId: "",
@@ -478,6 +489,7 @@ describe("logCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStoreLocal.close();
@@ -496,6 +508,7 @@ describe("logCommand", () => {
 				id: "session-builder-run",
 				agentName: "test-builder",
 				capability: "builder",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "builder-branch",
 				taskId: "bead-builder-001",
@@ -509,6 +522,7 @@ describe("logCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStoreLocal.close();
@@ -551,6 +565,7 @@ describe("logCommand", () => {
 				id: "session-coord-completed",
 				agentName: "coordinator-completed",
 				capability: "coordinator",
+				runtime: "claude",
 				worktreePath: tempDir,
 				branchName: "main",
 				taskId: "",
@@ -564,6 +579,7 @@ describe("logCommand", () => {
 				lastActivity: new Date().toISOString(),
 				escalationLevel: 0,
 				stalledSince: null,
+				rateLimitedSince: null,
 				transcriptPath: null,
 			});
 			sessionStoreLocal.close();
@@ -605,6 +621,7 @@ describe("logCommand", () => {
 			id: "session-lead",
 			agentName: "lead-alpha",
 			capability: "lead",
+			runtime: "claude",
 			worktreePath: tempDir,
 			branchName: "lead-alpha-branch",
 			taskId: "bead-lead-001",
@@ -618,6 +635,7 @@ describe("logCommand", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);
@@ -646,6 +664,7 @@ describe("logCommand", () => {
 			id: "session-builder",
 			agentName: "builder-beta",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: tempDir,
 			branchName: "builder-beta-branch",
 			taskId: "bead-builder-001",
@@ -659,6 +678,7 @@ describe("logCommand", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);
@@ -689,6 +709,7 @@ describe("logCommand", () => {
 			id: "session-003",
 			agentName: "activity-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: "/tmp/activity",
 			branchName: "activity-branch",
 			taskId: "bead-003",
@@ -702,6 +723,7 @@ describe("logCommand", () => {
 			lastActivity: oldTimestamp,
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);
@@ -729,6 +751,7 @@ describe("logCommand", () => {
 			id: "session-004",
 			agentName: "booting-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: "/tmp/booting",
 			branchName: "booting-branch",
 			taskId: "bead-004",
@@ -742,6 +765,7 @@ describe("logCommand", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);
@@ -863,6 +887,7 @@ describe("logCommand", () => {
 			id: "session-mulch-fail",
 			agentName: "mulch-fail-agent",
 			capability: "builder",
+			runtime: "claude",
 			worktreePath: tempDir,
 			branchName: "mulch-fail-branch",
 			taskId: "bead-mulch-001",
@@ -876,6 +901,7 @@ describe("logCommand", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);
@@ -903,6 +929,7 @@ describe("logCommand", () => {
 			id: "session-coord-mulch",
 			agentName: "coordinator-mulch",
 			capability: "coordinator",
+			runtime: "claude",
 			worktreePath: tempDir,
 			branchName: "main",
 			taskId: "",
@@ -916,6 +943,7 @@ describe("logCommand", () => {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 		const store = createSessionStore(dbPath);

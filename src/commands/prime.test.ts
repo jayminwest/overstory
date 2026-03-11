@@ -154,6 +154,7 @@ recentTasks:
 					id: "session-001",
 					agentName: "active-builder",
 					capability: "builder",
+					runtime: "claude",
 					worktreePath: join(tempDir, ".overstory", "worktrees", "active-builder"),
 					branchName: "overstory/active-builder/task-001",
 					taskId: "task-001",
@@ -167,6 +168,7 @@ recentTasks:
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				},
 			];
@@ -192,6 +194,7 @@ recentTasks:
 					id: "session-002",
 					agentName: "completed-builder",
 					capability: "builder",
+					runtime: "claude",
 					worktreePath: join(tempDir, ".overstory", "worktrees", "completed-builder"),
 					branchName: "overstory/completed-builder/task-002",
 					taskId: "task-002",
@@ -205,6 +208,7 @@ recentTasks:
 					lastActivity: new Date().toISOString(),
 					escalationLevel: 0,
 					stalledSince: null,
+					rateLimitedSince: null,
 					transcriptPath: null,
 				},
 			];

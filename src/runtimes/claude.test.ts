@@ -124,6 +124,62 @@ describe("ClaudeRuntime", () => {
 			expect(cmd).not.toContain("--append-system-prompt");
 		});
 
+		test("with resumeSessionId adds --resume flag", () => {
+			const opts: SpawnOpts = {
+				model: "sonnet",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				env: {},
+				resumeSessionId: "abc-123-session",
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--resume abc-123-session");
+			expect(cmd).toBe(
+				"claude --model sonnet --permission-mode bypassPermissions --resume abc-123-session",
+			);
+		});
+
+		test("resumeSessionId combined with appendSystemPrompt", () => {
+			const opts: SpawnOpts = {
+				model: "opus",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				env: {},
+				resumeSessionId: "session-456",
+				appendSystemPrompt: "Continue work.",
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--resume session-456");
+			expect(cmd).toContain("--append-system-prompt 'Continue work.'");
+		});
+
+		test("sessionId adds --session-id flag for new sessions", () => {
+			const opts: SpawnOpts = {
+				model: "sonnet",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				env: {},
+				sessionId: "9c9a6ad0-83db-49c2-927a-79ada95448ec",
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--session-id 9c9a6ad0-83db-49c2-927a-79ada95448ec");
+			expect(cmd).not.toContain("--resume");
+		});
+
+		test("resumeSessionId takes precedence over sessionId", () => {
+			const opts: SpawnOpts = {
+				model: "sonnet",
+				permissionMode: "bypass",
+				cwd: "/tmp/worktree",
+				env: {},
+				sessionId: "new-uuid",
+				resumeSessionId: "old-uuid",
+			};
+			const cmd = runtime.buildSpawnCommand(opts);
+			expect(cmd).toContain("--resume old-uuid");
+			expect(cmd).not.toContain("--session-id");
+		});
+
 		test("cwd and env are not embedded in command string", () => {
 			const opts: SpawnOpts = {
 				model: "sonnet",
@@ -678,5 +734,65 @@ describe("ClaudeRuntime integration: registry resolves 'claude' as default", () 
 		const { getRuntime } = await import("./registry.ts");
 		expect(() => getRuntime("aider")).toThrow('Unknown runtime: "aider"');
 		expect(() => getRuntime("nonexistent")).toThrow('Unknown runtime: "nonexistent"');
+	});
+});
+
+describe("ClaudeRuntime detectRateLimit", () => {
+	const runtime = new ClaudeRuntime();
+
+	describe("detectRateLimit", () => {
+		test("detects usage cap with minute reset", () => {
+			const result = runtime.detectRateLimit("You've hit your limit. Usage resets in 45 minutes.");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.resumesAt).not.toBeNull();
+				expect(result.message).toContain("usage cap");
+			}
+		});
+
+		test("detects usage cap with time reset (PM)", () => {
+			const result = runtime.detectRateLimit("You've hit your limit. Resets 3:00 PM");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.resumesAt).not.toBeNull();
+				expect(result.message).toContain("usage cap");
+			}
+		});
+
+		test("detects usage cap without parseable time", () => {
+			const result = runtime.detectRateLimit("Usage cap reached. Please wait.");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.resumesAt).toBeNull();
+				expect(result.message).toContain("usage cap");
+			}
+		});
+
+		test("detects rate-limit-options dialog", () => {
+			const result = runtime.detectRateLimit(
+				'<div class="rate-limit-options">Choose an option</div>',
+			);
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.message).toContain("rate limited");
+			}
+		});
+
+		test("detects generic rate limit text", () => {
+			const result = runtime.detectRateLimit("Error: rate limit exceeded");
+			expect(result.limited).toBe(true);
+		});
+
+		test("returns not limited for normal output", () => {
+			const result = runtime.detectRateLimit(
+				"✓ File written successfully\n$ bun test\n5 pass, 0 fail",
+			);
+			expect(result.limited).toBe(false);
+		});
+
+		test("returns not limited for empty string", () => {
+			const result = runtime.detectRateLimit("");
+			expect(result.limited).toBe(false);
+		});
 	});
 });

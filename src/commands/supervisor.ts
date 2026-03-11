@@ -177,9 +177,11 @@ async function startSupervisor(opts: {
 		if (await agentDefFile.exists()) {
 			appendSystemPromptFile = agentDefPath;
 		}
+		const sessionId = crypto.randomUUID();
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
+			sessionId,
 			cwd: projectRoot,
 			appendSystemPromptFile,
 			env: {
@@ -215,9 +217,10 @@ async function startSupervisor(opts: {
 
 		// Record session
 		const session: AgentSession = {
-			id: `session-${Date.now()}-${opts.name}`,
+			id: sessionId,
 			agentName: opts.name,
 			capability: "supervisor",
+			runtime: runtime.id,
 			worktreePath: projectRoot, // Supervisor uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			taskId: opts.task,
@@ -231,6 +234,7 @@ async function startSupervisor(opts: {
 			lastActivity: new Date().toISOString(),
 			escalationLevel: 0,
 			stalledSince: null,
+			rateLimitedSince: null,
 			transcriptPath: null,
 		};
 

@@ -766,3 +766,58 @@ describe("CodexRuntime integration: registry resolves 'codex'", () => {
 		expect(rt.instructionPath).toBe("AGENTS.md");
 	});
 });
+
+describe("CodexRuntime detectRateLimit", () => {
+	const runtime = new CodexRuntime();
+
+	describe("detectRateLimit", () => {
+		test("detects HTTP 429", () => {
+			const result = runtime.detectRateLimit("Error: 429 Too Many Requests");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.message).toContain("429");
+			}
+		});
+
+		test("detects rate_limit error", () => {
+			const result = runtime.detectRateLimit('{"error":{"type":"rate_limit"}}');
+			expect(result.limited).toBe(true);
+		});
+
+		test("detects 'rate limit' text", () => {
+			const result = runtime.detectRateLimit("Rate limit exceeded, please retry");
+			expect(result.limited).toBe(true);
+		});
+
+		test("detects too many requests", () => {
+			const result = runtime.detectRateLimit("Error: Too many requests");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.message).toContain("too many requests");
+			}
+		});
+
+		test("detects quota exceeded", () => {
+			const result = runtime.detectRateLimit("Error: quota exceeded for org");
+			expect(result.limited).toBe(true);
+			if (result.limited) {
+				expect(result.message).toContain("quota");
+			}
+		});
+
+		test("detects insufficient_quota", () => {
+			const result = runtime.detectRateLimit('{"error":{"code":"insufficient_quota"}}');
+			expect(result.limited).toBe(true);
+		});
+
+		test("returns not limited for normal output", () => {
+			const result = runtime.detectRateLimit("File created: src/main.ts\nDone.");
+			expect(result.limited).toBe(false);
+		});
+
+		test("returns not limited for empty string", () => {
+			const result = runtime.detectRateLimit("");
+			expect(result.limited).toBe(false);
+		});
+	});
+});

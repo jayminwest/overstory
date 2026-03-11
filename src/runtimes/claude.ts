@@ -3,15 +3,18 @@
 // Phase 0: file exists and compiles. Callers are not rewired until Phase 2.
 
 import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { estimateCost } from "../metrics/pricing.ts";
 import { parseTranscriptUsage } from "../metrics/transcript.ts";
 import type { ResolvedModel } from "../types.ts";
+import { tailReadLines } from "../watchdog/swap.ts";
 import type {
 	AgentRuntime,
 	HooksDef,
 	OverlayContent,
+	RateLimitState,
 	ReadyState,
 	SpawnOpts,
 	TranscriptSummary,
@@ -57,6 +60,12 @@ export class ClaudeRuntime implements AgentRuntime {
 	buildSpawnCommand(opts: SpawnOpts): string {
 		const permMode = opts.permissionMode === "bypass" ? "bypassPermissions" : "default";
 		let cmd = `claude --model ${opts.model} --permission-mode ${permMode}`;
+
+		if (opts.resumeSessionId) {
+			cmd += ` --resume ${opts.resumeSessionId}`;
+		} else if (opts.sessionId) {
+			cmd += ` --session-id ${opts.sessionId}`;
+		}
 
 		if (opts.appendSystemPromptFile) {
 			// Read from file at shell expansion time — avoids tmux IPC message size
@@ -250,6 +259,143 @@ export class ClaudeRuntime implements AgentRuntime {
 		if (home.length === 0) return null;
 		const projectKey = projectRoot.replace(/\//g, "-");
 		return join(home, ".claude", "projects", projectKey);
+	}
+
+	/**
+	 * Extract recent conversation from Claude Code JSONL transcript.
+	 * Uses tail-read (last 100KB) for performance on large transcripts.
+	 */
+	async extractConversation(
+		worktreePath: string,
+		sessionId: string,
+		maxTurns: number,
+	): Promise<string> {
+		const claudeProjectPath = worktreePath.replace(/[/.]/g, "-");
+		const jsonlPath = join(
+			homedir(),
+			".claude",
+			"projects",
+			claudeProjectPath,
+			`${sessionId}.jsonl`,
+		);
+
+		const lines = await tailReadLines(jsonlPath);
+		if (lines.length === 0) return "";
+
+		const turns: Array<{ type: string; content: string }> = [];
+		for (const line of lines) {
+			try {
+				const obj = JSON.parse(line) as Record<string, unknown>;
+				const type = obj.type as string | undefined;
+				if (type !== "user" && type !== "assistant") continue;
+
+				const msg = obj.message as Record<string, unknown> | undefined;
+				if (!msg) continue;
+
+				let content = "";
+				if (type === "user") {
+					const c = msg.content;
+					if (typeof c === "string") {
+						content = c;
+					} else if (Array.isArray(c)) {
+						for (const block of c as Array<Record<string, unknown>>) {
+							if (block.type === "text" && typeof block.text === "string") {
+								content += `${block.text}\n`;
+							}
+						}
+					}
+				} else {
+					const blocks = msg.content as Array<Record<string, unknown>> | undefined;
+					if (Array.isArray(blocks)) {
+						for (const block of blocks) {
+							if (block.type === "text" && typeof block.text === "string") {
+								content += `${block.text}\n`;
+							} else if (block.type === "tool_use") {
+								const name = block.name as string;
+								const input = block.input as Record<string, unknown> | undefined;
+								if (input && name === "Bash") {
+									const cmd = input.command as string | undefined;
+									content += `[Bash: ${cmd?.slice(0, 100) ?? "..."}]\n`;
+								} else if (input && (name === "Read" || name === "Write" || name === "Edit")) {
+									const fp = input.file_path as string | undefined;
+									content += `[${name}: ${fp ?? "..."}]\n`;
+								} else {
+									content += `[Tool: ${name}]\n`;
+								}
+							}
+						}
+					}
+				}
+
+				if (content.trim()) {
+					turns.push({ type, content: content.trim() });
+				}
+			} catch {
+				// Skip malformed lines
+			}
+		}
+
+		const recent = turns.slice(-maxTurns * 2);
+		if (recent.length === 0) return "";
+
+		let md = "";
+		for (const turn of recent) {
+			const label = turn.type === "user" ? "User" : "Assistant";
+			md += `### ${label}\n${turn.content}\n\n`;
+		}
+		return md.trim();
+	}
+
+	/**
+	 * Detect Claude Code rate limit state from tmux pane content.
+	 *
+	 * Detects several patterns:
+	 * - "You've hit your limit" with optional "resets Xpm" / "resets X:XXam/pm"
+	 * - "rate limit" text
+	 * - "/rate-limit-options" dialog
+	 */
+	detectRateLimit(paneContent: string): RateLimitState {
+		const lower = paneContent.toLowerCase();
+
+		// Pattern 1: Claude's usage cap message
+		if (lower.includes("you've hit your limit") || lower.includes("usage cap")) {
+			const minuteMatch = paneContent.match(/resets?\s+(?:in\s+)?(\d+)\s*(?:m|min|minutes?)/i);
+			const timeMatch = paneContent.match(/resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+
+			let resumesAt: Date | null = null;
+			if (minuteMatch?.[1]) {
+				resumesAt = new Date(Date.now() + parseInt(minuteMatch[1], 10) * 60_000);
+			} else if (timeMatch?.[1] && timeMatch[3]) {
+				const now = new Date();
+				let hours = parseInt(timeMatch[1], 10);
+				const minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+				const period = timeMatch[3].toLowerCase();
+				if (period === "pm" && hours < 12) hours += 12;
+				if (period === "am" && hours === 12) hours = 0;
+				resumesAt = new Date(now);
+				resumesAt.setHours(hours, minutes, 0, 0);
+				if (resumesAt.getTime() <= now.getTime()) {
+					resumesAt.setDate(resumesAt.getDate() + 1);
+				}
+			}
+
+			return {
+				limited: true,
+				resumesAt,
+				message: "Claude usage cap reached",
+			};
+		}
+
+		// Pattern 2: Rate limit dialog or text
+		if (lower.includes("rate-limit-options") || lower.includes("rate limit")) {
+			return {
+				limited: true,
+				resumesAt: null,
+				message: "Claude rate limited",
+			};
+		}
+
+		return { limited: false };
 	}
 }
 
