@@ -44,3 +44,5 @@ describe("createUpgradeCommand — CLI structure", () => {
 		expect(typeof cmd.parse).toBe("function");
 	});
 });
+
+// getCurrentVersion and fetchLatestVersion tests moved to src/utils/version.test.ts

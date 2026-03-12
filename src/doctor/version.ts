@@ -28,8 +28,9 @@ export const checkVersion: DoctorCheckFn = async (
 
 /**
  * Check that the current version can be determined from package.json.
+ * @internal Exported for testing.
  */
-async function checkCurrentVersion(toolRoot: string): Promise<DoctorCheck> {
+export async function checkCurrentVersion(toolRoot: string): Promise<DoctorCheck> {
 	try {
 		const packageJsonPath = join(toolRoot, "package.json");
 		const packageJson = (await Bun.file(packageJsonPath).json()) as { version?: string };
@@ -62,8 +63,9 @@ async function checkCurrentVersion(toolRoot: string): Promise<DoctorCheck> {
 
 /**
  * Check that package.json version matches src/index.ts VERSION constant.
+ * @internal Exported for testing.
  */
-async function checkVersionSync(toolRoot: string): Promise<DoctorCheck> {
+export async function checkVersionSync(toolRoot: string): Promise<DoctorCheck> {
 	try {
 		// Read package.json version
 		const packageJsonPath = join(toolRoot, "package.json");

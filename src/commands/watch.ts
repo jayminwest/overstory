@@ -9,17 +9,19 @@
 import { join } from "node:path";
 import { Command } from "commander";
 import { loadConfig } from "../config.ts";
-import { OverstoryError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { printError, printHint, printSuccess } from "../logging/color.ts";
 import type { HealthCheck } from "../types.ts";
+import { resolveOverstoryBin } from "../utils/bin.ts";
+import { readPidFile, removePidFile, writePidFile } from "../utils/pid.ts";
 import { startDaemon } from "../watchdog/daemon.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
 
 /**
  * Format a health check for display.
+ * @internal Exported for testing.
  */
-function formatCheck(check: HealthCheck): string {
+export function formatCheck(check: HealthCheck): string {
 	const actionIcon =
 		check.action === "terminate"
 			? "x"
@@ -34,83 +36,6 @@ function formatCheck(check: HealthCheck): string {
 		line += ` [${check.reconciliationNote}]`;
 	}
 	return line;
-}
-
-// isProcessRunning is imported from ../watchdog/health.ts (ZFC shared utility)
-
-/**
- * Read the PID from the watchdog PID file.
- * Returns null if the file doesn't exist or can't be parsed.
- */
-async function readPidFile(pidFilePath: string): Promise<number | null> {
-	const file = Bun.file(pidFilePath);
-	const exists = await file.exists();
-	if (!exists) {
-		return null;
-	}
-
-	try {
-		const text = await file.text();
-		const pid = Number.parseInt(text.trim(), 10);
-		if (Number.isNaN(pid) || pid <= 0) {
-			return null;
-		}
-		return pid;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Write a PID to the watchdog PID file.
- */
-async function writePidFile(pidFilePath: string, pid: number): Promise<void> {
-	await Bun.write(pidFilePath, `${pid}\n`);
-}
-
-/**
- * Remove the watchdog PID file.
- */
-async function removePidFile(pidFilePath: string): Promise<void> {
-	const { unlink } = await import("node:fs/promises");
-	try {
-		await unlink(pidFilePath);
-	} catch {
-		// File may already be gone — not an error
-	}
-}
-
-/**
- * Resolve the path to the overstory binary for re-launching.
- * Uses `which overstory` first, then falls back to process.argv.
- */
-async function resolveOverstoryBin(): Promise<string> {
-	try {
-		const proc = Bun.spawn(["which", "ov"], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const exitCode = await proc.exited;
-		if (exitCode === 0) {
-			const binPath = (await new Response(proc.stdout).text()).trim();
-			if (binPath.length > 0) {
-				return binPath;
-			}
-		}
-	} catch {
-		// which not available or overstory not on PATH
-	}
-
-	// Fallback: use the script that's currently running (process.argv[1])
-	const scriptPath = process.argv[1];
-	if (scriptPath) {
-		return scriptPath;
-	}
-
-	throw new OverstoryError(
-		"Cannot resolve overstory binary path for background launch",
-		"WATCH_ERROR",
-	);
 }
 
 /**

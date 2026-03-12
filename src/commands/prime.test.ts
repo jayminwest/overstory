@@ -3,8 +3,8 @@ import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
-import type { AgentSession } from "../types.ts";
-import { primeCommand } from "./prime.ts";
+import type { AgentManifest, AgentSession, SessionMetrics } from "../types.ts";
+import { formatManifest, formatMetrics, primeCommand } from "./prime.ts";
 
 /**
  * Tests for `overstory prime` command.
@@ -433,5 +433,180 @@ sessions.db
 			const mtimeAfter = statAfter?.mtime;
 			expect(mtimeAfter).toEqual(mtimeBefore);
 		});
+	});
+});
+
+describe("formatManifest", () => {
+	test("returns 'No agents registered.' for empty agents record", () => {
+		const manifest: AgentManifest = {
+			version: "1",
+			agents: {},
+			capabilityIndex: {},
+		};
+		expect(formatManifest(manifest)).toBe("No agents registered.");
+	});
+
+	test("formats single agent with capabilities", () => {
+		const manifest: AgentManifest = {
+			version: "1",
+			agents: {
+				scout: {
+					file: "agents/scout.md",
+					model: "sonnet",
+					tools: ["Read", "Glob"],
+					capabilities: ["explore", "analyze"],
+					canSpawn: false,
+					constraints: [],
+				},
+			},
+			capabilityIndex: { explore: ["scout"], analyze: ["scout"] },
+		};
+		const result = formatManifest(manifest);
+		expect(result).toContain("**scout**");
+		expect(result).toContain("[sonnet]");
+		expect(result).toContain("explore, analyze");
+		expect(result).not.toContain("(can spawn)");
+	});
+
+	test("marks agents that can spawn", () => {
+		const manifest: AgentManifest = {
+			version: "1",
+			agents: {
+				lead: {
+					file: "agents/lead.md",
+					model: "opus",
+					tools: ["Read", "Bash"],
+					capabilities: ["coordinate"],
+					canSpawn: true,
+					constraints: [],
+				},
+			},
+			capabilityIndex: { coordinate: ["lead"] },
+		};
+		const result = formatManifest(manifest);
+		expect(result).toContain("(can spawn)");
+	});
+
+	test("formats multiple agents as separate lines", () => {
+		const manifest: AgentManifest = {
+			version: "1",
+			agents: {
+				scout: {
+					file: "agents/scout.md",
+					model: "sonnet",
+					tools: [],
+					capabilities: ["explore"],
+					canSpawn: false,
+					constraints: [],
+				},
+				builder: {
+					file: "agents/builder.md",
+					model: "opus",
+					tools: [],
+					capabilities: ["implement"],
+					canSpawn: false,
+					constraints: [],
+				},
+			},
+			capabilityIndex: {},
+		};
+		const result = formatManifest(manifest);
+		const lines = result.split("\n");
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("scout");
+		expect(lines[1]).toContain("builder");
+	});
+});
+
+describe("formatMetrics", () => {
+	test("returns 'No recent sessions.' for empty array", () => {
+		expect(formatMetrics([])).toBe("No recent sessions.");
+	});
+
+	test("formats a completed session with duration and merge result", () => {
+		const sessions: SessionMetrics[] = [
+			{
+				agentName: "builder-1",
+				taskId: "task-001",
+				capability: "builder",
+				startedAt: "2026-01-01T00:00:00Z",
+				completedAt: "2026-01-01T00:05:00Z",
+				durationMs: 300_000,
+				exitCode: 0,
+				mergeResult: "clean-merge",
+				parentAgent: "coordinator",
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheReadTokens: 0,
+				cacheCreationTokens: 0,
+				estimatedCostUsd: null,
+				modelUsed: null,
+				runId: null,
+			},
+		];
+		const result = formatMetrics(sessions);
+		expect(result).toContain("builder-1");
+		expect(result).toContain("(builder)");
+		expect(result).toContain("task-001");
+		expect(result).toContain("completed");
+		expect(result).toContain("(300s)");
+		expect(result).toContain("[clean-merge]");
+	});
+
+	test("formats an in-progress session without duration or merge result", () => {
+		const sessions: SessionMetrics[] = [
+			{
+				agentName: "scout-1",
+				taskId: "task-002",
+				capability: "scout",
+				startedAt: "2026-01-01T00:00:00Z",
+				completedAt: null,
+				durationMs: 0,
+				exitCode: null,
+				mergeResult: null,
+				parentAgent: null,
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheReadTokens: 0,
+				cacheCreationTokens: 0,
+				estimatedCostUsd: null,
+				modelUsed: null,
+				runId: null,
+			},
+		];
+		const result = formatMetrics(sessions);
+		expect(result).toContain("scout-1");
+		expect(result).toContain("in-progress");
+		expect(result).not.toContain("[");
+	});
+
+	test("formats multiple sessions as separate lines", () => {
+		const base: SessionMetrics = {
+			agentName: "builder-1",
+			taskId: "task-001",
+			capability: "builder",
+			startedAt: "2026-01-01T00:00:00Z",
+			completedAt: "2026-01-01T00:05:00Z",
+			durationMs: 300_000,
+			exitCode: 0,
+			mergeResult: null,
+			parentAgent: null,
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheCreationTokens: 0,
+			estimatedCostUsd: null,
+			modelUsed: null,
+			runId: null,
+		};
+		const sessions: SessionMetrics[] = [
+			base,
+			{ ...base, agentName: "builder-2", taskId: "task-002" },
+		];
+		const result = formatMetrics(sessions);
+		const lines = result.split("\n");
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("builder-1");
+		expect(lines[1]).toContain("builder-2");
 	});
 });

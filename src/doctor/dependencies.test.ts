@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { OverstoryConfig } from "../types.ts";
-import { checkDependencies } from "./dependencies.ts";
+import { checkAlias, checkDependencies, checkTool } from "./dependencies.ts";
 
 // Minimal config for testing
 const mockConfig: OverstoryConfig = {
@@ -235,5 +235,62 @@ describe("checkDependencies", () => {
 		const ovCheck = checks.find((c) => c.name === "ov availability");
 		expect(ovCheck).toBeDefined();
 		expect(ovCheck?.category).toBe("dependencies");
+	});
+});
+
+describe("checkTool", () => {
+	test("git with --version passes", async () => {
+		const check = await checkTool("git", "--version", true);
+		expect(check.name).toBe("git availability");
+		expect(check.category).toBe("dependencies");
+		expect(check.status).toBe("pass");
+		expect(check.message).toContain("git");
+		expect(check.details).toBeArray();
+		expect(check.details?.length).toBeGreaterThan(0);
+	});
+
+	test("nonexistent tool with required: true returns fail", async () => {
+		const check = await checkTool("nonexistent-tool-xyz-999", "--version", true);
+		expect(check.status).toBe("fail");
+		expect(check.message).toContain("nonexistent-tool-xyz-999");
+		expect(check.fixable).toBe(true);
+	});
+
+	test("nonexistent tool with required: false returns warn", async () => {
+		const check = await checkTool("nonexistent-tool-xyz-999", "--version", false);
+		expect(check.status).toBe("warn");
+		expect(check.fixable).toBe(true);
+	});
+
+	test("installHint appears in details for missing tool", async () => {
+		const check = await checkTool("nonexistent-tool-xyz-999", "--version", true, "@test/fake-pkg");
+		expect(check.status).toBe("fail");
+		const detailsText = check.details?.join(" ") ?? "";
+		expect(detailsText).toContain("npm install -g @test/fake-pkg");
+	});
+});
+
+describe("checkAlias", () => {
+	test("real tool alias passes", async () => {
+		// git is universally available — use it as a "real alias"
+		const check = await checkAlias("git-tool", "git");
+		expect(check.name).toBe("git alias");
+		expect(check.category).toBe("dependencies");
+		expect(check.status).toBe("pass");
+		expect(check.message).toContain("git");
+	});
+
+	test("nonexistent alias returns warn", async () => {
+		const check = await checkAlias("some-tool", "nonexistent-alias-xyz-999");
+		expect(check.status).toBe("warn");
+		expect(check.name).toBe("nonexistent-alias-xyz-999 alias");
+		expect(check.fixable).toBe(true);
+	});
+
+	test("nonexistent alias with installHint includes hint in details", async () => {
+		const check = await checkAlias("some-tool", "nonexistent-alias-xyz-999", "@test/fake-pkg");
+		expect(check.status).toBe("warn");
+		const detailsText = check.details?.join(" ") ?? "";
+		expect(detailsText).toContain("@test/fake-pkg");
 	});
 });

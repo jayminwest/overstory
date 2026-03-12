@@ -5,7 +5,14 @@ import { join } from "node:path";
 import { ValidationError } from "../errors.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
 import type { LogEvent } from "../types.ts";
-import { logsCommand } from "./logs.ts";
+import {
+	buildLogDetail,
+	discoverLogFiles,
+	filterEvents,
+	logsCommand,
+	parseLogFile,
+	pollLogTick,
+} from "./logs.ts";
 
 /**
  * Test helper: capture stdout during command execution.
@@ -375,5 +382,420 @@ this is not json
 		expect(output).toContain("valid-event-3");
 		expect(output).toContain("3 entries");
 		expect(output).not.toContain("this is not json");
+	});
+});
+
+// parseRelativeTime tests moved to src/utils/time.test.ts
+
+describe("buildLogDetail", () => {
+	test("builds key=value pairs from data fields", () => {
+		const event: LogEvent = {
+			timestamp: "2026-01-01T00:00:00Z",
+			level: "info",
+			event: "test",
+			agentName: "a",
+			data: { toolName: "Bash", file: "index.ts" },
+		};
+		const result = buildLogDetail(event);
+		expect(result).toContain("toolName=Bash");
+		expect(result).toContain("file=index.ts");
+	});
+
+	test("truncates values longer than 80 characters", () => {
+		const longValue = "x".repeat(100);
+		const event: LogEvent = {
+			timestamp: "2026-01-01T00:00:00Z",
+			level: "info",
+			event: "test",
+			agentName: "a",
+			data: { message: longValue },
+		};
+		const result = buildLogDetail(event);
+		expect(result).not.toContain(longValue);
+		expect(result).toContain("...");
+		// 77 chars + "..." = 80
+		expect(result).toContain("x".repeat(77));
+	});
+
+	test("skips null and undefined values", () => {
+		const event: LogEvent = {
+			timestamp: "2026-01-01T00:00:00Z",
+			level: "info",
+			event: "test",
+			agentName: "a",
+			data: { present: "yes", missing: null, also: undefined },
+		};
+		const result = buildLogDetail(event);
+		expect(result).toContain("present=yes");
+		expect(result).not.toContain("missing");
+		expect(result).not.toContain("also");
+	});
+
+	test("returns empty string for empty data", () => {
+		const event: LogEvent = {
+			timestamp: "2026-01-01T00:00:00Z",
+			level: "info",
+			event: "test",
+			agentName: "a",
+			data: {},
+		};
+		expect(buildLogDetail(event)).toBe("");
+	});
+
+	test("stringifies non-string values as JSON", () => {
+		const event: LogEvent = {
+			timestamp: "2026-01-01T00:00:00Z",
+			level: "info",
+			event: "test",
+			agentName: "a",
+			data: { count: 42, active: true },
+		};
+		const result = buildLogDetail(event);
+		expect(result).toContain("count=42");
+		expect(result).toContain("active=true");
+	});
+});
+
+describe("discoverLogFiles", () => {
+	let tmpDir: string;
+
+	beforeEach(async () => {
+		tmpDir = join(
+			tmpdir(),
+			`overstory-discover-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+		);
+		await mkdir(tmpDir, { recursive: true });
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tmpDir);
+	});
+
+	test("discovers log files in proper agent/session structure", async () => {
+		// Create agent-a/session-1/events.ndjson
+		const dir1 = join(tmpDir, "agent-a", "2026-01-01T00-00-00");
+		await mkdir(dir1, { recursive: true });
+		await writeFile(join(dir1, "events.ndjson"), "{}");
+
+		// Create agent-b/session-2/events.ndjson
+		const dir2 = join(tmpDir, "agent-b", "2026-01-02T00-00-00");
+		await mkdir(dir2, { recursive: true });
+		await writeFile(join(dir2, "events.ndjson"), "{}");
+
+		const result = await discoverLogFiles(tmpDir);
+		expect(result).toHaveLength(2);
+		expect(result[0]?.agentName).toBe("agent-a");
+		expect(result[1]?.agentName).toBe("agent-b");
+	});
+
+	test("filters by agent name when provided", async () => {
+		const dir1 = join(tmpDir, "agent-a", "2026-01-01T00-00-00");
+		await mkdir(dir1, { recursive: true });
+		await writeFile(join(dir1, "events.ndjson"), "{}");
+
+		const dir2 = join(tmpDir, "agent-b", "2026-01-02T00-00-00");
+		await mkdir(dir2, { recursive: true });
+		await writeFile(join(dir2, "events.ndjson"), "{}");
+
+		const result = await discoverLogFiles(tmpDir, "agent-a");
+		expect(result).toHaveLength(1);
+		expect(result[0]?.agentName).toBe("agent-a");
+	});
+
+	test("returns empty array for nonexistent directory", async () => {
+		const result = await discoverLogFiles(join(tmpDir, "nonexistent"));
+		expect(result).toEqual([]);
+	});
+
+	test("sorts by session timestamp", async () => {
+		const dir1 = join(tmpDir, "agent-a", "2026-01-02T00-00-00");
+		await mkdir(dir1, { recursive: true });
+		await writeFile(join(dir1, "events.ndjson"), "{}");
+
+		const dir2 = join(tmpDir, "agent-a", "2026-01-01T00-00-00");
+		await mkdir(dir2, { recursive: true });
+		await writeFile(join(dir2, "events.ndjson"), "{}");
+
+		const result = await discoverLogFiles(tmpDir);
+		expect(result[0]?.sessionTimestamp).toBe("2026-01-01T00-00-00");
+		expect(result[1]?.sessionTimestamp).toBe("2026-01-02T00-00-00");
+	});
+});
+
+describe("parseLogFile", () => {
+	let tmpDir: string;
+
+	beforeEach(async () => {
+		tmpDir = join(
+			tmpdir(),
+			`overstory-parse-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+		);
+		await mkdir(tmpDir, { recursive: true });
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tmpDir);
+	});
+
+	test("parses valid NDJSON lines", async () => {
+		const filePath = join(tmpDir, "events.ndjson");
+		const lines = [
+			JSON.stringify({
+				timestamp: "2026-01-01T10:00:00Z",
+				event: "tool.start",
+				level: "info",
+				agentName: "a",
+				data: {},
+			}),
+			JSON.stringify({
+				timestamp: "2026-01-01T10:01:00Z",
+				event: "tool.end",
+				level: "info",
+				agentName: "a",
+				data: {},
+			}),
+		];
+		await writeFile(filePath, lines.join("\n"));
+
+		const events = await parseLogFile(filePath);
+		expect(events).toHaveLength(2);
+		expect(events[0]?.event).toBe("tool.start");
+		expect(events[1]?.event).toBe("tool.end");
+	});
+
+	test("skips malformed JSON lines silently", async () => {
+		const filePath = join(tmpDir, "events.ndjson");
+		const content = [
+			JSON.stringify({
+				timestamp: "2026-01-01T10:00:00Z",
+				event: "valid",
+				level: "info",
+				agentName: "a",
+				data: {},
+			}),
+			"not valid json",
+			'{"incomplete": true',
+			JSON.stringify({
+				timestamp: "2026-01-01T10:02:00Z",
+				event: "also-valid",
+				level: "info",
+				agentName: "a",
+				data: {},
+			}),
+		].join("\n");
+		await writeFile(filePath, content);
+
+		const events = await parseLogFile(filePath);
+		expect(events).toHaveLength(2);
+		expect(events[0]?.event).toBe("valid");
+		expect(events[1]?.event).toBe("also-valid");
+	});
+
+	test("returns empty array for nonexistent file", async () => {
+		const events = await parseLogFile(join(tmpDir, "nonexistent.ndjson"));
+		expect(events).toEqual([]);
+	});
+
+	test("skips objects missing required fields", async () => {
+		const filePath = join(tmpDir, "events.ndjson");
+		const content = [
+			JSON.stringify({ timestamp: "2026-01-01T00:00:00Z" }), // missing "event"
+			JSON.stringify({ event: "test" }), // missing "timestamp"
+			JSON.stringify({
+				timestamp: "2026-01-01T00:00:00Z",
+				event: "good",
+				level: "info",
+				agentName: "a",
+				data: {},
+			}),
+		].join("\n");
+		await writeFile(filePath, content);
+
+		const events = await parseLogFile(filePath);
+		expect(events).toHaveLength(1);
+		expect(events[0]?.event).toBe("good");
+	});
+});
+
+describe("filterEvents", () => {
+	const baseEvents: LogEvent[] = [
+		{
+			timestamp: "2026-01-01T10:00:00.000Z",
+			level: "info",
+			event: "e1",
+			agentName: "a",
+			data: {},
+		},
+		{
+			timestamp: "2026-01-01T11:00:00.000Z",
+			level: "error",
+			event: "e2",
+			agentName: "a",
+			data: {},
+		},
+		{
+			timestamp: "2026-01-01T12:00:00.000Z",
+			level: "warn",
+			event: "e3",
+			agentName: "a",
+			data: {},
+		},
+		{
+			timestamp: "2026-01-01T13:00:00.000Z",
+			level: "debug",
+			event: "e4",
+			agentName: "a",
+			data: {},
+		},
+	];
+
+	test("filters by level", () => {
+		const result = filterEvents(baseEvents, { level: "error" });
+		expect(result).toHaveLength(1);
+		expect(result[0]?.event).toBe("e2");
+	});
+
+	test("filters by since", () => {
+		const since = new Date("2026-01-01T11:30:00.000Z");
+		const result = filterEvents(baseEvents, { since });
+		expect(result).toHaveLength(2);
+		expect(result[0]?.event).toBe("e3");
+		expect(result[1]?.event).toBe("e4");
+	});
+
+	test("filters by until", () => {
+		const until = new Date("2026-01-01T11:30:00.000Z");
+		const result = filterEvents(baseEvents, { until });
+		expect(result).toHaveLength(2);
+		expect(result[0]?.event).toBe("e1");
+		expect(result[1]?.event).toBe("e2");
+	});
+
+	test("combines level + since + until", () => {
+		const result = filterEvents(baseEvents, {
+			level: "info",
+			since: new Date("2026-01-01T09:00:00.000Z"),
+			until: new Date("2026-01-01T10:30:00.000Z"),
+		});
+		expect(result).toHaveLength(1);
+		expect(result[0]?.event).toBe("e1");
+	});
+
+	test("returns all events with no filters", () => {
+		const result = filterEvents(baseEvents, {});
+		expect(result).toHaveLength(4);
+	});
+});
+
+describe("pollLogTick", () => {
+	let tmpDir: string;
+
+	beforeEach(async () => {
+		tmpDir = join(
+			tmpdir(),
+			`overstory-poll-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+		);
+		await mkdir(tmpDir, { recursive: true });
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tmpDir);
+	});
+
+	test("returns 0 for empty files", async () => {
+		const filePath = join(tmpDir, "events.ndjson");
+		await writeFile(filePath, "");
+
+		const lastKnownSizes = new Map<string, number>();
+		const count = await pollLogTick([{ path: filePath }], lastKnownSizes, {});
+		expect(count).toBe(0);
+	});
+
+	test("returns count of new events from file with new lines", async () => {
+		const filePath = join(tmpDir, "events.ndjson");
+		const line1 = JSON.stringify({
+			timestamp: "2026-01-01T10:00:00Z",
+			event: "e1",
+			level: "info",
+			agentName: "a",
+			data: {},
+		});
+		const line2 = JSON.stringify({
+			timestamp: "2026-01-01T10:01:00Z",
+			event: "e2",
+			level: "info",
+			agentName: "a",
+			data: {},
+		});
+		await writeFile(filePath, `${line1}\n${line2}\n`);
+
+		const lastKnownSizes = new Map<string, number>();
+		// Capture stdout to prevent test noise
+		const origWrite = process.stdout.write;
+		process.stdout.write = (() => true) as typeof process.stdout.write;
+		try {
+			const count = await pollLogTick([{ path: filePath }], lastKnownSizes, {});
+			expect(count).toBe(2);
+			// lastKnownSizes should be updated
+			expect(lastKnownSizes.get(filePath)).toBeGreaterThan(0);
+		} finally {
+			process.stdout.write = origWrite;
+		}
+	});
+
+	test("returns 0 when no new data since last position", async () => {
+		const filePath = join(tmpDir, "events.ndjson");
+		const line = JSON.stringify({
+			timestamp: "2026-01-01T10:00:00Z",
+			event: "e1",
+			level: "info",
+			agentName: "a",
+			data: {},
+		});
+		await writeFile(filePath, `${line}\n`);
+
+		const lastKnownSizes = new Map<string, number>();
+		const origWrite = process.stdout.write;
+		process.stdout.write = (() => true) as typeof process.stdout.write;
+		try {
+			// First tick reads everything
+			await pollLogTick([{ path: filePath }], lastKnownSizes, {});
+			// Second tick should find nothing new
+			const count = await pollLogTick([{ path: filePath }], lastKnownSizes, {});
+			expect(count).toBe(0);
+		} finally {
+			process.stdout.write = origWrite;
+		}
+	});
+
+	test("applies level filter", async () => {
+		const filePath = join(tmpDir, "events.ndjson");
+		const line1 = JSON.stringify({
+			timestamp: "2026-01-01T10:00:00Z",
+			event: "e1",
+			level: "info",
+			agentName: "a",
+			data: {},
+		});
+		const line2 = JSON.stringify({
+			timestamp: "2026-01-01T10:01:00Z",
+			event: "e2",
+			level: "error",
+			agentName: "a",
+			data: {},
+		});
+		await writeFile(filePath, `${line1}\n${line2}\n`);
+
+		const lastKnownSizes = new Map<string, number>();
+		const origWrite = process.stdout.write;
+		process.stdout.write = (() => true) as typeof process.stdout.write;
+		try {
+			const count = await pollLogTick([{ path: filePath }], lastKnownSizes, {
+				level: "error",
+			});
+			expect(count).toBe(1);
+		} finally {
+			process.stdout.write = origWrite;
+		}
 	});
 });

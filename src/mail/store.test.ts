@@ -620,6 +620,116 @@ describe("createMailStore", () => {
 		});
 	});
 
+	describe("purge", () => {
+		/** Helper to insert a test message with minimal boilerplate. */
+		function insertMsg(
+			overrides: Partial<{
+				id: string;
+				from: string;
+				to: string;
+				subject: string;
+			}> = {},
+		) {
+			return store.insert({
+				id: overrides.id ?? "",
+				from: overrides.from ?? "agent-a",
+				to: overrides.to ?? "orchestrator",
+				subject: overrides.subject ?? "test",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+			});
+		}
+
+		test("{ all: true } deletes all messages", () => {
+			insertMsg({ subject: "msg1" });
+			insertMsg({ subject: "msg2" });
+			insertMsg({ subject: "msg3" });
+
+			const deleted = store.purge({ all: true });
+			expect(deleted).toBe(3);
+			expect(store.getAll()).toHaveLength(0);
+		});
+
+		test("{ all: true } on empty store returns 0", () => {
+			const deleted = store.purge({ all: true });
+			expect(deleted).toBe(0);
+		});
+
+		test("{ olderThanMs: 0 } deletes messages with timestamps before now", async () => {
+			insertMsg({ subject: "msg1" });
+			insertMsg({ subject: "msg2" });
+
+			// Small delay ensures cutoff timestamp is strictly after message timestamps
+			await new Promise((resolve) => setTimeout(resolve, 5));
+
+			const deleted = store.purge({ olderThanMs: 0 });
+			expect(deleted).toBe(2);
+			expect(store.getAll()).toHaveLength(0);
+		});
+
+		test("{ olderThanMs: very large number } deletes none", () => {
+			insertMsg({ subject: "msg1" });
+			insertMsg({ subject: "msg2" });
+
+			// 1 year in ms — all messages are newer than this cutoff
+			const deleted = store.purge({ olderThanMs: 365 * 24 * 60 * 60 * 1000 });
+			expect(deleted).toBe(0);
+			expect(store.getAll()).toHaveLength(2);
+		});
+
+		test("{ agent: 'x' } only deletes messages to/from agent x", () => {
+			insertMsg({ from: "agent-x", to: "orchestrator", subject: "from-x" });
+			insertMsg({ from: "orchestrator", to: "agent-x", subject: "to-x" });
+			insertMsg({ from: "agent-y", to: "orchestrator", subject: "from-y" });
+
+			const deleted = store.purge({ agent: "agent-x" });
+			expect(deleted).toBe(2);
+
+			const remaining = store.getAll();
+			expect(remaining).toHaveLength(1);
+			expect(remaining[0]?.subject).toBe("from-y");
+		});
+
+		test("combined olderThanMs + agent applies both conditions", () => {
+			insertMsg({ from: "agent-x", to: "orchestrator", subject: "from-x" });
+			insertMsg({ from: "agent-y", to: "orchestrator", subject: "from-y" });
+
+			// olderThanMs: very large — nothing is old enough to delete
+			const deleted = store.purge({
+				olderThanMs: 365 * 24 * 60 * 60 * 1000,
+				agent: "agent-x",
+			});
+			expect(deleted).toBe(0);
+			expect(store.getAll()).toHaveLength(2);
+		});
+
+		test("combined olderThanMs: 0 + agent deletes only that agent's messages", async () => {
+			insertMsg({ from: "agent-x", to: "orchestrator", subject: "from-x" });
+			insertMsg({ from: "agent-y", to: "orchestrator", subject: "from-y" });
+
+			// Small delay ensures cutoff timestamp is strictly after message timestamps
+			await new Promise((resolve) => setTimeout(resolve, 5));
+
+			const deleted = store.purge({ olderThanMs: 0, agent: "agent-x" });
+			expect(deleted).toBe(1);
+
+			const remaining = store.getAll();
+			expect(remaining).toHaveLength(1);
+			expect(remaining[0]?.subject).toBe("from-y");
+		});
+
+		test("{} empty options returns 0 and deletes nothing", () => {
+			insertMsg({ subject: "msg1" });
+			insertMsg({ subject: "msg2" });
+
+			const deleted = store.purge({});
+			expect(deleted).toBe(0);
+			expect(store.getAll()).toHaveLength(2);
+		});
+	});
+
 	describe("payload column", () => {
 		test("stores null payload by default when not provided", () => {
 			const msg = store.insert({
