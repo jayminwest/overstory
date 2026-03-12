@@ -82,7 +82,9 @@ describe("createSession", () => {
 		expect(pid).toBe(42);
 	});
 
-	test("passes correct args to tmux new-session with PATH wrapping", async () => {
+	test("passes correct args to tmux new-session with startup script", async () => {
+		const originalShell = process.env.SHELL;
+		process.env.SHELL = "/bin/zsh";
 		let callCount = 0;
 		spawnSpy.mockImplementation(() => {
 			callCount++;
@@ -96,7 +98,11 @@ describe("createSession", () => {
 			return mockSpawnResult("1234\n", "", 0);
 		});
 
-		await createSession("my-session", "/work/dir", "echo hello");
+		try {
+			await createSession("my-session", "/work/dir", "echo hello");
+		} finally {
+			process.env.SHELL = originalShell;
+		}
 
 		// Call 0 is 'which overstory', call 1 is 'tmux new-session'
 		const tmuxCallArgs = spawnSpy.mock.calls[1] as unknown[];
@@ -107,10 +113,10 @@ describe("createSession", () => {
 		expect(cmd[4]).toBe("my-session");
 		expect(cmd[5]).toBe("-c");
 		expect(cmd[6]).toBe("/work/dir");
-		// The command should be wrapped with PATH export
-		const wrappedCmd = cmd[7] as string;
-		expect(wrappedCmd).toContain("echo hello");
-		expect(wrappedCmd).toContain("export PATH=");
+		const startupCmd = cmd[7] as string;
+		expect(startupCmd).toContain("echo hello");
+		expect(startupCmd).toContain("export PATH=");
+		expect(startupCmd).not.toContain("/bin/bash -c");
 
 		const opts = tmuxCallArgs[1] as { cwd: string };
 		expect(opts.cwd).toBe("/work/dir");
@@ -137,6 +143,54 @@ describe("createSession", () => {
 		const thirdCallArgs = spawnSpy.mock.calls[2] as unknown[];
 		const cmd = thirdCallArgs[0] as string[];
 		expect(cmd).toEqual(["tmux", "list-panes", "-t", "test-agent", "-F", "#{pane_pid}"]);
+	});
+
+	test("auto mode wraps startup command for fish shells", async () => {
+		const originalShell = process.env.SHELL;
+		process.env.SHELL = "/opt/homebrew/bin/fish";
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			if (callCount === 2) return mockSpawnResult("", "", 0);
+			return mockSpawnResult("7777\n", "", 0);
+		});
+
+		try {
+			await createSession("fish-agent", "/tmp", "echo hello", { TEST: "1" });
+		} finally {
+			process.env.SHELL = originalShell;
+		}
+
+		const tmuxCallArgs = spawnSpy.mock.calls[1] as unknown[];
+		const cmd = tmuxCallArgs[0] as string[];
+		const startupCmd = cmd[7] as string;
+		expect(startupCmd).toContain("/bin/bash -c");
+		expect(startupCmd).toContain("export TEST=\"1\"");
+	});
+
+	test("never mode skips bash wrapping even for fish shells", async () => {
+		const originalShell = process.env.SHELL;
+		process.env.SHELL = "/opt/homebrew/bin/fish";
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			if (callCount === 2) return mockSpawnResult("", "", 0);
+			return mockSpawnResult("7777\n", "", 0);
+		});
+
+		try {
+			await createSession("fish-agent", "/tmp", "echo hello", { TEST: "1" }, undefined, "never");
+		} finally {
+			process.env.SHELL = originalShell;
+		}
+
+		const tmuxCallArgs = spawnSpy.mock.calls[1] as unknown[];
+		const cmd = tmuxCallArgs[0] as string[];
+		const startupCmd = cmd[7] as string;
+		expect(startupCmd).not.toContain("/bin/bash -c");
+		expect(startupCmd).toContain("export TEST=\"1\"");
 	});
 
 	test("throws AgentError if session creation fails", async () => {
