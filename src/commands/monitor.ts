@@ -159,10 +159,17 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 				OVERSTORY_AGENT_NAME: MONITOR_NAME,
 			},
 		});
-		const pid = await createSession(tmuxSession, projectRoot, spawnCmd, {
-			...runtime.buildEnv(resolvedModel),
-			OVERSTORY_AGENT_NAME: MONITOR_NAME,
-		});
+		const pid = await createSession(
+			tmuxSession,
+			projectRoot,
+			spawnCmd,
+			{
+				...runtime.buildEnv(resolvedModel),
+				OVERSTORY_AGENT_NAME: MONITOR_NAME,
+			},
+			undefined,
+			config.runtime?.bashWrapper ?? "auto",
+		);
 
 		// Record session BEFORE sending the beacon so that hook-triggered
 		// updateLastActivity() can find the entry and transition booting->working.
