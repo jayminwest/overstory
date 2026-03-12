@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { ValidationError } from "../errors.ts";
 import {
+	buildScoutArgs,
 	createDiscoverCommand,
 	DISCOVERY_CATEGORIES,
 	discoverCommand,
@@ -89,6 +90,51 @@ describe("createDiscoverCommand()", () => {
 	test("has a description", () => {
 		const cmd = createDiscoverCommand();
 		expect(cmd.description()).toBeTruthy();
+	});
+});
+
+describe("buildScoutArgs()", () => {
+	test("generates unique task ID per category", () => {
+		const args1 = buildScoutArgs("task-123", "architecture", "discover", 6);
+		const args2 = buildScoutArgs("task-123", "dependencies", "discover", 6);
+		expect(args1[2]).toBe("task-123-architecture");
+		expect(args2[2]).toBe("task-123-dependencies");
+	});
+
+	test("includes --max-agents with total category count", () => {
+		const args = buildScoutArgs("task-123", "architecture", "discover", 6);
+		const idx = args.indexOf("--max-agents");
+		expect(idx).toBeGreaterThanOrEqual(0);
+		expect(args[idx + 1]).toBe("6");
+	});
+
+	test("includes --max-agents matching actual category count when categories are skipped", () => {
+		const args = buildScoutArgs("task-123", "architecture", "discover", 4);
+		const idx = args.indexOf("--max-agents");
+		expect(idx).toBeGreaterThanOrEqual(0);
+		expect(args[idx + 1]).toBe("4");
+	});
+
+	test("uses correct agent name format", () => {
+		const args = buildScoutArgs("task-123", "testing", "discover", 6);
+		const idx = args.indexOf("--name");
+		expect(idx).toBeGreaterThanOrEqual(0);
+		expect(args[idx + 1]).toBe("discover-testing");
+	});
+
+	test("passes parent name correctly", () => {
+		const args = buildScoutArgs("task-123", "architecture", "my-discover", 6);
+		const idx = args.indexOf("--parent");
+		expect(idx).toBeGreaterThanOrEqual(0);
+		expect(args[idx + 1]).toBe("my-discover");
+	});
+
+	test("all 6 categories produce distinct task IDs", () => {
+		const taskIds = DISCOVERY_CATEGORIES.map((c) =>
+			buildScoutArgs("task-123", c.name, "discover", 6)[2],
+		);
+		const unique = new Set(taskIds);
+		expect(unique.size).toBe(6);
 	});
 });
 

@@ -90,6 +90,37 @@ function parseSkipCategories(skip: string | undefined): Set<string> {
 	return new Set(names);
 }
 
+/**
+ * Build the ov sling args for a single discovery scout.
+ * Exported for unit testing without side effects.
+ */
+export function buildScoutArgs(
+	taskId: string,
+	categoryName: string,
+	parentName: string,
+	totalCategories: number,
+): string[] {
+	const scoutTaskId = `${taskId}-${categoryName}`;
+	return [
+		"ov",
+		"sling",
+		scoutTaskId,
+		"--capability",
+		"scout",
+		"--name",
+		`discover-${categoryName}`,
+		"--profile",
+		"ov-discovery",
+		"--parent",
+		parentName,
+		"--depth",
+		"1",
+		"--skip-task-check",
+		"--max-agents",
+		String(totalCategories),
+	];
+}
+
 /** Main handler for ov discover. */
 export async function discoverCommand(opts: DiscoverOptions): Promise<void> {
 	const json = opts.json ?? false;
@@ -116,22 +147,7 @@ export async function discoverCommand(opts: DiscoverOptions): Promise<void> {
 	try {
 		for (const category of categories) {
 			const agentName = `discover-${category.name}`;
-			const args = [
-				"ov",
-				"sling",
-				taskId,
-				"--capability",
-				"scout",
-				"--name",
-				agentName,
-				"--profile",
-				"ov-discovery",
-				"--parent",
-				parentName,
-				"--depth",
-				"1",
-				"--skip-task-check",
-			];
+			const args = buildScoutArgs(taskId, category.name, parentName, categories.length);
 
 			const proc = Bun.spawn(args, {
 				stdout: "pipe",
