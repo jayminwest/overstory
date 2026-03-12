@@ -420,15 +420,18 @@ async function startCoordinator(
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", `${defName}.md`);
 		const agentDefFile = Bun.file(agentDefPath);
 
-		// Explicit existence check with descriptive error
+		// Only throw when --def was explicitly provided; gracefully skip for the default
 		if (!(await agentDefFile.exists())) {
-			throw new AgentError(
-				`Coordinator definition file not found: ${agentDefPath}. Use --def to specify a different definition file name.`,
-				{ agentName: COORDINATOR_NAME },
-			);
+			if (def !== undefined) {
+				throw new AgentError(
+					`Coordinator definition file not found: ${agentDefPath}. Use --def to specify a different definition file name.`,
+					{ agentName: COORDINATOR_NAME },
+				);
+			}
+			// Default "coordinator" file missing — start without it (backwards-compatible)
 		}
 
-		const appendSystemPromptFile = agentDefPath;
+		const appendSystemPromptFile = (await agentDefFile.exists()) ? agentDefPath : undefined;
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
@@ -1255,7 +1258,13 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 		.option("--def <name>", "Coordinator definition file name (default: coordinator)")
 		.option("--json", "Output as JSON")
 		.action(
-			async (opts: { attach?: boolean; watchdog?: boolean; monitor?: boolean; def?: string; json?: boolean }) => {
+			async (opts: {
+				attach?: boolean;
+				watchdog?: boolean;
+				monitor?: boolean;
+				def?: string;
+				json?: boolean;
+			}) => {
 				// opts.attach = true if --attach, false if --no-attach, undefined if neither
 				const shouldAttach = opts.attach !== undefined ? opts.attach : !!process.stdout.isTTY;
 				await startCoordinator(
