@@ -291,7 +291,7 @@ export function resolveAttach(args: string[], isTTY: boolean): boolean {
 }
 
 async function startCoordinator(
-	opts: { json: boolean; attach: boolean; watchdog: boolean; monitor: boolean },
+	opts: { json: boolean; attach: boolean; watchdog: boolean; monitor: boolean; def?: string },
 	deps: CoordinatorDeps = {},
 ): Promise<void> {
 	const tmux = deps._tmux ?? {
@@ -304,7 +304,7 @@ async function startCoordinator(
 		ensureTmuxAvailable,
 	};
 
-	const { json, attach: shouldAttach, watchdog: watchdogFlag, monitor: monitorFlag } = opts;
+	const { json, attach: shouldAttach, watchdog: watchdogFlag, monitor: monitorFlag, def } = opts;
 
 	if (isRunningAsRoot()) {
 		throw new AgentError(
@@ -403,12 +403,35 @@ async function startCoordinator(
 		// Pass the file path (not content) so the shell inside the tmux pane reads
 		// it via $(cat ...) — avoids tmux IPC "command too long" errors with large
 		// agent definitions (overstory#45).
-		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "coordinator.md");
-		const agentDefFile = Bun.file(agentDefPath);
-		let appendSystemPromptFile: string | undefined;
-		if (await agentDefFile.exists()) {
-			appendSystemPromptFile = agentDefPath;
+		let defName = def ?? "coordinator";
+
+		// Validate: reject path separators (prevent directory traversal)
+		if (defName.includes("/") || defName.includes("\\")) {
+			throw new ValidationError(
+				`Invalid --def value "${defName}": path separators (/ and \\) are not allowed`,
+			);
 		}
+
+		// Strip trailing .md extension if present
+		if (defName.endsWith(".md")) {
+			defName = defName.slice(0, -3);
+		}
+
+		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", `${defName}.md`);
+		const agentDefFile = Bun.file(agentDefPath);
+
+		// Only throw when --def was explicitly provided; gracefully skip for the default
+		if (!(await agentDefFile.exists())) {
+			if (def !== undefined) {
+				throw new AgentError(
+					`Coordinator definition file not found: ${agentDefPath}. Use --def to specify a different definition file name.`,
+					{ agentName: COORDINATOR_NAME },
+				);
+			}
+			// Default "coordinator" file missing — start without it (backwards-compatible)
+		}
+
+		const appendSystemPromptFile = (await agentDefFile.exists()) ? agentDefPath : undefined;
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
@@ -551,6 +574,7 @@ async function startCoordinator(
 			pid,
 			watchdog: watchdogFlag ? watchdogPid !== undefined : false,
 			monitor: monitorFlag ? monitorPid !== undefined : false,
+			def: defName,
 		};
 
 		if (json) {
@@ -1255,9 +1279,16 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 		.option("--no-attach", "Never attach to tmux session after start")
 		.option("--watchdog", "Auto-start watchdog daemon with coordinator")
 		.option("--monitor", "Auto-start Tier 2 monitor agent with coordinator")
+		.option("--def <name>", "Coordinator definition file name (default: coordinator)")
 		.option("--json", "Output as JSON")
 		.action(
-			async (opts: { attach?: boolean; watchdog?: boolean; monitor?: boolean; json?: boolean }) => {
+			async (opts: {
+				attach?: boolean;
+				watchdog?: boolean;
+				monitor?: boolean;
+				def?: string;
+				json?: boolean;
+			}) => {
 				// opts.attach = true if --attach, false if --no-attach, undefined if neither
 				const shouldAttach = opts.attach !== undefined ? opts.attach : !!process.stdout.isTTY;
 				await startCoordinator(
@@ -1266,6 +1297,7 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 						attach: shouldAttach,
 						watchdog: opts.watchdog ?? false,
 						monitor: opts.monitor ?? false,
+						def: opts.def,
 					},
 					deps,
 				);

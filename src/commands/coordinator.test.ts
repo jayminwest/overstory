@@ -879,6 +879,193 @@ describe("startCoordinator", () => {
 			expect(agentErr.message).toContain("tmux is not installed");
 		}
 	});
+});
+
+describe("startCoordinator --def flag", () => {
+	test("--def resolves to correct path", async () => {
+		// Create custom-coordinator.md
+		const agentDefsDir = join(tempDir, ".overstory", "agent-defs");
+		await Bun.write(join(agentDefsDir, "custom-coordinator.md"), "# Custom Coordinator\n");
+
+		const { deps, calls } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await captureStdout(() => coordinatorCommand(["start", "--def", "custom-coordinator"], deps));
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+
+		// Verify tmux createSession was called with command containing the custom definition file
+		expect(calls.createSession).toHaveLength(1);
+		const createCall = calls.createSession[0];
+		expect(createCall).toBeDefined();
+		expect(createCall?.command).toContain("custom-coordinator.md");
+		expect(createCall?.command).toContain(".overstory/agent-defs/custom-coordinator.md");
+	});
+
+	test("path separator throws ValidationError", async () => {
+		const { deps } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await expect(
+				coordinatorCommand(["start", "--def", "foo/bar"], deps),
+			).rejects.toThrow(ValidationError);
+
+			await expect(
+				coordinatorCommand(["start", "--def", "foo\\bar"], deps),
+			).rejects.toThrow(ValidationError);
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+	});
+
+	test(".md extension is stripped", async () => {
+		// Create research-coordinator.md
+		const agentDefsDir = join(tempDir, ".overstory", "agent-defs");
+		await Bun.write(join(agentDefsDir, "research-coordinator.md"), "# Research Coordinator\n");
+
+		const { deps, calls } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await captureStdout(() =>
+				coordinatorCommand(["start", "--def", "research-coordinator.md"], deps),
+			);
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+
+		// Verify the command uses research-coordinator.md (extension stripped internally)
+		expect(calls.createSession).toHaveLength(1);
+		const createCall = calls.createSession[0];
+		expect(createCall).toBeDefined();
+		expect(createCall?.command).toContain("research-coordinator.md");
+		expect(createCall?.command).toContain(".overstory/agent-defs/research-coordinator.md");
+	});
+
+	test("default behavior unchanged without --def", async () => {
+		const { deps, calls } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await captureStdout(() => coordinatorCommand(["start"], deps));
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+
+		// Verify the default coordinator.md is used
+		expect(calls.createSession).toHaveLength(1);
+		const createCall = calls.createSession[0];
+		expect(createCall).toBeDefined();
+		expect(createCall?.command).toContain("coordinator.md");
+		expect(createCall?.command).toContain(".overstory/agent-defs/coordinator.md");
+	});
+
+	test("missing file produces descriptive error", async () => {
+		const { deps } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await expect(
+				coordinatorCommand(["start", "--def", "nonexistent"], deps),
+			).rejects.toThrow(AgentError);
+
+			// Also verify the error message is descriptive
+			try {
+				await coordinatorCommand(["start", "--def", "nonexistent"], deps);
+				expect(true).toBe(false); // Should have thrown
+			} catch (err: unknown) {
+				expect(err).toBeInstanceOf(AgentError);
+				const agentErr = err as AgentError;
+				expect(agentErr.message).toContain("Coordinator definition file not found");
+				expect(agentErr.message).toContain("nonexistent.md");
+			}
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+	});
+
+	test("--def research-coordinator loads correct file", async () => {
+		// Create research-coordinator.md with specific content
+		const agentDefsDir = join(tempDir, ".overstory", "agent-defs");
+		const researchContent = "# Research Coordinator\n\nSpecialized coordinator for research tasks.\n";
+		await Bun.write(join(agentDefsDir, "research-coordinator.md"), researchContent);
+
+		const { deps, calls } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await captureStdout(() =>
+				coordinatorCommand(["start", "--def", "research-coordinator"], deps),
+			);
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+
+		// Verify the correct file is referenced in the spawn command
+		expect(calls.createSession).toHaveLength(1);
+		const createCall = calls.createSession[0];
+		expect(createCall).toBeDefined();
+		expect(createCall?.command).toContain("research-coordinator.md");
+
+		// Verify the file actually exists with the expected content
+		const filePath = join(agentDefsDir, "research-coordinator.md");
+		const content = await Bun.file(filePath).text();
+		expect(content).toBe(researchContent);
+	});
+
+	test("already-running coordinator blocks new --def start", async () => {
+		// Create a custom definition file
+		const agentDefsDir = join(tempDir, ".overstory", "agent-defs");
+		await Bun.write(join(agentDefsDir, "custom-coordinator.md"), "# Custom Coordinator\n");
+
+		// Save an existing coordinator session with a running PID
+		const existingSession = makeCoordinatorSession({
+			state: "working",
+			tmuxSession: "overstory-test-project-coordinator",
+			pid: process.pid, // Use actual running process
+		});
+		saveSessionsToDb([existingSession]);
+
+		// Make tmux report the session as alive
+		const { deps } = makeDeps(
+			{ "overstory-test-project-coordinator": true },
+			undefined,
+			undefined,
+			{
+				checkSessionStateMap: { "overstory-test-project-coordinator": "alive" },
+			},
+		);
+
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await expect(
+				coordinatorCommand(["start", "--def", "custom-coordinator"], deps),
+			).rejects.toThrow(AgentError);
+
+			// Verify error message mentions existing coordinator
+			try {
+				await coordinatorCommand(["start", "--def", "custom-coordinator"], deps);
+				expect(true).toBe(false); // Should have thrown
+			} catch (err: unknown) {
+				expect(err).toBeInstanceOf(AgentError);
+				const agentErr = err as AgentError;
+				expect(agentErr.message).toContain("already running");
+			}
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+	});
 
 	test("throws AgentError when session dies during startup", async () => {
 		// waitForTuiReady returns false AND isSessionAlive returns false — session died
