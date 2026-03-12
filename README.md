@@ -88,7 +88,7 @@ Every command supports `--json` where noted. Global flags: `-q`/`--quiet`, `--ti
 | `ov stop <agent-name>` | Terminate a running agent (`--clean-worktree`, `--json`) |
 | `ov prime` | Load context for orchestrator/agent (`--agent`, `--compact`) |
 | `ov spec write <task-id>` | Write a task specification (`--body`) |
-| `ov discover` | Discover a brownfield codebase via scout swarm (`--skip`, `--name`, `--task-id`, `--json`) |
+| `ov discover` | Discover a brownfield codebase via coordinator-driven scout swarm (`--skip`, `--name`, `--attach`, `--watchdog`, `--json`) |
 | `ov update` | Refresh `.overstory/` managed files from installed package (`--agents`, `--manifest`, `--hooks`, `--dry-run`, `--json`) |
 
 ### Coordination
@@ -271,7 +271,7 @@ overstory/
       ecosystem.ts                os-eco tool dashboard
       update.ts                   Refresh managed files
       upgrade.ts                  npm version upgrades
-      discover.ts                 Brownfield codebase discovery via scout swarm
+      discover.ts                 Brownfield codebase discovery via coordinator-driven scout swarm
       completions.ts              Shell completion generation (bash/zsh/fish)
     canopy/
       client.ts                   Canopy client (prompt rendering, listing, emission)

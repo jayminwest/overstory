@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-03-12
+
+### Changed
+
+#### Discover Command Rewrite
+- **`ov discover` now coordinator-driven** — replaced direct scout spawning with a coordinator session that autonomously spawns leads and scouts per category, synthesizes results, and writes mulch records
+- **`startCoordinatorSession()` extracted** from `coordinator.ts` — reusable core for commands that need coordinator-like sessions with custom names or beacons (used by `ov discover`)
+- **New flags:** `--attach` / `--no-attach` and `--watchdog` on `ov discover`; default agent name changed from `discover` to `discover-coordinator`
+- **`buildDiscoveryBeacon()` and `buildScoutArgs()` helpers** exported from `discover.ts` for testability
+
+### Fixed
+
+- **Task-lock collision in `ov discover`** — each scout now gets a unique task ID (`taskId-categoryName`) instead of sharing one, preventing `checkTaskLock()` from blocking scouts 2–6
+- **`maxAgentsPerLead` rejection in `ov discover`** — scout count now passed via `--max-agents` to avoid exceeding the default cap of 5 when all 6 categories are active
+
+### Testing
+
+- 3398 tests across 102 files (8038 `expect()` calls)
+- Added 6 unit tests for `buildScoutArgs()` covering all acceptance criteria
+
 ## [0.9.0] - 2026-03-11
 
 ### Added
@@ -1585,7 +1605,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Biome configuration for formatting and linting
 - TypeScript strict mode with `noUncheckedIndexedAccess`
 
-[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/jayminwest/overstory/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/jayminwest/overstory/compare/v0.8.7...v0.9.0
 [0.8.7]: https://github.com/jayminwest/overstory/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/jayminwest/overstory/compare/v0.8.5...v0.8.6

@@ -296,10 +296,12 @@ ov sling <task-id>              Spawn a worker agent
   --profile <name>                       Named profile for canopy prompt overlay
   --json                                 JSON output
 
-ov discover                      Discover a brownfield codebase via scout swarm
+ov discover                      Discover a brownfield codebase via coordinator-driven scout swarm
   --skip <categories>                    Skip categories (comma-separated: architecture,dependencies,testing,apis,config,implicit)
-  --name <name>                          Parent agent name (default: discover)
-  --task-id <id>                         Task ID (default: auto-generated)
+  --name <name>                          Coordinator agent name (default: discover-coordinator)
+  --task-id <id>                         Task ID (unused — kept for backward compatibility)
+  --attach / --no-attach                 Control tmux attach (default: attach on TTY)
+  --watchdog                             Auto-start watchdog daemon with coordinator
   --json                                 JSON output
 
 ov stop <agent-name>            Terminate a running agent
