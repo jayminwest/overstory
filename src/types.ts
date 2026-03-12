@@ -135,6 +135,16 @@ export interface OverstoryConfig {
 		/** Pi runtime configuration for model alias expansion. */
 		pi?: PiRuntimeConfig;
 		/**
+		 * Controls whether tmux sessions wrap the startup command in `/bin/bash -c '...'`.
+		 *
+		 * - "auto" (default): wrap only when the user's $SHELL is non-POSIX (e.g. fish).
+		 *   Bash/zsh/sh handle inline exports natively and wrapping can break commands
+		 *   with complex quoting (e.g. Pi runtime's $(cat '...') subshells).
+		 * - "always": always wrap (legacy behavior, needed for fish shell users).
+		 * - "never": never wrap (assume POSIX-compatible shell).
+		 */
+		bashWrapper?: "auto" | "always" | "never";
+		/**
 		 * Delay in milliseconds between creating a tmux session and polling
 		 * for TUI readiness. Gives slow shells (oh-my-zsh, starship, etc.)
 		 * time to finish initializing before the agent command starts.
