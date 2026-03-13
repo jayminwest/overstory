@@ -1106,6 +1106,12 @@ async function executeDashboard(opts: DashboardOpts): Promise<void> {
 				config.runtime,
 			);
 			lastGoodData = data;
+			// If recovering from an error, clear the stale error line at the bottom
+			if (lastErrorMsg !== null) {
+				const w = process.stdout.columns ?? 100;
+				const h = process.stdout.rows ?? 30;
+				process.stdout.write(`${CURSOR.cursorTo(h, 1)}${" ".repeat(w)}`);
+			}
 			lastErrorMsg = null;
 			renderDashboard(data, interval, isFirstRender);
 			isFirstRender = false;
