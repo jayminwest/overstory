@@ -1,6 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { OverstoryConfig } from "../types.ts";
-import { checkVersion } from "./version.ts";
+import { checkCurrentVersion, checkVersion, checkVersionSync } from "./version.ts";
 
 // Minimal config for testing
 const mockConfig: OverstoryConfig = {
@@ -133,5 +137,105 @@ describe("checkVersion", () => {
 				expect(typeof check.fixable).toBe("boolean");
 			}
 		}
+	});
+});
+
+describe("checkCurrentVersion", () => {
+	test("passes against real repo root", async () => {
+		// Use the real overstory repo root (two levels up from src/doctor/)
+		const toolRoot = join(import.meta.dir, "..", "..");
+		const check = await checkCurrentVersion(toolRoot);
+		expect(check.name).toBe("version-current");
+		expect(check.category).toBe("version");
+		expect(check.status).toBe("pass");
+		expect(check.message).toMatch(/ov v\d+\.\d+\.\d+/);
+	});
+
+	test("fails for temp dir without version field", async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), "version-test-"));
+		try {
+			// Write a package.json without a version field
+			await Bun.write(join(tempDir, "package.json"), JSON.stringify({ name: "test" }));
+			const check = await checkCurrentVersion(tempDir);
+			expect(check.name).toBe("version-current");
+			expect(check.status).toBe("fail");
+			expect(check.message).toContain("no version field");
+		} finally {
+			await cleanupTempDir(tempDir);
+		}
+	});
+
+	test("fails for temp dir without package.json", async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), "version-test-"));
+		try {
+			const check = await checkCurrentVersion(tempDir);
+			expect(check.name).toBe("version-current");
+			expect(check.status).toBe("fail");
+		} finally {
+			await cleanupTempDir(tempDir);
+		}
+	});
+});
+
+describe("checkVersionSync", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "version-sync-test-"));
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tempDir);
+	});
+
+	test("passes when versions match", async () => {
+		await Bun.write(
+			join(tempDir, "package.json"),
+			JSON.stringify({ name: "test", version: "1.2.3" }),
+		);
+		const { mkdir } = await import("node:fs/promises");
+		await mkdir(join(tempDir, "src"), { recursive: true });
+		await Bun.write(
+			join(tempDir, "src", "index.ts"),
+			'const VERSION = "1.2.3";\nexport { VERSION };\n',
+		);
+
+		const check = await checkVersionSync(tempDir);
+		expect(check.name).toBe("package-json-sync");
+		expect(check.category).toBe("version");
+		expect(check.status).toBe("pass");
+		expect(check.message).toContain("synchronized");
+		expect(check.details?.join(" ")).toContain("1.2.3");
+	});
+
+	test("warns when versions mismatch", async () => {
+		await Bun.write(
+			join(tempDir, "package.json"),
+			JSON.stringify({ name: "test", version: "1.0.0" }),
+		);
+		const { mkdir } = await import("node:fs/promises");
+		await mkdir(join(tempDir, "src"), { recursive: true });
+		await Bun.write(
+			join(tempDir, "src", "index.ts"),
+			'const VERSION = "2.0.0";\nexport { VERSION };\n',
+		);
+
+		const check = await checkVersionSync(tempDir);
+		expect(check.name).toBe("package-json-sync");
+		expect(check.status).toBe("warn");
+		expect(check.message).toContain("mismatch");
+		expect(check.fixable).toBe(true);
+	});
+
+	test("warns when src/index.ts is missing", async () => {
+		await Bun.write(
+			join(tempDir, "package.json"),
+			JSON.stringify({ name: "test", version: "1.0.0" }),
+		);
+		// No src/index.ts created
+
+		const check = await checkVersionSync(tempDir);
+		expect(check.name).toBe("package-json-sync");
+		expect(check.status).toBe("warn");
 	});
 });

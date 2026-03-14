@@ -3,7 +3,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDir } from "../test-helpers.ts";
-import { watchCommand } from "./watch.ts";
+import type { HealthCheck } from "../types.ts";
+import { formatCheck, watchCommand } from "./watch.ts";
 
 /**
  * Tests for `overstory watch` command.
@@ -144,3 +145,68 @@ describe("watchCommand", () => {
 		// If it doesn't exist, that's also valid (spawn failed before writing new PID)
 	});
 });
+
+describe("formatCheck", () => {
+	function makeCheck(overrides: Partial<HealthCheck>): HealthCheck {
+		return {
+			agentName: "test-agent",
+			timestamp: new Date().toISOString(),
+			processAlive: true,
+			tmuxAlive: true,
+			pidAlive: true,
+			lastActivity: new Date().toISOString(),
+			state: "working",
+			action: "none",
+			reconciliationNote: null,
+			...overrides,
+		};
+	}
+
+	test("terminate action uses x icon", () => {
+		const result = formatCheck(makeCheck({ action: "terminate" }));
+		expect(result).toMatch(/^x /);
+	});
+
+	test("escalate action uses ! icon", () => {
+		const result = formatCheck(makeCheck({ action: "escalate" }));
+		expect(result).toMatch(/^! /);
+	});
+
+	test("investigate action uses > icon", () => {
+		const result = formatCheck(makeCheck({ action: "investigate" }));
+		expect(result).toMatch(/^> /);
+	});
+
+	test("pidAlive true shows up", () => {
+		const result = formatCheck(makeCheck({ pidAlive: true }));
+		expect(result).toContain("pid=up");
+	});
+
+	test("pidAlive false shows down", () => {
+		const result = formatCheck(makeCheck({ pidAlive: false }));
+		expect(result).toContain("pid=down");
+	});
+
+	test("pidAlive null shows n/a", () => {
+		const result = formatCheck(makeCheck({ pidAlive: null }));
+		expect(result).toContain("pid=n/a");
+	});
+
+	test("includes reconciliation note when present", () => {
+		const result = formatCheck(makeCheck({ reconciliationNote: "stale session" }));
+		expect(result).toContain("[stale session]");
+	});
+
+	test("no reconciliation note brackets when null", () => {
+		const result = formatCheck(makeCheck({ reconciliationNote: null }));
+		expect(result).not.toContain("[");
+	});
+
+	test("includes agent name and state", () => {
+		const result = formatCheck(makeCheck({ agentName: "builder-1", state: "stalled" }));
+		expect(result).toContain("builder-1");
+		expect(result).toContain("stalled");
+	});
+});
+
+// PID and bin utility tests moved to src/utils/pid.test.ts and src/utils/bin.test.ts

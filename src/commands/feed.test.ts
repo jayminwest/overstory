@@ -14,9 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
+import type { ColorFn } from "../logging/color.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
-import type { InsertEvent } from "../types.ts";
-import { feedCommand } from "./feed.ts";
+import type { InsertEvent, StoredEvent } from "../types.ts";
+import { feedCommand, pollFeedTick } from "./feed.ts";
 
 /** Helper to create an InsertEvent with sensible defaults. */
 function makeEvent(overrides: Partial<InsertEvent> = {}): InsertEvent {
@@ -590,5 +591,119 @@ describe("feedCommand", () => {
 			// scout-1 should appear
 			expect(out).toContain("scout-1");
 		});
+	});
+});
+
+describe("pollFeedTick", () => {
+	test("returns same lastSeenId when no new events", () => {
+		const queryFn = (): StoredEvent[] => [];
+		const colorMap = new Map<string, ColorFn>();
+
+		const result = pollFeedTick(42, queryFn, colorMap, true);
+		expect(result).toBe(42);
+	});
+
+	test("returns max id when new events are found", () => {
+		const events: StoredEvent[] = [
+			{
+				id: 50,
+				runId: "run-1",
+				agentName: "builder-1",
+				sessionId: "s1",
+				eventType: "tool_start",
+				toolName: "Bash",
+				toolArgs: null,
+				toolDurationMs: null,
+				level: "info",
+				data: null,
+				createdAt: new Date().toISOString(),
+			},
+			{
+				id: 51,
+				runId: "run-1",
+				agentName: "builder-1",
+				sessionId: "s1",
+				eventType: "tool_end",
+				toolName: "Bash",
+				toolArgs: null,
+				toolDurationMs: 100,
+				level: "info",
+				data: null,
+				createdAt: new Date().toISOString(),
+			},
+		];
+
+		const queryFn = (): StoredEvent[] => events;
+		const colorMap = new Map<string, ColorFn>();
+
+		// Capture stdout to avoid test noise
+		const origWrite = process.stdout.write;
+		const captured: string[] = [];
+		process.stdout.write = ((chunk: string) => {
+			captured.push(chunk);
+			return true;
+		}) as typeof process.stdout.write;
+
+		try {
+			const result = pollFeedTick(40, queryFn, colorMap, true);
+			expect(result).toBe(51);
+			// Should have produced JSON output
+			expect(captured.length).toBeGreaterThan(0);
+		} finally {
+			process.stdout.write = origWrite;
+		}
+	});
+
+	test("filters events to those with id > lastSeenId", () => {
+		const events: StoredEvent[] = [
+			{
+				id: 5,
+				runId: "run-1",
+				agentName: "builder-1",
+				sessionId: "s1",
+				eventType: "tool_start",
+				toolName: "Read",
+				toolArgs: null,
+				toolDurationMs: null,
+				level: "info",
+				data: null,
+				createdAt: new Date().toISOString(),
+			},
+			{
+				id: 10,
+				runId: "run-1",
+				agentName: "builder-1",
+				sessionId: "s1",
+				eventType: "tool_end",
+				toolName: "Read",
+				toolArgs: null,
+				toolDurationMs: 50,
+				level: "info",
+				data: null,
+				createdAt: new Date().toISOString(),
+			},
+		];
+
+		const queryFn = (): StoredEvent[] => events;
+		const colorMap = new Map<string, ColorFn>();
+
+		// With lastSeenId = 5, only event with id=10 should pass
+		const origWrite = process.stdout.write;
+		const captured: string[] = [];
+		process.stdout.write = ((chunk: string) => {
+			captured.push(chunk);
+			return true;
+		}) as typeof process.stdout.write;
+
+		try {
+			const result = pollFeedTick(5, queryFn, colorMap, true);
+			expect(result).toBe(10);
+			// Only 1 event should be emitted (the one with id > 5)
+			// Each JSON event is output on its own line
+			const jsonOutputs = captured.filter((c) => c.includes("tool_end"));
+			expect(jsonOutputs).toHaveLength(1);
+		} finally {
+			process.stdout.write = origWrite;
+		}
 	});
 });

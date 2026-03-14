@@ -792,3 +792,6 @@ describe("--agent", () => {
 		expect(stdoutOutput).toContain("Agent cleaned");
 	});
 });
+
+// fs utility tests (wipeSqliteDb, resetJsonFile, clearDirectory, deleteFile)
+// moved to src/utils/fs.test.ts

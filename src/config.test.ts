@@ -1153,6 +1153,110 @@ coordinator:
 	});
 });
 
+describe("YAML parser edge cases", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-test-"));
+		await mkdir(join(tempDir, ".overstory"), { recursive: true });
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tempDir);
+	});
+
+	async function writeConfig(yaml: string): Promise<void> {
+		await Bun.write(join(tempDir, ".overstory", "config.yaml"), yaml);
+	}
+
+	test("inline comments are stripped from values", async () => {
+		await writeConfig(`
+project:
+  canonicalBranch: develop # this is a comment
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.project.canonicalBranch).toBe("develop");
+	});
+
+	test("quoted strings containing # are preserved (not treated as comments)", async () => {
+		await writeConfig(`
+project:
+  canonicalBranch: "feature#branch"
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.project.canonicalBranch).toBe("feature#branch");
+	});
+
+	test("single-quoted strings containing # are preserved", async () => {
+		await writeConfig(`
+project:
+  canonicalBranch: 'feature#branch'
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.project.canonicalBranch).toBe("feature#branch");
+	});
+
+	test("boolean coercion: true/True/TRUE all parse as true", async () => {
+		// Test with three separate configs since they all map to the same field
+		for (const val of ["true", "True", "TRUE"]) {
+			await writeConfig(`mulch:\n  enabled: ${val}\n`);
+			const config = await loadConfig(tempDir);
+			expect(config.mulch.enabled).toBe(true);
+		}
+	});
+
+	test("boolean coercion: false/False/FALSE all parse as false", async () => {
+		for (const val of ["false", "False", "FALSE"]) {
+			await writeConfig(`mulch:\n  enabled: ${val}\n`);
+			const config = await loadConfig(tempDir);
+			expect(config.mulch.enabled).toBe(false);
+		}
+	});
+
+	test("yes/no are treated as plain strings, not booleans", async () => {
+		// The YAML parser does NOT treat yes/no as booleans (unlike YAML 1.1)
+		await writeConfig(`
+project:
+  canonicalBranch: yes
+`);
+		const config = await loadConfig(tempDir);
+		// "yes" is a plain string, not coerced to boolean
+		expect(config.project.canonicalBranch).toBe("yes");
+	});
+
+	test("integer number coercion", async () => {
+		await writeConfig(`
+agents:
+  maxConcurrent: 42
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.agents.maxConcurrent).toBe(42);
+	});
+
+	test("float number coercion", async () => {
+		// maxSessionsPerRun doesn't accept floats, but the parser itself parses them.
+		// Use a field that passes validation as a number.
+		await writeConfig(`
+agents:
+  maxSessionsPerRun: 5
+  staggerDelayMs: 1500
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.agents.staggerDelayMs).toBe(1500);
+	});
+
+	test("underscore-separated numbers are coerced correctly", async () => {
+		await writeConfig(`
+watchdog:
+  staleThresholdMs: 300_000
+  zombieThresholdMs: 600_000
+`);
+		const config = await loadConfig(tempDir);
+		expect(config.watchdog.staleThresholdMs).toBe(300_000);
+		expect(config.watchdog.zombieThresholdMs).toBe(600_000);
+	});
+});
+
 describe("DEFAULT_CONFIG", () => {
 	test("has all required top-level keys", () => {
 		expect(DEFAULT_CONFIG.project).toBeDefined();

@@ -7,7 +7,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { createEcosystemCommand, executeEcosystem } from "./ecosystem.ts";
+import {
+	createEcosystemCommand,
+	executeEcosystem,
+	formatDoctorLine,
+	printHumanOutput,
+	type ToolResult,
+} from "./ecosystem.ts";
 
 describe("createEcosystemCommand — CLI structure", () => {
 	test("command has correct name", () => {
@@ -98,4 +104,123 @@ describe("executeEcosystem — JSON output shape", () => {
 			expect(overstory.version).toBeDefined();
 		}
 	}, 30_000);
+});
+
+describe("formatDoctorLine", () => {
+	test("pass-only shows green passed count", () => {
+		const result = formatDoctorLine({ pass: 5, warn: 0, fail: 0 });
+		expect(result).toContain("5 passed");
+		expect(result).not.toContain("warn");
+		expect(result).not.toContain("fail");
+	});
+
+	test("warn and fail without pass", () => {
+		const result = formatDoctorLine({ pass: 0, warn: 2, fail: 3 });
+		expect(result).toContain("2 warn");
+		expect(result).toContain("3 fail");
+		expect(result).not.toContain("passed");
+	});
+
+	test("all three counts present", () => {
+		const result = formatDoctorLine({ pass: 10, warn: 1, fail: 2 });
+		expect(result).toContain("10 passed");
+		expect(result).toContain("1 warn");
+		expect(result).toContain("2 fail");
+	});
+
+	test("all-zero returns 'no checks'", () => {
+		const result = formatDoctorLine({ pass: 0, warn: 0, fail: 0 });
+		expect(result).toBe("no checks");
+	});
+});
+
+// getInstalledVersion tests moved to src/utils/version.test.ts
+
+describe("printHumanOutput", () => {
+	function capturePrintOutput(results: ToolResult[]): string {
+		const chunks: string[] = [];
+		const original = process.stdout.write;
+		process.stdout.write = (chunk: string | Uint8Array) => {
+			chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+			return true;
+		};
+		try {
+			printHumanOutput(results);
+		} finally {
+			process.stdout.write = original;
+		}
+		return chunks.join("");
+	}
+
+	test("shows installed tool with version", () => {
+		const results: ToolResult[] = [
+			{
+				name: "test-tool",
+				cli: "tt",
+				npm: "@test/tool",
+				installed: true,
+				version: "1.2.3",
+				latest: "1.2.3",
+				upToDate: true,
+			},
+		];
+		const output = capturePrintOutput(results);
+		expect(output).toContain("test-tool");
+		expect(output).toContain("1.2.3");
+		expect(output).toContain("up to date");
+		expect(output).toContain("1/1 installed");
+	});
+
+	test("shows not-installed tool with install hint", () => {
+		const results: ToolResult[] = [
+			{
+				name: "missing-tool",
+				cli: "mt",
+				npm: "@test/missing",
+				installed: false,
+			},
+		];
+		const output = capturePrintOutput(results);
+		expect(output).toContain("missing-tool");
+		expect(output).toContain("not installed");
+		expect(output).toContain("npm i -g @test/missing");
+		expect(output).toContain("1 missing");
+	});
+
+	test("shows outdated tool with latest version", () => {
+		const results: ToolResult[] = [
+			{
+				name: "old-tool",
+				cli: "ot",
+				npm: "@test/old",
+				installed: true,
+				version: "1.0.0",
+				latest: "2.0.0",
+				upToDate: false,
+			},
+		];
+		const output = capturePrintOutput(results);
+		expect(output).toContain("old-tool");
+		expect(output).toContain("1.0.0");
+		expect(output).toContain("outdated");
+		expect(output).toContain("2.0.0");
+		expect(output).toContain("1 outdated");
+	});
+
+	test("shows latestError gracefully", () => {
+		const results: ToolResult[] = [
+			{
+				name: "err-tool",
+				cli: "et",
+				npm: "@test/err",
+				installed: true,
+				version: "1.0.0",
+				latestError: "network timeout",
+			},
+		];
+		const output = capturePrintOutput(results);
+		expect(output).toContain("err-tool");
+		expect(output).toContain("1.0.0");
+		expect(output).toContain("version check failed");
+	});
 });

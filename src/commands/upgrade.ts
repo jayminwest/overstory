@@ -10,6 +10,7 @@
 import { Command } from "commander";
 import { jsonError, jsonOutput } from "../json.ts";
 import { muted, printError, printHint, printSuccess, printWarning } from "../logging/color.ts";
+import { fetchLatestVersion, getCurrentVersion } from "../utils/version.ts";
 
 const OVERSTORY_PACKAGE = "@os-eco/overstory-cli";
 
@@ -24,23 +25,6 @@ export interface UpgradeOptions {
 	check?: boolean;
 	all?: boolean;
 	json?: boolean;
-}
-
-async function getCurrentVersion(): Promise<string> {
-	const pkgPath = new URL("../../package.json", import.meta.url);
-	const pkg = JSON.parse(await Bun.file(pkgPath).text()) as { version: string };
-	return pkg.version;
-}
-
-async function fetchLatestVersion(packageName: string): Promise<string> {
-	const res = await fetch(`https://registry.npmjs.org/${packageName}/latest`);
-	if (!res.ok) {
-		throw new Error(
-			`Failed to fetch npm registry for ${packageName}: ${res.status} ${res.statusText}`,
-		);
-	}
-	const data = (await res.json()) as { version: string };
-	return data.version;
 }
 
 async function runInstall(packageName: string): Promise<number> {

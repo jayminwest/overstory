@@ -24,6 +24,51 @@ function printEvent(event: StoredEvent, colorMap: Map<string, ColorFn>): void {
 	process.stdout.write(`${formatEventLine(event, colorMap)}\n`);
 }
 
+/**
+ * Process one poll tick of the feed follow loop: query recent events,
+ * filter to those newer than lastSeenId, print them, and return the
+ * updated lastSeenId.
+ * @internal Exported for testing.
+ */
+export function pollFeedTick(
+	lastSeenId: number,
+	queryFn: (opts: { since: string; limit: number }) => StoredEvent[],
+	colorMap: Map<string, ColorFn>,
+	json: boolean,
+): number {
+	// Query events from 60s ago, then filter client-side for id > lastSeenId
+	const pollSince = new Date(Date.now() - 60 * 1000).toISOString();
+	const recentEvents = queryFn({ since: pollSince, limit: 1000 });
+
+	// Filter to new events only
+	const newEvents = recentEvents.filter((e) => e.id > lastSeenId);
+
+	if (newEvents.length > 0) {
+		if (!json) {
+			// Update color map for any new agents
+			extendAgentColorMap(colorMap, newEvents);
+
+			// Print new events
+			for (const event of newEvents) {
+				printEvent(event, colorMap);
+			}
+		} else {
+			// JSON mode: print each event as a line
+			for (const event of newEvents) {
+				jsonOutput("feed", { event });
+			}
+		}
+
+		// Update lastSeenId
+		const lastNew = newEvents[newEvents.length - 1];
+		if (lastNew) {
+			return lastNew.id;
+		}
+	}
+
+	return lastSeenId;
+}
+
 interface FeedOpts {
 	follow?: boolean;
 	interval?: string;
@@ -167,36 +212,7 @@ async function executeFeed(opts: FeedOpts): Promise<void> {
 		// Poll for new events
 		while (true) {
 			await Bun.sleep(interval);
-
-			// Query events from 60s ago, then filter client-side for id > lastSeenId
-			const pollSince = new Date(Date.now() - 60 * 1000).toISOString();
-			const recentEvents = queryEvents({ since: pollSince, limit: 1000 });
-
-			// Filter to new events only
-			const newEvents = recentEvents.filter((e) => e.id > lastSeenId);
-
-			if (newEvents.length > 0) {
-				if (!json) {
-					// Update color map for any new agents
-					extendAgentColorMap(globalColorMap, newEvents);
-
-					// Print new events
-					for (const event of newEvents) {
-						printEvent(event, globalColorMap);
-					}
-				} else {
-					// JSON mode: print each event as a line
-					for (const event of newEvents) {
-						jsonOutput("feed", { event });
-					}
-				}
-
-				// Update lastSeenId
-				const lastNew = newEvents[newEvents.length - 1];
-				if (lastNew) {
-					lastSeenId = lastNew.id;
-				}
-			}
+			lastSeenId = pollFeedTick(lastSeenId, queryEvents, globalColorMap, json);
 		}
 	} finally {
 		eventStore.close();

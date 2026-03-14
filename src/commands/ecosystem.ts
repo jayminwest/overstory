@@ -9,6 +9,7 @@ import { Command } from "commander";
 import { jsonError, jsonOutput } from "../json.ts";
 import { accent, brand, color, muted } from "../logging/color.ts";
 import { thickSeparator } from "../logging/theme.ts";
+import { fetchLatestVersion, getInstalledVersion } from "../utils/version.ts";
 
 const TOOLS = [
 	{ name: "overstory", cli: "ov", npm: "@os-eco/overstory-cli" },
@@ -21,13 +22,13 @@ export interface EcosystemOptions {
 	json?: boolean;
 }
 
-interface DoctorSummary {
+export interface DoctorSummary {
 	pass: number;
 	warn: number;
 	fail: number;
 }
 
-interface ToolResult {
+export interface ToolResult {
 	name: string;
 	cli: string;
 	npm: string;
@@ -37,55 +38,6 @@ interface ToolResult {
 	upToDate?: boolean;
 	doctorSummary?: DoctorSummary;
 	latestError?: string;
-}
-
-async function getInstalledVersion(cli: string): Promise<string | null> {
-	// Try --version --json first
-	try {
-		const proc = Bun.spawn([cli, "--version", "--json"], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const exitCode = await proc.exited;
-		if (exitCode === 0) {
-			const stdout = await new Response(proc.stdout).text();
-			try {
-				const data = JSON.parse(stdout.trim()) as { version?: string };
-				if (data.version) return data.version;
-			} catch {
-				// Not valid JSON, fall through to plain text
-			}
-		}
-	} catch {
-		// CLI not found — fall through to plain text fallback
-	}
-
-	// Fallback: --version plain text
-	try {
-		const proc = Bun.spawn([cli, "--version"], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const exitCode = await proc.exited;
-		if (exitCode === 0) {
-			const stdout = await new Response(proc.stdout).text();
-			const match = stdout.match(/(\d+\.\d+\.\d+)/);
-			if (match?.[1]) return match[1];
-		}
-	} catch {
-		// CLI not found
-	}
-
-	return null;
-}
-
-async function fetchLatestVersion(packageName: string): Promise<string> {
-	const res = await fetch(`https://registry.npmjs.org/${packageName}/latest`);
-	if (!res.ok) {
-		throw new Error(`npm registry error: ${res.status} ${res.statusText}`);
-	}
-	const data = (await res.json()) as { version: string };
-	return data.version;
 }
 
 async function getDoctorSummary(): Promise<DoctorSummary | undefined> {
@@ -158,7 +110,8 @@ async function checkTool(tool: { name: string; cli: string; npm: string }): Prom
 	};
 }
 
-function formatDoctorLine(summary: DoctorSummary): string {
+/** @internal Exported for testing. */
+export function formatDoctorLine(summary: DoctorSummary): string {
 	const parts: string[] = [];
 	if (summary.pass > 0) parts.push(color.green(`${summary.pass} passed`));
 	if (summary.warn > 0) parts.push(color.yellow(`${summary.warn} warn`));
@@ -166,7 +119,8 @@ function formatDoctorLine(summary: DoctorSummary): string {
 	return parts.length > 0 ? parts.join(", ") : "no checks";
 }
 
-function printHumanOutput(results: ToolResult[]): void {
+/** @internal Exported for testing. */
+export function printHumanOutput(results: ToolResult[]): void {
 	process.stdout.write(`${brand.bold("os-eco Ecosystem")}\n`);
 	process.stdout.write(`${thickSeparator()}\n`);
 	process.stdout.write("\n");
