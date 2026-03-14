@@ -104,7 +104,7 @@ describe("checkProviders", () => {
 			const config = makeConfig({
 				providers: {
 					anthropic: { type: "native" },
-					openrouter: { type: "gateway", baseUrl: "https://openrouter.ai/api/v1" },
+					openrouter: { type: "gateway", baseUrl: "http://127.0.0.1:19873" },
 				},
 			});
 			const checks = await checkProviders(config, OVERSTORY_DIR);
@@ -241,11 +241,29 @@ describe("checkProviders", () => {
 	});
 
 	describe("tool-use-compat check", () => {
+		// Local HTTP server to avoid network calls to real openrouter.ai
+		let localServer: ReturnType<typeof Bun.serve>;
+		let localBaseUrl: string;
+
+		beforeAll(() => {
+			localServer = Bun.serve({
+				port: 0,
+				fetch() {
+					return new Response("ok");
+				},
+			});
+			localBaseUrl = `http://127.0.0.1:${localServer.port}`;
+		});
+
+		afterAll(async () => {
+			await localServer.stop();
+		});
+
 		test("tool-heavy role with provider-prefixed model warns", async () => {
 			const config = makeConfig({
 				models: { builder: "openrouter/openai/gpt-4o" },
 				providers: {
-					openrouter: { type: "gateway", baseUrl: "https://openrouter.ai/api/v1" },
+					openrouter: { type: "gateway", baseUrl: localBaseUrl },
 				},
 			});
 			const checks = await checkProviders(config, OVERSTORY_DIR);
@@ -260,7 +278,7 @@ describe("checkProviders", () => {
 			const config = makeConfig({
 				models: { lead: "openrouter/openai/gpt-4o" },
 				providers: {
-					openrouter: { type: "gateway", baseUrl: "https://openrouter.ai/api/v1" },
+					openrouter: { type: "gateway", baseUrl: localBaseUrl },
 				},
 			});
 			const checks = await checkProviders(config, OVERSTORY_DIR);
@@ -287,7 +305,7 @@ describe("checkProviders", () => {
 					merger: "openrouter/openai/gpt-4o",
 				},
 				providers: {
-					openrouter: { type: "gateway", baseUrl: "https://openrouter.ai/api/v1" },
+					openrouter: { type: "gateway", baseUrl: localBaseUrl },
 				},
 			});
 			const checks = await checkProviders(config, OVERSTORY_DIR);
@@ -298,6 +316,24 @@ describe("checkProviders", () => {
 	});
 
 	describe("model-provider-ref(s) check", () => {
+		// Local HTTP server to avoid network calls to real openrouter.ai
+		let localServer: ReturnType<typeof Bun.serve>;
+		let localBaseUrl: string;
+
+		beforeAll(() => {
+			localServer = Bun.serve({
+				port: 0,
+				fetch() {
+					return new Response("ok");
+				},
+			});
+			localBaseUrl = `http://127.0.0.1:${localServer.port}`;
+		});
+
+		afterAll(async () => {
+			await localServer.stop();
+		});
+
 		test("model referencing unknown provider fails", async () => {
 			const config = makeConfig({
 				models: { builder: "unknownprovider/some-model" },
@@ -315,7 +351,7 @@ describe("checkProviders", () => {
 			const config = makeConfig({
 				models: { builder: "openrouter/openai/gpt-4o" },
 				providers: {
-					openrouter: { type: "gateway", baseUrl: "https://openrouter.ai/api/v1" },
+					openrouter: { type: "gateway", baseUrl: localBaseUrl },
 				},
 			});
 			const checks = await checkProviders(config, OVERSTORY_DIR);
