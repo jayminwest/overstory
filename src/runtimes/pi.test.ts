@@ -14,8 +14,8 @@ describe("PiRuntime", () => {
 			expect(runtime.id).toBe("pi");
 		});
 
-		test("instructionPath is .claude/CLAUDE.md", () => {
-			expect(runtime.instructionPath).toBe(".claude/CLAUDE.md");
+		test("instructionPath is AGENTS.md", () => {
+			expect(runtime.instructionPath).toBe("AGENTS.md");
 		});
 	});
 
@@ -356,7 +356,7 @@ describe("PiRuntime", () => {
 			await rm(tempDir, { recursive: true, force: true });
 		});
 
-		test("writes overlay to .claude/CLAUDE.md when overlay is provided", async () => {
+		test("writes overlay to AGENTS.md when overlay is provided", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
 			await runtime.deployConfig(
@@ -365,7 +365,7 @@ describe("PiRuntime", () => {
 				{ agentName: "test-builder", capability: "builder", worktreePath },
 			);
 
-			const overlayPath = join(worktreePath, ".claude", "CLAUDE.md");
+			const overlayPath = join(worktreePath, "AGENTS.md");
 			const content = await Bun.file(overlayPath).text();
 			expect(content).toBe("# Pi Agent Overlay\nThis is the overlay content.");
 		});
@@ -446,7 +446,7 @@ describe("PiRuntime", () => {
 			expect(content).toContain("\t");
 		});
 
-		test("skips CLAUDE.md when overlay is undefined", async () => {
+		test("skips AGENTS.md when overlay is undefined", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
 			await runtime.deployConfig(worktreePath, undefined, {
@@ -455,7 +455,7 @@ describe("PiRuntime", () => {
 				worktreePath,
 			});
 
-			const overlayPath = join(worktreePath, ".claude", "CLAUDE.md");
+			const overlayPath = join(worktreePath, "AGENTS.md");
 			const overlayExists = await Bun.file(overlayPath).exists();
 			expect(overlayExists).toBe(false);
 		});
@@ -485,13 +485,13 @@ describe("PiRuntime", () => {
 				{ agentName: "test-builder", capability: "builder", worktreePath },
 			);
 
-			const claudeMdExists = await Bun.file(join(worktreePath, ".claude", "CLAUDE.md")).exists();
+			const agentsMdExists = await Bun.file(join(worktreePath, "AGENTS.md")).exists();
 			const guardExists = await Bun.file(
 				join(worktreePath, ".pi", "extensions", "overstory-guard.ts"),
 			).exists();
 			const settingsExists = await Bun.file(join(worktreePath, ".pi", "settings.json")).exists();
 
-			expect(claudeMdExists).toBe(true);
+			expect(agentsMdExists).toBe(true);
 			expect(guardExists).toBe(true);
 			expect(settingsExists).toBe(true);
 		});
@@ -754,7 +754,7 @@ describe("PiRuntime integration: registry resolves 'pi'", () => {
 		const rt = getRuntime("pi");
 		expect(rt).toBeInstanceOf(PiRuntime);
 		expect(rt.id).toBe("pi");
-		expect(rt.instructionPath).toBe(".claude/CLAUDE.md");
+		expect(rt.instructionPath).toBe("AGENTS.md");
 	});
 
 	test("getRuntime rejects truly unknown runtimes", async () => {

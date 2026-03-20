@@ -89,11 +89,11 @@ were deployed.
 |---------|-------------------|
 | Claude Code | `.claude/CLAUDE.md` |
 | Codex | `AGENTS.md` |
-| Pi | `.claude/CLAUDE.md` |
+| Pi | `AGENTS.md` |
 | Copilot | `.github/copilot-instructions.md` |
 | Cursor | `.cursor/rules/overstory.md` |
 
-Pi reads `.claude/CLAUDE.md` natively, so it shares the same path as Claude Code.
+Pi reads `AGENTS.md` (and also honors `CLAUDE.md`), so Overstory should use the agent-native path.
 
 ---
 
@@ -391,11 +391,11 @@ persistent TUI.
 
 ### Pi (`src/runtimes/pi.ts`)
 
-A TUI runtime for Mario Zechner's Pi coding agent. Pi reads `.claude/CLAUDE.md`
-natively, so it shares the instruction path with Claude Code.
+A TUI runtime for Mario Zechner's Pi coding agent. Pi reads `AGENTS.md`
+as a native context file, so Overstory uses that path for worker overlays.
 
 **Key characteristics:**
-- `id = "pi"`, `instructionPath = ".claude/CLAUDE.md"`
+- `id = "pi"`, `instructionPath = "AGENTS.md"`
 - Spawn command: `pi --model <provider>/<model>`, with model alias expansion
 - Model alias expansion: `expandModel("sonnet")` → `"anthropic/claude-sonnet-4-6"`
   using the configured `modelMap`. Fully-qualified models pass through unchanged.
