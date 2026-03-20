@@ -116,6 +116,45 @@ export const COMMANDS: readonly CommandDef[] = [
 		],
 	},
 	{
+		name: "sessions",
+		desc: "Manage isolated tmux sessions",
+		subcommands: [
+			{
+				name: "list",
+				desc: "List overstory-managed tmux sessions",
+				flags: [
+					{ name: "--all", desc: "Include completed and zombie sessions" },
+					{ name: "--json", desc: "JSON output" },
+					{ name: "--help", desc: "Show help" },
+				],
+			},
+			{
+				name: "attach",
+				desc: "Attach to an active tmux session",
+				flags: [
+					{ name: "--json", desc: "JSON output" },
+					{ name: "--help", desc: "Show help" },
+				],
+			},
+			{
+				name: "kill",
+				desc: "Kill an isolated tmux session",
+				flags: [
+					{ name: "--json", desc: "JSON output" },
+					{ name: "--help", desc: "Show help" },
+				],
+			},
+			{
+				name: "current",
+				desc: "Print the current tmux session name",
+				flags: [
+					{ name: "--json", desc: "JSON output" },
+					{ name: "--help", desc: "Show help" },
+				],
+			},
+		],
+	},
+	{
 		name: "status",
 		desc: "Show all active agents and project state",
 		flags: [
@@ -660,7 +699,7 @@ export function generateBash(): string {
 		"  local cur prev words cword",
 		"  _init_completion || return",
 		"",
-		"  local commands='agents init sling prime stop status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run ecosystem upgrade completions'",
+		"  local commands='agents init sling prime stop status sessions dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run ecosystem upgrade completions'",
 		"",
 		"  # Top-level completion",
 		"  if [[ $cword -eq 1 ]]; then",

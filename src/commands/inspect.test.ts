@@ -8,7 +8,7 @@
  * SessionStore, MetricsStore). No mocks needed -- all dependencies are cheap and local.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -236,6 +236,65 @@ describe("inspectCommand", () => {
 			expect(data.session.taskId).toBe("overstory-001");
 			expect(data.timeSinceLastActivity).toBeGreaterThan(4000);
 			expect(data.timeSinceLastActivity).toBeLessThan(10000);
+		});
+
+		test("captures tmux output through the project's isolated socket", async () => {
+			const overstoryDir = join(tempDir, ".overstory");
+			const sessionsDbPath = join(overstoryDir, "sessions.db");
+			const store = createSessionStore(sessionsDbPath);
+			store.upsert({
+				id: "sess-1",
+				agentName: "builder-1",
+				capability: "builder",
+				worktreePath: "/tmp/wt",
+				branchName: "overstory/builder-1/test",
+				taskId: "overstory-001",
+				tmuxSession: "overstory-test-builder-1",
+				state: "working",
+				pid: 12345,
+				parentAgent: null,
+				depth: 0,
+				runId: null,
+				startedAt: new Date().toISOString(),
+				lastActivity: new Date().toISOString(),
+				escalationLevel: 0,
+				stalledSince: null,
+				transcriptPath: null,
+			});
+			store.close();
+
+			const otherCwd = await mkdtemp(join(tmpdir(), "inspect-other-cwd-"));
+			const spawnSpy = spyOn(Bun, "spawn");
+			spawnSpy.mockImplementation((...args: unknown[]) => {
+				const cmd = args[0] as string[];
+				expect(cmd).toEqual([
+					"tmux",
+					"-S",
+					join(tempDir, ".overstory", "tmux.sock"),
+					"capture-pane",
+					"-t",
+					"overstory-test-builder-1",
+					"-p",
+					"-S",
+					"-12",
+				]);
+				return {
+					stdout: new Response("live pane output\n").body as ReadableStream<Uint8Array>,
+					stderr: new Response("").body as ReadableStream<Uint8Array>,
+					exited: Promise.resolve(0),
+					pid: 12345,
+				} as unknown as ReturnType<typeof Bun.spawn>;
+			});
+
+			try {
+				process.chdir(otherCwd);
+				const data = await gatherInspectData(tempDir, "builder-1", { tmuxLines: 12 });
+				expect(data.tmuxOutput).toBe("live pane output");
+			} finally {
+				spawnSpy.mockRestore();
+				process.chdir(tempDir);
+				await cleanupTempDir(otherCwd);
+			}
 		});
 
 		test("extracts current file from recent Edit tool_start event", async () => {

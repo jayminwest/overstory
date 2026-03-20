@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AgentError } from "../errors.ts";
 import type { ReadyState } from "../runtimes/types.ts";
 import {
@@ -45,6 +48,20 @@ function mockSpawnResult(
 		pid: 12345,
 	};
 }
+
+let originalCwd: string;
+let tempCwd: string;
+
+beforeEach(async () => {
+	originalCwd = process.cwd();
+	tempCwd = await mkdtemp(join(tmpdir(), "overstory-tmux-cwd-"));
+	process.chdir(tempCwd);
+});
+
+afterEach(async () => {
+	process.chdir(originalCwd);
+	await rm(tempCwd, { recursive: true, force: true });
+});
 
 describe("createSession", () => {
 	let spawnSpy: ReturnType<typeof spyOn>;
@@ -269,6 +286,42 @@ describe("createSession", () => {
 		expect(spawnSpy).toHaveBeenCalledTimes(4);
 	});
 
+	test("uses project-local tmux socket and config when .overstory/tmux.conf exists", async () => {
+		await mkdir(join(tempCwd, ".overstory"), { recursive: true });
+		await Bun.write(join(tempCwd, ".overstory", "tmux.conf"), "set -g mouse on\n");
+
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) {
+				return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			}
+			if (callCount === 2) {
+				return mockSpawnResult("", "", 0);
+			}
+			return mockSpawnResult("4242\n", "", 0);
+		});
+
+		await createSession("isolated-agent", tempCwd, "echo hello");
+
+		const tmuxCallArgs = spawnSpy.mock.calls[1] as unknown[];
+		const cmd = tmuxCallArgs[0] as string[];
+		expect(cmd).toEqual([
+			"tmux",
+			"-S",
+			join(tempCwd, ".overstory", "tmux.sock"),
+			"-f",
+			join(tempCwd, ".overstory", "tmux.conf"),
+			"new-session",
+			"-d",
+			"-s",
+			"isolated-agent",
+			"-c",
+			tempCwd,
+			expect.any(String),
+		]);
+	});
+
 	test("throws after exhausting all list-panes retries", async () => {
 		let callCount = 0;
 		spawnSpy.mockImplementation(() => {
@@ -361,6 +414,24 @@ describe("listSessions", () => {
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
 		expect(cmd).toEqual(["tmux", "list-sessions", "-F", "#{session_name}:#{pid}"]);
+	});
+
+	test("uses project-local tmux socket when .overstory exists", async () => {
+		await mkdir(join(tempCwd, ".overstory"), { recursive: true });
+		spawnSpy.mockImplementation(() => mockSpawnResult("", "", 0));
+
+		await listSessions();
+
+		const callArgs = spawnSpy.mock.calls[0] as unknown[];
+		const cmd = callArgs[0] as string[];
+		expect(cmd).toEqual([
+			"tmux",
+			"-S",
+			join(tempCwd, ".overstory", "tmux.sock"),
+			"list-sessions",
+			"-F",
+			"#{session_name}:#{pid}",
+		]);
 	});
 });
 
@@ -759,6 +830,21 @@ describe("killSession", () => {
 		killSpy.mockImplementation(() => true);
 
 		// Should not throw — session disappearing is expected
+		await killSession("overstory-auth");
+	});
+
+	test("succeeds silently when the isolated tmux server is already gone", async () => {
+		spawnSpy.mockImplementation((...args: unknown[]) => {
+			const cmd = args[0] as string[];
+			if (cmd[0] === "tmux" && cmd[1] === "display-message") {
+				return mockSpawnResult("", "can't find session", 1);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "kill-session") {
+				return mockSpawnResult("", "no server running on /tmp/isolated.sock", 1);
+			}
+			return mockSpawnResult("", "", 0);
+		});
+
 		await killSession("overstory-auth");
 	});
 

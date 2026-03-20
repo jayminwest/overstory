@@ -35,6 +35,7 @@ import { nudgeCommand } from "./commands/nudge.ts";
 import { primeCommand } from "./commands/prime.ts";
 import { createReplayCommand } from "./commands/replay.ts";
 import { createRunCommand } from "./commands/run.ts";
+import { createSessionsCommand } from "./commands/sessions.ts";
 import { slingCommand } from "./commands/sling.ts";
 import { specWriteCommand } from "./commands/spec.ts";
 import { createStatusCommand } from "./commands/status.ts";
@@ -76,6 +77,7 @@ const COMMANDS = [
 	"prime",
 	"stop",
 	"status",
+	"sessions",
 	"dashboard",
 	"discover",
 	"inspect",
@@ -239,6 +241,7 @@ program.addCommand(createCoordinatorCommand());
 program.addCommand(createSupervisorCommand());
 program.addCommand(createHooksCommand());
 program.addCommand(createMonitorCommand());
+program.addCommand(createSessionsCommand());
 program.addCommand(createWorktreeCommand());
 program.addCommand(createLogCommand());
 program.addCommand(createWatchCommand());
