@@ -13,6 +13,19 @@ import { getRuntime } from "../runtimes/registry.ts";
 import type { OverstoryConfig } from "../types.ts";
 
 /**
+ * Structured result returned by triageAgent.
+ * Replaces bare string for observability — callers can distinguish AI verdicts from fallbacks.
+ */
+export interface TriageResult {
+	/** Classification: "retry", "terminate", or "extend". */
+	verdict: "retry" | "terminate" | "extend";
+	/** True when the verdict is a safe default (no AI analysis performed). */
+	fallback: boolean;
+	/** Optional human-readable reason, set on fallback paths. */
+	reason?: string;
+}
+
+/**
  * Triage a stalled agent by analyzing its recent log output with Claude.
  *
  * Steps:
@@ -24,7 +37,7 @@ import type { OverstoryConfig } from "../types.ts";
  * @param options.agentName - Name of the agent to triage
  * @param options.root - Project root directory (contains .overstory/)
  * @param options.lastActivity - ISO timestamp of the agent's last recorded activity
- * @returns "retry" if recoverable, "terminate" if fatal, "extend" if likely long-running
+ * @returns TriageResult with verdict ("retry" | "terminate" | "extend"), fallback flag, and optional reason
  */
 export async function triageAgent(options: {
 	agentName: string;
@@ -34,7 +47,7 @@ export async function triageAgent(options: {
 	timeoutMs?: number;
 	/** Overstory config for runtime resolution. */
 	config?: OverstoryConfig;
-}): Promise<"retry" | "terminate" | "extend"> {
+}): Promise<TriageResult> {
 	const { agentName, root, lastActivity, timeoutMs, config } = options;
 	const logsDir = join(root, ".overstory", "logs", agentName);
 
@@ -43,17 +56,20 @@ export async function triageAgent(options: {
 		logContent = await readRecentLog(logsDir);
 	} catch {
 		// No logs available — assume long-running operation
-		return "extend";
+		return { verdict: "extend", fallback: true, reason: "No logs available" };
 	}
 
 	const prompt = buildTriagePrompt(agentName, lastActivity, logContent);
 
 	try {
 		const response = await spawnClaude(prompt, timeoutMs, config);
-		return classifyResponse(response);
+		return { verdict: classifyResponse(response), fallback: false };
 	} catch {
 		// Claude not available — default to extend (safe fallback)
-		return "extend";
+		process.stderr.write(
+			`[watchdog] triage fallback for ${agentName}: Claude unavailable, defaulting to extend\n`,
+		);
+		return { verdict: "extend", fallback: true, reason: "Claude unavailable" };
 	}
 }
 

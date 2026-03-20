@@ -6,7 +6,7 @@
  * spawnClaude is NOT mocked — we rely on it failing naturally in tests.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -101,16 +101,18 @@ describe("triageAgent", () => {
 		await cleanupTempDir(tempRoot);
 	});
 
-	test("returns 'extend' when no logs directory exists", async () => {
+	test("returns fallback TriageResult when no logs directory exists", async () => {
 		const result = await triageAgent({
 			agentName: "test-agent",
 			root: tempRoot,
 			lastActivity: "2026-02-13T10:00:00Z",
 		});
-		expect(result).toBe("extend");
+		expect(result.verdict).toBe("extend");
+		expect(result.fallback).toBe(true);
+		expect(result.reason).toBe("No logs available");
 	});
 
-	test("returns 'extend' when logs directory exists but is empty", async () => {
+	test("returns fallback TriageResult when logs directory exists but is empty", async () => {
 		const logsDir = join(tempRoot, ".overstory", "logs", "test-agent");
 		await mkdir(logsDir, { recursive: true });
 
@@ -119,10 +121,11 @@ describe("triageAgent", () => {
 			root: tempRoot,
 			lastActivity: "2026-02-13T10:00:00Z",
 		});
-		expect(result).toBe("extend");
+		expect(result.verdict).toBe("extend");
+		expect(result.fallback).toBe(true);
 	});
 
-	test("returns 'extend' when logs directory has session dir but no session.log", async () => {
+	test("returns fallback TriageResult when logs directory has session dir but no session.log", async () => {
 		const logsDir = join(tempRoot, ".overstory", "logs", "test-agent", "2026-02-13T10-00-00");
 		await Bun.write(join(logsDir, ".gitkeep"), "");
 
@@ -131,10 +134,11 @@ describe("triageAgent", () => {
 			root: tempRoot,
 			lastActivity: "2026-02-13T10:00:00Z",
 		});
-		expect(result).toBe("extend");
+		expect(result.verdict).toBe("extend");
+		expect(result.fallback).toBe(true);
 	});
 
-	test("returns 'extend' when session.log exists but claude binary fails", async () => {
+	test("returns fallback TriageResult when session.log exists but claude binary fails", async () => {
 		const timestamp = "2026-02-13T10-00-00";
 		const sessionLogPath = join(
 			tempRoot,
@@ -160,6 +164,42 @@ describe("triageAgent", () => {
 			lastActivity: "2026-02-13T10:00:00Z",
 			timeoutMs: 500,
 		});
-		expect(result).toBe("extend");
+		expect(result.verdict).toBe("extend");
+		expect(result.fallback).toBe(true);
+		expect(result.reason).toBe("Claude unavailable");
+	});
+
+	test("writes stderr warning when claude is unavailable (fallback path)", async () => {
+		const timestamp = "2026-02-13T10-00-00";
+		const sessionLogPath = join(
+			tempRoot,
+			".overstory",
+			"logs",
+			"test-agent",
+			timestamp,
+			"session.log",
+		);
+		await Bun.write(sessionLogPath, "some log content\n");
+
+		const written: string[] = [];
+		const spy = spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+			written.push(String(chunk));
+			return true;
+		});
+
+		try {
+			await triageAgent({
+				agentName: "test-agent",
+				root: tempRoot,
+				lastActivity: "2026-02-13T10:00:00Z",
+				timeoutMs: 500,
+			});
+		} finally {
+			spy.mockRestore();
+		}
+
+		expect(written.some((s) => s.includes("triage fallback") && s.includes("test-agent"))).toBe(
+			true,
+		);
 	});
 });

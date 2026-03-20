@@ -977,6 +977,51 @@ describe("daemon event recording", () => {
 		expect(triageData.verdict).toBe("extend");
 	});
 
+	test("triage fallback event includes triageFailed: true when _triage returns TriageResult with fallback", async () => {
+		const staleActivity = new Date(Date.now() - 60_000).toISOString();
+		const stalledSince = new Date(Date.now() - 130_000).toISOString();
+		const session = makeSession({
+			agentName: "stalled-agent",
+			tmuxSession: "overstory-stalled-agent",
+			state: "stalled",
+			lastActivity: staleActivity,
+			escalationLevel: 1,
+			stalledSince,
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const eventsDbPath = join(tempRoot, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+
+		try {
+			await runDaemonTick({
+				root: tempRoot,
+				...THRESHOLDS,
+				nudgeIntervalMs: 60_000,
+				tier1Enabled: true,
+				_tmux: tmuxWithLiveness({ "overstory-stalled-agent": true }),
+				_triage: async () => ({ verdict: "extend" as const, fallback: true, reason: "Claude unavailable" }),
+				_nudge: nudgeTracker().nudge,
+				_eventStore: eventStore,
+			});
+		} finally {
+			eventStore.close();
+		}
+
+		const events = readEvents(tempRoot);
+		const triageEvent = events.find((e) => {
+			if (!e.data) return false;
+			const data = JSON.parse(e.data) as Record<string, unknown>;
+			return data.type === "triage" && data.escalationLevel === 2;
+		});
+		expect(triageEvent).toBeDefined();
+
+		const triageData = JSON.parse(triageEvent?.data ?? "{}") as Record<string, unknown>;
+		expect(triageData.verdict).toBe("extend");
+		expect(triageData.triageFailed).toBe(true);
+	});
+
 	test("escalation level 3 (terminate) records event with level=error", async () => {
 		const staleActivity = new Date(Date.now() - 60_000).toISOString();
 		const stalledSince = new Date(Date.now() - 200_000).toISOString();
@@ -2304,5 +2349,106 @@ describe("startDaemon() stop() cleans up tailer registry", () => {
 		expect(stopped["tailer1"]).toBe(true);
 		expect(stopped["tailer2"]).toBe(true);
 		expect(registry.size).toBe(0);
+	});
+});
+
+// ============================================================
+// RPC getState() timeout removes stale connection
+// ============================================================
+
+describe("RPC getState() timeout removes stale connection", () => {
+	test("_removeConnection is called when getState() rejects", async () => {
+		const session = makeSession({
+			agentName: "rpc-agent",
+			tmuxSession: "", // headless
+			pid: process.pid, // alive
+			state: "working",
+			lastActivity: new Date().toISOString(),
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const removedNames: string[] = [];
+
+		await runDaemonTick({
+			root: tempRoot,
+			...THRESHOLDS,
+			_tmux: { isSessionAlive: async () => false, killSession: async () => {} },
+			_triage: triageAlways("extend"),
+			_process: { isAlive: () => true, killTree: async () => {} },
+			_eventStore: null,
+			_recordFailure: async () => {},
+			_getConnection: (name: string) => {
+				if (name !== "rpc-agent") return undefined;
+				return {
+					getState: () => Promise.reject(new Error("connection error")),
+					sendPrompt: async () => {},
+					followUp: async () => {},
+					abort: async () => {},
+					close: () => {},
+				};
+			},
+			_removeConnection: (name: string) => {
+				removedNames.push(name);
+			},
+			_tailerRegistry: new Map(),
+			_findLatestStdoutLog: async () => null,
+			_mailStore: null,
+		});
+
+		expect(removedNames).toContain("rpc-agent");
+	});
+});
+
+// ============================================================
+// Triage concurrency limit (_maxTriagePerTick)
+// ============================================================
+
+describe("triage concurrency limit (_maxTriagePerTick)", () => {
+	test("only _maxTriagePerTick triage calls happen when multiple sessions need level-2 escalation", async () => {
+		const staleActivity = new Date(Date.now() - 60_000).toISOString();
+		const stalledSince = new Date(Date.now() - 130_000).toISOString();
+
+		// 4 sessions all at escalation level 2
+		const sessions: AgentSession[] = [
+			makeSession({ id: "s-1", agentName: "agent-1", tmuxSession: "ov-agent-1", state: "stalled", lastActivity: staleActivity, escalationLevel: 2, stalledSince }),
+			makeSession({ id: "s-2", agentName: "agent-2", tmuxSession: "ov-agent-2", state: "stalled", lastActivity: staleActivity, escalationLevel: 2, stalledSince }),
+			makeSession({ id: "s-3", agentName: "agent-3", tmuxSession: "ov-agent-3", state: "stalled", lastActivity: staleActivity, escalationLevel: 2, stalledSince }),
+			makeSession({ id: "s-4", agentName: "agent-4", tmuxSession: "ov-agent-4", state: "stalled", lastActivity: staleActivity, escalationLevel: 2, stalledSince }),
+		];
+
+		writeSessionsToStore(tempRoot, sessions);
+
+		let triageCallCount = 0;
+		const triageMock = async (_opts: { agentName: string; root: string; lastActivity: string }) => {
+			triageCallCount++;
+			return "extend" as const;
+		};
+
+		await runDaemonTick({
+			root: tempRoot,
+			...THRESHOLDS,
+			nudgeIntervalMs: 60_000,
+			tier1Enabled: true,
+			_maxTriagePerTick: 2,
+			_tmux: tmuxWithLiveness({
+				"ov-agent-1": true,
+				"ov-agent-2": true,
+				"ov-agent-3": true,
+				"ov-agent-4": true,
+			}),
+			_triage: triageMock,
+			_nudge: nudgeTracker().nudge,
+			_eventStore: null,
+			_recordFailure: async () => {},
+			_getConnection: () => undefined,
+			_removeConnection: () => {},
+			_tailerRegistry: new Map(),
+			_findLatestStdoutLog: async () => null,
+			_mailStore: null,
+		});
+
+		// Only 2 of the 4 sessions should have triggered triage
+		expect(triageCallCount).toBe(2);
 	});
 });

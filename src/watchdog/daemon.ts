@@ -37,7 +37,7 @@ import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, EventStore, HealthCheck } from "../types.ts";
 import { isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
 import { evaluateHealth, transitionState } from "./health.ts";
-import { triageAgent } from "./triage.ts";
+import { triageAgent, type TriageResult } from "./triage.ts";
 
 /** Maximum escalation level (terminate). */
 const MAX_ESCALATION_LEVEL = 3;
@@ -280,7 +280,9 @@ export interface DaemonOptions {
 		agentName: string;
 		root: string;
 		lastActivity: string;
-	}) => Promise<"retry" | "terminate" | "extend">;
+	}) => Promise<TriageResult | "retry" | "terminate" | "extend">;
+	/** Max triage calls per daemon tick (prevents runaway AI usage). Default: 3. */
+	_maxTriagePerTick?: number;
 	/** Dependency injection for testing. Uses real nudgeAgent when omitted. */
 	_nudge?: (
 		projectRoot: string,
@@ -421,6 +423,8 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 	const tailerRegistry = options._tailerRegistry ?? _defaultTailerRegistry;
 	const tailerFactory = options._tailerFactory ?? startEventTailer;
 	const findStdoutLog = options._findLatestStdoutLog ?? findLatestStdoutLog;
+	const maxTriagePerTick = options._maxTriagePerTick ?? 3;
+	const triageCount = { value: 0 };
 
 	const overstoryDir = join(root, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
@@ -629,6 +633,8 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 					eventStore,
 					runId,
 					recordFailure: recordFailureFn,
+					triageCount,
+					maxTriagePerTick,
 				});
 
 				if (actionResult.terminated) {
@@ -715,7 +721,11 @@ async function executeEscalationAction(ctx: {
 		agentName: string;
 		root: string;
 		lastActivity: string;
-	}) => Promise<"retry" | "terminate" | "extend">;
+	}) => Promise<TriageResult | "retry" | "terminate" | "extend">;
+	/** Shared counter across escalation calls in a single tick — enforces maxTriagePerTick. */
+	triageCount: { value: number };
+	/** Maximum number of triage calls allowed in one daemon tick. Default: 3. */
+	maxTriagePerTick: number;
 	nudge: (
 		projectRoot: string,
 		agentName: string,
@@ -744,6 +754,8 @@ async function executeEscalationAction(ctx: {
 		eventStore,
 		runId,
 		recordFailure,
+		triageCount,
+		maxTriagePerTick,
 	} = ctx;
 
 	switch (session.escalationLevel) {
@@ -790,29 +802,49 @@ async function executeEscalationAction(ctx: {
 				return { terminated: false, stateChanged: false };
 			}
 
-			const verdict = await triage({
+			// Concurrency guard: limit triage calls per tick to avoid runaway AI usage
+			if (triageCount.value >= maxTriagePerTick) {
+				return { terminated: false, stateChanged: false };
+			}
+			triageCount.value++;
+
+			const raw = await triage({
 				agentName: session.agentName,
 				root,
 				lastActivity: session.lastActivity,
 			});
+			// Normalize: accept bare string (backward compat) or TriageResult
+			const result: TriageResult =
+				typeof raw === "string" ? { verdict: raw, fallback: false } : raw;
 
 			recordEvent(eventStore, {
 				runId,
 				agentName: session.agentName,
 				eventType: "custom",
 				level: "warn",
-				data: { type: "triage", escalationLevel: 2, verdict },
+				data: {
+					type: "triage",
+					escalationLevel: 2,
+					verdict: result.verdict,
+					triageFailed: result.fallback,
+				},
 			});
 
-			if (verdict === "terminate") {
+			if (result.verdict === "terminate") {
 				// Record the failure via mulch (Tier 1 AI triage)
-				await recordFailure(root, session, "AI triage classified as terminal failure", 1, verdict);
+				await recordFailure(
+					root,
+					session,
+					"AI triage classified as terminal failure",
+					1,
+					result.verdict,
+				);
 
 				await killAgent({ session, tmuxAlive, tmux, process: proc });
 				return { terminated: true, stateChanged: true };
 			}
 
-			if (verdict === "retry") {
+			if (result.verdict === "retry") {
 				// Send a nudge with a recovery message
 				try {
 					await nudge(
