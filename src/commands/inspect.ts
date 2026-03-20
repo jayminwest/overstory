@@ -18,7 +18,7 @@ import { renderHeader, separator, stateIconColored } from "../logging/theme.ts";
 import { createMetricsStore } from "../metrics/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, StoredEvent, ToolStats } from "../types.ts";
-import { TMUX_SOCKET } from "../worktree/tmux.ts";
+import { buildProjectTmuxCliArgs } from "../worktree/tmux.ts";
 
 /**
  * Extract current file from most recent Edit/Write/Read tool_start event.
@@ -71,10 +71,17 @@ function summarizeArgs(toolArgs: string | null): string {
 /**
  * Capture tmux pane output.
  */
-async function captureTmux(sessionName: string, lines: number): Promise<string | null> {
+async function captureTmux(
+	sessionName: string,
+	lines: number,
+	projectRoot: string,
+): Promise<string | null> {
 	try {
 		const proc = Bun.spawn(
-			["tmux", "-L", TMUX_SOCKET, "capture-pane", "-t", sessionName, "-p", "-S", `-${lines}`],
+			buildProjectTmuxCliArgs(
+				["capture-pane", "-t", sessionName, "-p", "-S", `-${lines}`],
+				projectRoot,
+			),
 			{
 				stdout: "pipe",
 				stderr: "pipe",
@@ -372,7 +379,7 @@ export async function gatherInspectData(
 		let tmuxOutput: string | null = null;
 		if (!opts.noTmux && session.tmuxSession) {
 			const lines = opts.tmuxLines ?? 30;
-			tmuxOutput = await captureTmux(session.tmuxSession, lines);
+			tmuxOutput = await captureTmux(session.tmuxSession, lines, root);
 		}
 
 		// Headless stdout.log fallback: parse NDJSON event stream for rich activity data.

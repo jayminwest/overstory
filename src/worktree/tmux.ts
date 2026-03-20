@@ -7,26 +7,76 @@
  * and enables project-scoped cleanup (overstory-pcef).
  */
 
-import { dirname, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
+import { getProjectRootOverride } from "../config.ts";
 import { AgentError } from "../errors.ts";
 import type { ReadyState } from "../runtimes/types.ts";
 
-/**
- * Dedicated tmux server socket name for agent session isolation.
- *
- * All overstory agent sessions use `tmux -L overstory` so they run on a
- * separate server from the user's personal tmux. This prevents user tmux
- * config (themes, plugins, keybindings) from interfering with agent spawn.
- * See GitHub #93.
- */
-export const TMUX_SOCKET = "overstory";
+const OVERSTORY_DIRNAME = ".overstory";
+const TMUX_SOCKET_FILENAME = "tmux.sock";
+const TMUX_CONFIG_FILENAME = "tmux.conf";
 
-/**
- * Build a tmux command array with the dedicated server socket.
- * All agent session operations should use this to ensure isolation.
- */
-function tmuxCmd(...args: string[]): string[] {
-	return ["tmux", "-L", TMUX_SOCKET, ...args];
+function isNestedWorktreeOverstoryDir(candidate: string): boolean {
+	const normalized = resolve(candidate);
+	const worktreesMarker = `${sep}${OVERSTORY_DIRNAME}${sep}worktrees${sep}`;
+	const worktreesIndex = normalized.indexOf(worktreesMarker);
+	if (worktreesIndex === -1) {
+		return false;
+	}
+
+	const lastOverstoryIndex = normalized.lastIndexOf(`${sep}${OVERSTORY_DIRNAME}`);
+	return lastOverstoryIndex > worktreesIndex;
+}
+
+function findOverstoryDir(startDir?: string): string | null {
+	let current = resolve(startDir ?? getProjectRootOverride() ?? process.cwd());
+
+	while (true) {
+		const candidate = join(current, OVERSTORY_DIRNAME);
+		if (existsSync(candidate) && !isNestedWorktreeOverstoryDir(candidate)) {
+			return candidate;
+		}
+		const parent = dirname(current);
+		if (parent === current) {
+			return null;
+		}
+		current = parent;
+	}
+}
+
+function buildProjectTmuxCommand(args: string[], cwd?: string, includeConfig = false): string[] {
+	const cmd = ["tmux"];
+	const overstoryDir = findOverstoryDir(cwd);
+
+	if (overstoryDir) {
+		cmd.push("-S", join(overstoryDir, TMUX_SOCKET_FILENAME));
+		if (includeConfig) {
+			const configPath = join(overstoryDir, TMUX_CONFIG_FILENAME);
+			if (existsSync(configPath)) {
+				cmd.push("-f", configPath);
+			}
+		}
+	}
+
+	cmd.push(...args);
+	return cmd;
+}
+
+async function runProjectTmuxCommand(
+	args: string[],
+	cwd?: string,
+	includeConfig = false,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+	return runCommand(buildProjectTmuxCommand(args, cwd, includeConfig), cwd);
+}
+
+export function buildProjectTmuxCliArgs(
+	args: string[],
+	cwd?: string,
+	includeConfig = false,
+): string[] {
+	return buildProjectTmuxCommand(args, cwd, includeConfig);
 }
 
 /**
@@ -140,9 +190,10 @@ export async function createSession(
 	const wrappedCommand =
 		exports.length > 0 ? `/bin/bash -c '${startupScript.replace(/'/g, "'\\''")}'` : command;
 
-	const { exitCode, stderr } = await runCommand(
-		tmuxCmd("new-session", "-d", "-s", name, "-c", cwd, wrappedCommand),
+	const { exitCode, stderr } = await runProjectTmuxCommand(
+		["new-session", "-d", "-s", name, "-c", cwd, wrappedCommand],
 		cwd,
+		true,
 	);
 
 	if (exitCode !== 0) {
@@ -156,7 +207,7 @@ export async function createSession(
 	// the session exists but the pane hasn't been registered yet (#73).
 	let pidResult: { stdout: string; stderr: string; exitCode: number } | undefined;
 	for (let attempt = 0; attempt < maxRetries; attempt++) {
-		pidResult = await runCommand(tmuxCmd("list-panes", "-t", name, "-F", "#{pane_pid}"));
+		pidResult = await runProjectTmuxCommand(["list-panes", "-t", name, "-F", "#{pane_pid}"], cwd);
 		if (pidResult.exitCode === 0) break;
 		await Bun.sleep(250 * (attempt + 1));
 	}
@@ -188,9 +239,11 @@ export async function createSession(
  * @throws AgentError if tmux is not installed
  */
 export async function listSessions(): Promise<Array<{ name: string; pid: number }>> {
-	const { exitCode, stdout, stderr } = await runCommand(
-		tmuxCmd("list-sessions", "-F", "#{session_name}:#{pid}"),
-	);
+	const { exitCode, stdout, stderr } = await runProjectTmuxCommand([
+		"list-sessions",
+		"-F",
+		"#{session_name}:#{pid}",
+	]);
 
 	// Exit code 1 with "no server running" means no sessions exist — not an error
 	if (exitCode !== 0) {
@@ -234,9 +287,13 @@ const KILL_GRACE_PERIOD_MS = 2000;
  *          the session doesn't exist or the PID can't be determined
  */
 export async function getPanePid(name: string): Promise<number | null> {
-	const { exitCode, stdout } = await runCommand(
-		tmuxCmd("display-message", "-p", "-t", name, "#{pane_pid}"),
-	);
+	const { exitCode, stdout } = await runProjectTmuxCommand([
+		"display-message",
+		"-p",
+		"-t",
+		name,
+		"#{pane_pid}",
+	]);
 
 	if (exitCode !== 0) {
 		return null;
@@ -393,11 +450,16 @@ export async function killSession(name: string): Promise<void> {
 	}
 
 	// Step 3: Kill the tmux session itself
-	const { exitCode, stderr } = await runCommand(tmuxCmd("kill-session", "-t", name));
+	const { exitCode, stderr } = await runProjectTmuxCommand(["kill-session", "-t", name]);
 
 	if (exitCode !== 0) {
 		// If the session is already gone (e.g., died during process cleanup), that's fine
-		if (stderr.includes("session not found") || stderr.includes("can't find session")) {
+		if (
+			stderr.includes("session not found") ||
+			stderr.includes("can't find session") ||
+			stderr.includes("cant find session") ||
+			stderr.includes("no server running")
+		) {
 			return;
 		}
 		throw new AgentError(`Failed to kill tmux session "${name}": ${stderr.trim()}`, {
@@ -417,12 +479,7 @@ export async function getCurrentSessionName(): Promise<string | null> {
 	if (!process.env.TMUX) {
 		return null;
 	}
-	const { exitCode, stdout } = await runCommand([
-		"tmux",
-		"display-message",
-		"-p",
-		"#{session_name}",
-	]);
+	const { exitCode, stdout } = await runCommand(["tmux", "display-message", "-p", "#{session_name}"]);
 	if (exitCode !== 0) {
 		return null;
 	}
@@ -437,7 +494,7 @@ export async function getCurrentSessionName(): Promise<string | null> {
  * @returns true if the session exists, false otherwise
  */
 export async function isSessionAlive(name: string): Promise<boolean> {
-	const { exitCode } = await runCommand(tmuxCmd("has-session", "-t", name));
+	const { exitCode } = await runProjectTmuxCommand(["has-session", "-t", name]);
 	return exitCode === 0;
 }
 
@@ -466,7 +523,7 @@ export type SessionState = "alive" | "dead" | "no_server";
  * @returns The session state
  */
 export async function checkSessionState(name: string): Promise<SessionState> {
-	const { exitCode, stderr } = await runCommand(tmuxCmd("has-session", "-t", name));
+	const { exitCode, stderr } = await runProjectTmuxCommand(["has-session", "-t", name]);
 	if (exitCode === 0) return "alive";
 	if (stderr.includes("no server running") || stderr.includes("no sessions")) {
 		return "no_server";
@@ -482,9 +539,14 @@ export async function checkSessionState(name: string): Promise<SessionState> {
  * @returns The trimmed pane content, or null if capture fails
  */
 export async function capturePaneContent(name: string, lines = 50): Promise<string | null> {
-	const { exitCode, stdout } = await runCommand(
-		tmuxCmd("capture-pane", "-t", name, "-p", "-S", `-${lines}`),
-	);
+	const { exitCode, stdout } = await runProjectTmuxCommand([
+		"capture-pane",
+		"-t",
+		name,
+		"-p",
+		"-S",
+		`-${lines}`,
+	]);
 	if (exitCode !== 0) {
 		return null;
 	}
@@ -588,9 +650,13 @@ export async function sendKeys(name: string, keys: string, maxRetries = 3): Prom
 	const flatKeys = keys.replace(/\n/g, " ");
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
-		const { exitCode, stderr } = await runCommand(
-			tmuxCmd("send-keys", "-t", name, flatKeys, "Enter"),
-		);
+		const { exitCode, stderr } = await runProjectTmuxCommand([
+			"send-keys",
+			"-t",
+			name,
+			flatKeys,
+			"Enter",
+		]);
 
 		if (exitCode === 0) {
 			return;
@@ -639,7 +705,7 @@ export async function sendKeys(name: string, keys: string, maxRetries = 3): Prom
 
 async function sendRawKeys(name: string, keys: string): Promise<void> {
 	const flatKeys = keys.replace(/\n/g, " ");
-	const { exitCode, stderr } = await runCommand(tmuxCmd("send-keys", "-t", name, flatKeys));
+	const { exitCode, stderr } = await runProjectTmuxCommand(["send-keys", "-t", name, flatKeys]);
 
 	if (exitCode !== 0) {
 		const trimmedStderr = stderr.trim();
