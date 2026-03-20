@@ -260,40 +260,29 @@ describe("PiRuntime", () => {
 			expect(state).toEqual({ phase: "loading" });
 		});
 
-		test("returns loading when only 'pi v' header present (no status bar)", () => {
+		test("returns loading when only header content is present", () => {
 			const state = runtime.detectReady(" pi v0.55.1\n escape to interrupt");
 			expect(state).toEqual({ phase: "loading" });
 		});
 
-		test("returns loading when only status bar present (no header)", () => {
+		test("returns loading when old status-bar content is present without marker", () => {
 			const state = runtime.detectReady("0.0%/200k (auto)         (anthropic) claude-opus-4-6");
 			expect(state).toEqual({ phase: "loading" });
 		});
 
-		test("returns ready for real Pi TUI pane content", () => {
+		test("returns ready when the explicit Overstory ready marker is present", () => {
 			const pane = [
 				" pi v0.55.1",
 				" escape to interrupt",
-				" ctrl+c to clear",
-				"",
-				"[Context]",
-				"  ~/Projects/os-eco/CLAUDE.md",
-				"",
-				"[Extensions]",
-				"  project",
-				"    overstory-guard.ts",
-				"",
-				"────────────────────────────────",
-				"~/Projects/os-eco/overstory (main)",
-				"0.0%/200k (auto)         (anthropic) claude-opus-4-6 • high",
+				"[OVERSTORY:READY] agent=builder-1 runtime=pi",
 			].join("\n");
 			const state = runtime.detectReady(pane);
 			expect(state).toEqual({ phase: "ready" });
 		});
 
-		test("returns ready for minimal header + status bar", () => {
-			const state = runtime.detectReady("pi v1.0\n\n42.5%/200k done");
-			expect(state).toEqual({ phase: "ready" });
+		test("returns loading for the marker prefix without the runtime token", () => {
+			const state = runtime.detectReady("[OVERSTORY:READY] agent=builder-1");
+			expect(state).toEqual({ phase: "loading" });
 		});
 
 		test("returns loading for random pane content", () => {
@@ -307,11 +296,11 @@ describe("PiRuntime", () => {
 			expect(state.phase).not.toBe("dialog");
 		});
 
-		test("handles bedrock model provider in status bar", () => {
+		test("ignores old Pi footer content and waits for the marker", () => {
 			const pane =
 				" pi v0.55.1\n\n0.0%/200k (auto)         (amazon-bedrock) us.anthropic.claude-opus-4-6-v1 • high";
 			const state = runtime.detectReady(pane);
-			expect(state).toEqual({ phase: "ready" });
+			expect(state).toEqual({ phase: "loading" });
 		});
 	});
 
@@ -370,7 +359,7 @@ describe("PiRuntime", () => {
 			expect(content).toBe("# Pi Agent Overlay\nThis is the overlay content.");
 		});
 
-		test("deploys guard extension to .pi/extensions/overstory-guard.ts", async () => {
+		test("does not deploy the legacy guard extension file", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
 			await runtime.deployConfig(
@@ -381,10 +370,10 @@ describe("PiRuntime", () => {
 
 			const guardPath = join(worktreePath, ".pi", "extensions", "overstory-guard.ts");
 			const exists = await Bun.file(guardPath).exists();
-			expect(exists).toBe(true);
+			expect(exists).toBe(false);
 		});
 
-		test("guard extension contains agent name and worktree path", async () => {
+		test("does not deploy Pi settings.json", async () => {
 			const worktreePath = join(tempDir, "my-worktree");
 
 			await runtime.deployConfig(
@@ -393,57 +382,9 @@ describe("PiRuntime", () => {
 				{ agentName: "my-pi-agent", capability: "builder", worktreePath },
 			);
 
-			const guardPath = join(worktreePath, ".pi", "extensions", "overstory-guard.ts");
-			const content = await Bun.file(guardPath).text();
-			expect(content).toContain("my-pi-agent");
-			expect(content).toContain(worktreePath);
-		});
-
-		test("deploys Pi settings.json with extensions config", async () => {
-			const worktreePath = join(tempDir, "worktree");
-
-			await runtime.deployConfig(
-				worktreePath,
-				{ content: "# Overlay" },
-				{ agentName: "test-builder", capability: "builder", worktreePath },
-			);
-
 			const settingsPath = join(worktreePath, ".pi", "settings.json");
 			const exists = await Bun.file(settingsPath).exists();
-			expect(exists).toBe(true);
-
-			const content = await Bun.file(settingsPath).text();
-			const parsed = JSON.parse(content) as Record<string, unknown>;
-			expect(parsed.extensions).toEqual(["./extensions"]);
-		});
-
-		test("settings.json has trailing newline", async () => {
-			const worktreePath = join(tempDir, "worktree");
-
-			await runtime.deployConfig(worktreePath, undefined, {
-				agentName: "test-builder",
-				capability: "builder",
-				worktreePath,
-			});
-
-			const settingsPath = join(worktreePath, ".pi", "settings.json");
-			const content = await Bun.file(settingsPath).text();
-			expect(content.endsWith("\n")).toBe(true);
-		});
-
-		test("settings.json uses tab indentation", async () => {
-			const worktreePath = join(tempDir, "worktree");
-
-			await runtime.deployConfig(worktreePath, undefined, {
-				agentName: "test-builder",
-				capability: "builder",
-				worktreePath,
-			});
-
-			const settingsPath = join(worktreePath, ".pi", "settings.json");
-			const content = await Bun.file(settingsPath).text();
-			// Tab-indented JSON has \t before array entries
-			expect(content).toContain("\t");
+			expect(exists).toBe(false);
 		});
 
 		test("skips CLAUDE.md when overlay is undefined", async () => {
@@ -460,7 +401,7 @@ describe("PiRuntime", () => {
 			expect(overlayExists).toBe(false);
 		});
 
-		test("still deploys guard and settings when overlay is undefined", async () => {
+		test("does not deploy Pi-specific files when overlay is undefined", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
 			await runtime.deployConfig(worktreePath, undefined, {
@@ -472,11 +413,11 @@ describe("PiRuntime", () => {
 			const guardPath = join(worktreePath, ".pi", "extensions", "overstory-guard.ts");
 			const settingsPath = join(worktreePath, ".pi", "settings.json");
 
-			expect(await Bun.file(guardPath).exists()).toBe(true);
-			expect(await Bun.file(settingsPath).exists()).toBe(true);
+			expect(await Bun.file(guardPath).exists()).toBe(false);
+			expect(await Bun.file(settingsPath).exists()).toBe(false);
 		});
 
-		test("all three files present when overlay is provided", async () => {
+		test("only CLAUDE.md is present when overlay is provided", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
 			await runtime.deployConfig(
@@ -492,8 +433,8 @@ describe("PiRuntime", () => {
 			const settingsExists = await Bun.file(join(worktreePath, ".pi", "settings.json")).exists();
 
 			expect(claudeMdExists).toBe(true);
-			expect(guardExists).toBe(true);
-			expect(settingsExists).toBe(true);
+			expect(guardExists).toBe(false);
+			expect(settingsExists).toBe(false);
 		});
 	});
 

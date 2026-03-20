@@ -4,7 +4,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { PiRuntimeConfig, ResolvedModel } from "../types.ts";
-import { generatePiGuardExtension } from "./pi-guards.ts";
 import type {
 	AgentRuntime,
 	HooksDef,
@@ -24,12 +23,14 @@ const DEFAULT_PI_CONFIG: PiRuntimeConfig = {
 	},
 };
 
+const PI_READY_MARKER_PREFIX = "[OVERSTORY:READY]";
+
 /**
  * Pi runtime adapter.
  *
  * Implements AgentRuntime for the `pi` CLI (Mario Zechner's Pi coding agent).
- * Security is enforced via Pi guard extensions rather than permission-mode flags —
- * Pi has no --permission-mode equivalent.
+ * Pi has no --permission-mode flag. Session-scoped policy and readiness are
+ * enforced by the companion os-eco Pi extension package instead.
  */
 export class PiRuntime implements AgentRuntime {
 	/** Unique identifier for this runtime. */
@@ -67,7 +68,6 @@ export class PiRuntime implements AgentRuntime {
 	 * Maps SpawnOpts to the `pi` CLI flags:
 	 * - `model` → `--model <model>`
 	 * - `permissionMode` is accepted but NOT mapped — Pi has no permission-mode flag.
-	 *   Security is enforced via guard extensions deployed by deployConfig().
 	 * - `appendSystemPrompt` → `--append-system-prompt '<escaped>'` (POSIX single-quote escaping)
 	 *
 	 * The `cwd` and `env` fields are handled by the tmux session creator, not embedded here.
@@ -112,68 +112,52 @@ export class PiRuntime implements AgentRuntime {
 	}
 
 	/**
-	 * Deploy per-agent instructions and guards to a worktree.
+	 * Deploy per-agent instructions to a worktree.
 	 *
-	 * Writes up to three files:
-	 * 1. `.claude/CLAUDE.md` — agent's task-specific overlay. Skipped when overlay is undefined.
-	 * 2. `.pi/extensions/overstory-guard.ts` — Pi guard extension (always deployed).
-	 * 3. `.pi/settings.json` — Pi settings enabling the extensions directory (always deployed).
+	 * Pi session policy and readiness signaling now live in the external
+	 * os-eco Pi extension package. Overstory only writes the task-specific
+	 * overlay file here.
 	 *
 	 * @param worktreePath - Absolute path to the agent's git worktree
-	 * @param overlay - Overlay content to write as CLAUDE.md, or undefined for guard-only deployment
-	 * @param hooks - Agent identity, capability, worktree path, and optional quality gates
+	 * @param overlay - Overlay content to write as CLAUDE.md, or undefined to skip instruction output
+	 * @param _hooks - Reserved for interface compatibility; Pi policy now lives in the extension package
 	 */
 	async deployConfig(
 		worktreePath: string,
 		overlay: OverlayContent | undefined,
-		hooks: HooksDef,
+		_hooks: HooksDef,
 	): Promise<void> {
 		if (overlay) {
 			const claudeDir = join(worktreePath, ".claude");
 			await mkdir(claudeDir, { recursive: true });
 			await Bun.write(join(claudeDir, "CLAUDE.md"), overlay.content);
 		}
-
-		// Always deploy Pi guard extension.
-		const piExtDir = join(worktreePath, ".pi", "extensions");
-		await mkdir(piExtDir, { recursive: true });
-		await Bun.write(join(piExtDir, "overstory-guard.ts"), generatePiGuardExtension(hooks));
-
-		// Always deploy Pi settings pointing at the extensions directory.
-		const piDir = join(worktreePath, ".pi");
-		const settings = { extensions: ["./extensions"] };
-		await Bun.write(join(piDir, "settings.json"), `${JSON.stringify(settings, null, "\t")}\n`);
 	}
 
 	/**
 	 * Pi does not require beacon verification/resend.
 	 *
 	 * Claude Code's TUI sometimes swallows Enter during late initialization, so the
-	 * orchestrator resends the beacon until the pane leaves the "idle" state. Pi's TUI
-	 * does not have this issue AND its idle vs. processing states are indistinguishable
-	 * via detectReady (the header "pi v..." and status bar token counter are visible in
-	 * both states). Enabling the resend loop would spam Pi with duplicate beacon messages.
+	 * orchestrator resends the beacon until the pane leaves the "idle" state. Pi uses
+	 * an explicit ready marker emitted by the companion extension package, so it does
+	 * not need the resend loop either.
 	 */
 	requiresBeaconVerification(): boolean {
 		return false;
 	}
 
 	/**
-	 * Detect Pi TUI readiness from a tmux pane content snapshot.
+	 * Detect Pi readiness from the explicit extension-owned ready marker.
 	 *
-	 * Pi shows a header containing "pi" and "model:" when the TUI has fully rendered.
-	 * Pi has no trust dialog phase.
+	 * The marker is rendered into the Pi UI by the os-eco Pi extension only when the
+	 * managed session is ready for work:
+	 *   [OVERSTORY:READY] agent=<name> runtime=pi
 	 *
 	 * @param paneContent - Captured tmux pane content to analyze
 	 * @returns Current readiness phase
 	 */
 	detectReady(paneContent: string): ReadyState {
-		// Pi's TUI shows "pi v<version>" in the header and a status bar with
-		// a token usage indicator like "0.0%/200k" when fully rendered.
-		// Earlier detection checked for "model:" which Pi's TUI never contains.
-		const hasHeader = paneContent.includes("pi v");
-		const hasStatusBar = /\d+\.\d+%\/\d+k/.test(paneContent);
-		if (hasHeader && hasStatusBar) {
+		if (paneContent.includes(PI_READY_MARKER_PREFIX) && paneContent.includes("runtime=pi")) {
 			return { phase: "ready" };
 		}
 		return { phase: "loading" };
