@@ -45,7 +45,7 @@ const SAPLING_ALIAS_FALLBACKS: Record<string, string> = {
 
 /**
  * Bash patterns that modify files and require path boundary validation
- * for implementation agents (builder/merger). Mirrors the constant in pi-guards.ts.
+ * for implementation agents (builder/merger).
  */
 const FILE_MODIFYING_BASH_PATTERNS = [
 	"sed\\s+-i",

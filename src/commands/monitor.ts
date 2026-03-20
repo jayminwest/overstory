@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { buildOverstorySessionEnv } from "../agents/session-env.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
@@ -155,20 +156,22 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 		if (await agentDefFile.exists()) {
 			appendSystemPromptFile = agentDefPath;
 		}
+		const sessionEnv = buildOverstorySessionEnv({
+			baseEnv: runtime.buildEnv(resolvedModel),
+			sessionKind: "monitor",
+			agentName: MONITOR_NAME,
+			capability: "monitor",
+			worktreePath: projectRoot,
+			projectRoot,
+		});
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
 			cwd: projectRoot,
 			appendSystemPromptFile,
-			env: {
-				...runtime.buildEnv(resolvedModel),
-				OVERSTORY_AGENT_NAME: MONITOR_NAME,
-			},
+			env: sessionEnv,
 		});
-		const pid = await createSession(tmuxSession, projectRoot, spawnCmd, {
-			...runtime.buildEnv(resolvedModel),
-			OVERSTORY_AGENT_NAME: MONITOR_NAME,
-		});
+		const pid = await createSession(tmuxSession, projectRoot, spawnCmd, sessionEnv);
 
 		// Record session BEFORE sending the beacon so that hook-triggered
 		// updateLastActivity() can find the entry and transition booting->working.

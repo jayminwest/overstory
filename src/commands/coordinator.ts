@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { buildOverstorySessionEnv } from "../agents/session-env.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
@@ -475,22 +476,23 @@ export async function startCoordinatorSession(
 		if (await agentDefHandle.exists()) {
 			appendSystemPromptFile = agentDefPath;
 		}
+		const sessionEnv = buildOverstorySessionEnv({
+			baseEnv: runtime.buildEnv(resolvedModel),
+			sessionKind: "coordinator",
+			agentName: coordinatorName,
+			capability: "coordinator",
+			worktreePath: projectRoot,
+			projectRoot,
+			...(profileFlag ? { profile: profileFlag } : {}),
+		});
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
 			cwd: projectRoot,
 			appendSystemPromptFile,
-			env: {
-				...runtime.buildEnv(resolvedModel),
-				OVERSTORY_AGENT_NAME: coordinatorName,
-				...(profileFlag ? { OVERSTORY_PROFILE: profileFlag } : {}),
-			},
+			env: sessionEnv,
 		});
-		const pid = await tmux.createSession(tmuxSession, projectRoot, spawnCmd, {
-			...runtime.buildEnv(resolvedModel),
-			OVERSTORY_AGENT_NAME: coordinatorName,
-			...(profileFlag ? { OVERSTORY_PROFILE: profileFlag } : {}),
-		});
+		const pid = await tmux.createSession(tmuxSession, projectRoot, spawnCmd, sessionEnv);
 
 		// Create a run for this coordinator session BEFORE recording the session,
 		// so the session can reference the run ID from the start.

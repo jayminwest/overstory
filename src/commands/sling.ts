@@ -24,6 +24,7 @@ import { join, resolve } from "node:path";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
+import { buildOverstorySessionEnv } from "../agents/session-env.ts";
 import { createCanopyClient } from "../canopy/client.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
@@ -919,12 +920,15 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 			// 11c. Spawn: headless runtimes bypass tmux entirely; tmux path is unchanged.
 			if (runtime.headless === true && runtime.buildDirectSpawn) {
-				const directEnv = {
-					...runtime.buildEnv(resolvedModel),
-					OVERSTORY_AGENT_NAME: name,
-					OVERSTORY_WORKTREE_PATH: worktreePath,
-					OVERSTORY_TASK_ID: taskId,
-				};
+				const directEnv = buildOverstorySessionEnv({
+					baseEnv: runtime.buildEnv(resolvedModel),
+					sessionKind: "worker",
+					agentName: name,
+					capability,
+					worktreePath,
+					projectRoot: config.project.root,
+					taskId,
+				});
 				const argv = runtime.buildDirectSpawn({
 					cwd: worktreePath,
 					env: directEnv,
@@ -1005,24 +1009,23 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 				// 12. Create tmux session running claude in interactive mode
 				const tmuxSessionName = `overstory-${config.project.name}-${name}`;
+				const sessionEnv = buildOverstorySessionEnv({
+					baseEnv: runtime.buildEnv(resolvedModel),
+					sessionKind: "worker",
+					agentName: name,
+					capability,
+					worktreePath,
+					projectRoot: config.project.root,
+					taskId,
+				});
 				const spawnCmd = runtime.buildSpawnCommand({
 					model: resolvedModel.model,
 					permissionMode: "bypass",
 					cwd: worktreePath,
 					sharedWritableDirs: getSharedWritableDirs(config.project.root, capability),
-					env: {
-						...runtime.buildEnv(resolvedModel),
-						OVERSTORY_AGENT_NAME: name,
-						OVERSTORY_WORKTREE_PATH: worktreePath,
-						OVERSTORY_TASK_ID: taskId,
-					},
+					env: sessionEnv,
 				});
-				const pid = await createSession(tmuxSessionName, worktreePath, spawnCmd, {
-					...runtime.buildEnv(resolvedModel),
-					OVERSTORY_AGENT_NAME: name,
-					OVERSTORY_WORKTREE_PATH: worktreePath,
-					OVERSTORY_TASK_ID: taskId,
-				});
+				const pid = await createSession(tmuxSessionName, worktreePath, spawnCmd, sessionEnv);
 
 				// 13. Record session BEFORE sending the beacon so that hook-triggered
 				// updateLastActivity() can find the entry and transition booting->working.
@@ -1119,10 +1122,8 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				// the beacon text entirely (overstory-3271).
 				//
 				// Skipped for runtimes that return false from requiresBeaconVerification().
-				// Pi's TUI idle and processing states are indistinguishable via detectReady
-				// (both show "pi v..." header and the token-usage status bar), so the loop
-				// would incorrectly conclude the beacon was not received and spam duplicate
-				// startup messages.
+				// Pi uses an explicit extension-owned ready marker instead, so this loop
+				// would only resend duplicate startup messages there.
 				const needsVerification =
 					!runtime.requiresBeaconVerification || runtime.requiresBeaconVerification();
 				if (needsVerification) {

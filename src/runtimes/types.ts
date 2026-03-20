@@ -47,7 +47,7 @@ export interface OverlayContent {
 /**
  * Runtime-agnostic hook/guard configuration for deployment to a worktree.
  * Each runtime adapter translates this into its native guard mechanism
- * (e.g., settings.local.json hooks for Claude Code, guard extensions for Pi).
+ * (e.g., settings.local.json hooks for Claude Code, guard files for Sapling).
  */
 export interface HooksDef {
 	/** Agent name injected into hook commands. */
@@ -167,8 +167,9 @@ export interface AgentRuntime {
 	/**
 	 * Deploy per-agent instructions and guards to a worktree.
 	 * Claude Code writes .claude/CLAUDE.md + settings.local.json hooks.
+	 * Pi writes its runtime-specific instruction file and relies on the external
+	 * os-eco Pi extension package for session-scoped policy and readiness signaling.
 	 * Codex writes AGENTS.md (no hook deployment needed).
-	 * Pi writes AGENTS.md + a guard extension in .pi/extensions/.
 	 * When overlay is undefined, only hooks are deployed (no instruction file written).
 	 */
 	deployConfig(
@@ -210,9 +211,8 @@ export interface AgentRuntime {
 	 *
 	 * Claude Code's TUI sometimes swallows Enter during late initialization, so the
 	 * orchestrator resends the beacon if the pane still appears idle (overstory-3271).
-	 * Pi's TUI does not exhibit this behavior AND its idle/processing states are
-	 * indistinguishable via detectReady (both show the header and status bar), so
-	 * the resend loop would spam Pi with duplicate startup messages.
+	 * Pi's companion extension emits an explicit ready marker instead, so the resend
+	 * loop would just spam duplicate startup messages there as well.
 	 *
 	 * Runtimes that omit this method (or return true) get the resend loop.
 	 * Pi returns false to skip it.

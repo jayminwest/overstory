@@ -2,9 +2,8 @@
 // Implements the AgentRuntime contract for the `pi` CLI (Mario Zechner's Pi coding agent).
 
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { PiRuntimeConfig, ResolvedModel } from "../types.ts";
-import { generatePiGuardExtension } from "./pi-guards.ts";
 import type {
 	AgentRuntime,
 	HooksDef,
@@ -24,12 +23,80 @@ const DEFAULT_PI_CONFIG: PiRuntimeConfig = {
 	},
 };
 
+const PI_READY_MARKER_PREFIX = "\u2713 os-eco";
+const PI_EXTENSION_SOURCE = "https://github.com/RogerNavelsaker/pi-os-eco";
+const OVERSTORY_WORKTREE_RE = /^(.*?)(?:[\\/]\.overstory[\\/]worktrees[\\/].*)$/;
+
+interface PiCommandResult {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+}
+
+type PiCommandRunner = (args: string[], cwd: string) => Promise<PiCommandResult>;
+
+interface PiRuntimeDeps {
+	runPiCommand?: PiCommandRunner;
+}
+
+const defaultRunPiCommand: PiCommandRunner = async (args, cwd) => {
+	try {
+		const proc = Bun.spawn(["pi", ...args], {
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const exitCode = await proc.exited;
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		return { exitCode, stdout, stderr };
+	} catch (error) {
+		return {
+			exitCode: 1,
+			stdout: "",
+			stderr: error instanceof Error ? error.message : String(error),
+		};
+	}
+};
+
+function inferProjectRoot(worktreePath: string): string {
+	return worktreePath.match(OVERSTORY_WORKTREE_RE)?.[1] ?? worktreePath;
+}
+
+function isPathLikePiSource(source: string): boolean {
+	return (
+		source.startsWith(".") ||
+		source.startsWith("/") ||
+		/^[A-Za-z]:[\\/]/.test(source)
+	);
+}
+
+function normalizePiSource(source: string, projectRoot: string): string {
+	return isPathLikePiSource(source) ? resolve(projectRoot, source) : source;
+}
+
+async function hasConfiguredPiExtension(projectRoot: string, source: string): Promise<boolean> {
+	const settingsFile = Bun.file(join(projectRoot, ".pi", "settings.json"));
+	if (!(await settingsFile.exists())) return false;
+
+	try {
+		const parsed = JSON.parse(await settingsFile.text()) as { packages?: unknown };
+		const packages = Array.isArray(parsed.packages)
+			? parsed.packages.filter((value): value is string => typeof value === "string")
+			: [];
+		const normalizedSource = normalizePiSource(source, projectRoot);
+		return packages.some((pkg) => normalizePiSource(pkg, projectRoot) === normalizedSource);
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Pi runtime adapter.
  *
  * Implements AgentRuntime for the `pi` CLI (Mario Zechner's Pi coding agent).
- * Security is enforced via Pi guard extensions rather than permission-mode flags —
- * Pi has no --permission-mode equivalent.
+ * Pi has no --permission-mode flag. Session-scoped policy and readiness are
+ * enforced by the companion os-eco Pi extension package instead.
  */
 export class PiRuntime implements AgentRuntime {
 	/** Unique identifier for this runtime. */
@@ -42,9 +109,23 @@ export class PiRuntime implements AgentRuntime {
 	readonly instructionPath = "AGENTS.md";
 
 	private readonly config: PiRuntimeConfig;
+	private readonly runPiCommand: PiCommandRunner;
 
-	constructor(config?: PiRuntimeConfig) {
+	constructor(config?: PiRuntimeConfig, deps?: PiRuntimeDeps) {
 		this.config = config ?? DEFAULT_PI_CONFIG;
+		this.runPiCommand = deps?.runPiCommand ?? defaultRunPiCommand;
+	}
+
+	private async syncProjectPiExtension(projectRoot: string): Promise<void> {
+		const commandArgs = (await hasConfiguredPiExtension(projectRoot, PI_EXTENSION_SOURCE))
+			? ["update", PI_EXTENSION_SOURCE]
+			: ["install", PI_EXTENSION_SOURCE, "-l"];
+		const result = await this.runPiCommand(commandArgs, projectRoot);
+		if (result.exitCode === 0) return;
+
+		const action = commandArgs[0] ?? "sync";
+		const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`;
+		throw new Error(`Pi extension ${action} failed: ${detail}`);
 	}
 
 	/**
@@ -67,7 +148,6 @@ export class PiRuntime implements AgentRuntime {
 	 * Maps SpawnOpts to the `pi` CLI flags:
 	 * - `model` → `--model <model>`
 	 * - `permissionMode` is accepted but NOT mapped — Pi has no permission-mode flag.
-	 *   Security is enforced via guard extensions deployed by deployConfig().
 	 * - `appendSystemPrompt` → `--append-system-prompt '<escaped>'` (POSIX single-quote escaping)
 	 *
 	 * The `cwd` and `env` fields are handled by the tmux session creator, not embedded here.
@@ -112,68 +192,53 @@ export class PiRuntime implements AgentRuntime {
 	}
 
 	/**
-	 * Deploy per-agent instructions and guards to a worktree.
+	 * Deploy per-agent instructions to a worktree.
 	 *
-	 * Writes up to three files:
-	 * 1. `AGENTS.md` — agent's task-specific overlay. Skipped when overlay is undefined.
-	 * 2. `.pi/extensions/overstory-guard.ts` — Pi guard extension (always deployed).
-	 * 3. `.pi/settings.json` — Pi settings enabling the extensions directory (always deployed).
+	 * Pi session policy and readiness signaling now live in the external
+	 * os-eco Pi extension package. Overstory only writes the task-specific
+	 * overlay file here.
 	 *
 	 * @param worktreePath - Absolute path to the agent's git worktree
-	 * @param overlay - Overlay content to write as AGENTS.md, or undefined for guard-only deployment
-	 * @param hooks - Agent identity, capability, worktree path, and optional quality gates
+	 * @param overlay - Overlay content to write as AGENTS.md, or undefined to skip instruction output
+	 * @param _hooks - Reserved for interface compatibility; Pi policy now lives in the extension package
 	 */
 	async deployConfig(
 		worktreePath: string,
 		overlay: OverlayContent | undefined,
-		hooks: HooksDef,
+		_hooks: HooksDef,
 	): Promise<void> {
+		await this.syncProjectPiExtension(inferProjectRoot(worktreePath));
+
 		if (overlay) {
 			await mkdir(worktreePath, { recursive: true });
 			await Bun.write(join(worktreePath, this.instructionPath), overlay.content);
 		}
-
-		// Always deploy Pi guard extension.
-		const piExtDir = join(worktreePath, ".pi", "extensions");
-		await mkdir(piExtDir, { recursive: true });
-		await Bun.write(join(piExtDir, "overstory-guard.ts"), generatePiGuardExtension(hooks));
-
-		// Always deploy Pi settings pointing at the extensions directory.
-		const piDir = join(worktreePath, ".pi");
-		const settings = { extensions: ["./extensions"] };
-		await Bun.write(join(piDir, "settings.json"), `${JSON.stringify(settings, null, "\t")}\n`);
 	}
 
 	/**
 	 * Pi does not require beacon verification/resend.
 	 *
 	 * Claude Code's TUI sometimes swallows Enter during late initialization, so the
-	 * orchestrator resends the beacon until the pane leaves the "idle" state. Pi's TUI
-	 * does not have this issue AND its idle vs. processing states are indistinguishable
-	 * via detectReady (the header "pi v..." and status bar token counter are visible in
-	 * both states). Enabling the resend loop would spam Pi with duplicate beacon messages.
+	 * orchestrator resends the beacon until the pane leaves the "idle" state. Pi uses
+	 * an explicit ready marker emitted by the companion extension package, so it does
+	 * not need the resend loop either.
 	 */
 	requiresBeaconVerification(): boolean {
 		return false;
 	}
 
 	/**
-	 * Detect Pi TUI readiness from a tmux pane content snapshot.
+	 * Detect Pi readiness from the explicit extension-owned ready marker.
 	 *
-	 * Pi shows a header containing "pi" and "model:" when the TUI has fully rendered.
-	 * Pi has no trust dialog phase.
+	 * The marker is rendered into the Pi UI by the os-eco Pi extension only when the
+	 * managed session is ready for work:
+	 *   ✓ os-eco agent=<name> runtime=pi
 	 *
 	 * @param paneContent - Captured tmux pane content to analyze
 	 * @returns Current readiness phase
 	 */
 	detectReady(paneContent: string): ReadyState {
-		// Pi's TUI shows "pi v<version>" in the header and a status bar with
-		// a token usage indicator like "0.0%/200k" or "0.0%/1.0M" when fully rendered.
-		// The context window size uses k-scale (e.g. 200k) for smaller models and
-		// M-scale (e.g. 1.0M) for Opus/Sonnet with 1M+ context windows.
-		const hasHeader = paneContent.includes("pi v");
-		const hasStatusBar = /\d+\.\d+%\/[\d.]+[kKmM]/.test(paneContent);
-		if (hasHeader && hasStatusBar) {
+		if (paneContent.includes(PI_READY_MARKER_PREFIX) && paneContent.includes("runtime=pi")) {
 			return { phase: "ready" };
 		}
 		return { phase: "loading" };
