@@ -331,6 +331,44 @@ describe("createSession", () => {
 		]);
 	});
 
+	test("uses canonical project tmux socket when cwd is an overstory worktree with its own copied .overstory", async () => {
+		const projectOverstoryDir = join(tempCwd, ".overstory");
+		const worktreePath = join(projectOverstoryDir, "worktrees", "builder-123");
+		await mkdir(join(worktreePath, ".overstory"), { recursive: true });
+		await Bun.write(join(projectOverstoryDir, "tmux.conf"), "set -g mouse on\n");
+
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) {
+				return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			}
+			if (callCount === 2) {
+				return mockSpawnResult("", "", 0);
+			}
+			return mockSpawnResult("4242\n", "", 0);
+		});
+
+		await createSession("isolated-agent", worktreePath, "echo hello");
+
+		const tmuxCallArgs = spawnSpy.mock.calls[1] as unknown[];
+		const cmd = tmuxCallArgs[0] as string[];
+		expect(cmd).toEqual([
+			"tmux",
+			"-S",
+			join(projectOverstoryDir, "tmux.sock"),
+			"-f",
+			join(projectOverstoryDir, "tmux.conf"),
+			"new-session",
+			"-d",
+			"-s",
+			"isolated-agent",
+			"-c",
+			worktreePath,
+			expect.any(String),
+		]);
+	});
+
 	test("throws after exhausting all list-panes retries", async () => {
 		let callCount = 0;
 		spawnSpy.mockImplementation(() => {
