@@ -2,7 +2,7 @@
  * Tests for shell completion generation.
  */
 
-import { describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import {
 	COMMANDS,
 	completionsCommand,
@@ -11,46 +11,65 @@ import {
 	generateZsh,
 } from "./completions.ts";
 
+const EXPECTED_COMMAND_NAMES = [
+	"agents",
+	"init",
+	"sling",
+	"prime",
+	"stop",
+	"sessions",
+	"status",
+	"dashboard",
+	"inspect",
+	"merge",
+	"nudge",
+	"clean",
+	"doctor",
+	"log",
+	"logs",
+	"watch",
+	"trace",
+	"errors",
+	"feed",
+	"replay",
+	"costs",
+	"metrics",
+	"spec",
+	"coordinator",
+	"supervisor",
+	"hooks",
+	"monitor",
+	"mail",
+	"group",
+	"worktree",
+	"run",
+	"ecosystem",
+	"upgrade",
+	"completions",
+] satisfies string[];
+
+let originalExitCode: number | undefined;
+
+beforeEach(() => {
+	originalExitCode = process.exitCode as number | undefined;
+	process.exitCode = 0;
+});
+
+afterEach(() => {
+	process.exitCode = originalExitCode ?? 0;
+});
+
 describe("COMMANDS array", () => {
-	it("should have exactly 33 commands", () => {
-		expect(COMMANDS).toHaveLength(33);
+	it("should match the expected top-level commands", () => {
+		expect(COMMANDS).toHaveLength(EXPECTED_COMMAND_NAMES.length);
+		expect(COMMANDS.map((c) => c.name)).toEqual(EXPECTED_COMMAND_NAMES);
 	});
 
 	it("should include all expected command names", () => {
 		const names = COMMANDS.map((c) => c.name);
-		expect(names).toContain("agents");
-		expect(names).toContain("init");
-		expect(names).toContain("sling");
-		expect(names).toContain("prime");
-		expect(names).toContain("status");
-		expect(names).toContain("dashboard");
-		expect(names).toContain("inspect");
-		expect(names).toContain("merge");
-		expect(names).toContain("nudge");
-		expect(names).toContain("clean");
-		expect(names).toContain("doctor");
-		expect(names).toContain("log");
-		expect(names).toContain("watch");
-		expect(names).toContain("trace");
-		expect(names).toContain("errors");
-		expect(names).toContain("replay");
-		expect(names).toContain("costs");
-		expect(names).toContain("metrics");
-		expect(names).toContain("spec");
-		expect(names).toContain("coordinator");
-		expect(names).toContain("supervisor");
-		expect(names).toContain("hooks");
-		expect(names).toContain("monitor");
-		expect(names).toContain("mail");
-		expect(names).toContain("group");
-		expect(names).toContain("worktree");
-		expect(names).toContain("run");
-		expect(names).toContain("feed");
-		expect(names).toContain("logs");
-		expect(names).toContain("stop");
-		expect(names).toContain("ecosystem");
-		expect(names).toContain("upgrade");
-		expect(names).toContain("completions");
+		for (const name of EXPECTED_COMMAND_NAMES) {
+			expect(names).toContain(name);
+		}
 	});
 });
 
@@ -62,7 +81,7 @@ describe("generateBash", () => {
 		expect(script).toContain("_init_completion");
 	});
 
-	it("should include all 33 command names", () => {
+	it("should include all command names", () => {
 		const script = generateBash();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);
@@ -96,7 +115,7 @@ describe("generateZsh", () => {
 		expect(script).toContain("_arguments");
 	});
 
-	it("should include all 33 command names", () => {
+	it("should include all command names", () => {
 		const script = generateZsh();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);
@@ -126,7 +145,7 @@ describe("generateFish", () => {
 		expect(script).toContain("__fish_use_subcommand");
 	});
 
-	it("should include all 33 command names", () => {
+	it("should include all command names", () => {
 		const script = generateFish();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);

@@ -252,12 +252,14 @@ export async function doctorCommand(
 	cmd.exitOverride();
 
 	const prevExitCode = process.exitCode as number | undefined;
-	process.exitCode = undefined;
+	// Bun does not reliably clear a nonzero exitCode when reassigned to undefined,
+	// so use 0 as the neutral sentinel while this command runs.
+	process.exitCode = 0;
 
 	try {
 		await cmd.parseAsync(args, { from: "user" });
 	} catch (err: unknown) {
-		process.exitCode = prevExitCode;
+		process.exitCode = prevExitCode ?? 0;
 		if (err && typeof err === "object" && "code" in err) {
 			const code = (err as { code: string }).code;
 			if (code === "commander.helpDisplayed" || code === "commander.version") {
@@ -268,6 +270,6 @@ export async function doctorCommand(
 	}
 
 	const exitCode = process.exitCode === 1 ? 1 : undefined;
-	process.exitCode = prevExitCode;
+	process.exitCode = prevExitCode ?? 0;
 	return exitCode;
 }

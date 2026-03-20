@@ -20,10 +20,14 @@ import { doctorCommand } from "./doctor.ts";
 describe("doctorCommand", () => {
 	let chunks: string[];
 	let originalWrite: typeof process.stdout.write;
+	let originalExitCode: number | undefined;
 	let tempDir: string;
 	let originalCwd: string;
 
 	beforeEach(async () => {
+		originalExitCode = process.exitCode as number | undefined;
+		process.exitCode = 0;
+
 		// Spy on stdout
 		chunks = [];
 		originalWrite = process.stdout.write;
@@ -46,6 +50,7 @@ describe("doctorCommand", () => {
 	});
 
 	afterEach(async () => {
+		process.exitCode = originalExitCode ?? 0;
 		process.stdout.write = originalWrite;
 		process.chdir(originalCwd);
 		await cleanupTempDir(tempDir);
@@ -257,6 +262,12 @@ describe("doctorCommand", () => {
 		});
 
 		test("returns undefined on success (no failures)", async () => {
+			const exitCode = await doctorCommand([], { checkRunners: [] });
+			expect(exitCode).toBeUndefined();
+		});
+
+		test("ignores ambient nonzero process.exitCode on success", async () => {
+			process.exitCode = 1;
 			const exitCode = await doctorCommand([], { checkRunners: [] });
 			expect(exitCode).toBeUndefined();
 		});
