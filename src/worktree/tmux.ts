@@ -8,7 +8,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { getProjectRootOverride } from "../config.ts";
 import { AgentError } from "../errors.ts";
 import type { ReadyState } from "../runtimes/types.ts";
@@ -17,12 +17,24 @@ const OVERSTORY_DIRNAME = ".overstory";
 const TMUX_SOCKET_FILENAME = "tmux.sock";
 const TMUX_CONFIG_FILENAME = "tmux.conf";
 
+function isNestedWorktreeOverstoryDir(candidate: string): boolean {
+	const normalized = resolve(candidate);
+	const worktreesMarker = `${sep}${OVERSTORY_DIRNAME}${sep}worktrees${sep}`;
+	const worktreesIndex = normalized.indexOf(worktreesMarker);
+	if (worktreesIndex === -1) {
+		return false;
+	}
+
+	const lastOverstoryIndex = normalized.lastIndexOf(`${sep}${OVERSTORY_DIRNAME}`);
+	return lastOverstoryIndex > worktreesIndex;
+}
+
 function findOverstoryDir(startDir?: string): string | null {
 	let current = resolve(startDir ?? getProjectRootOverride() ?? process.cwd());
 
 	while (true) {
 		const candidate = join(current, OVERSTORY_DIRNAME);
-		if (existsSync(candidate)) {
+		if (existsSync(candidate) && !isNestedWorktreeOverstoryDir(candidate)) {
 			return candidate;
 		}
 		const parent = dirname(current);
