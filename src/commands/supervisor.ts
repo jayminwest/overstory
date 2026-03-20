@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
+import { buildOverstorySessionEnv } from "../agents/session-env.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
@@ -177,22 +178,23 @@ async function startSupervisor(opts: {
 		if (await agentDefFile.exists()) {
 			appendSystemPromptFile = agentDefPath;
 		}
+		const sessionEnv = buildOverstorySessionEnv({
+			baseEnv: runtime.buildEnv(resolvedModel),
+			sessionKind: "coordinator",
+			agentName: opts.name,
+			capability: "supervisor",
+			worktreePath: projectRoot,
+			projectRoot,
+			taskId: opts.task,
+		});
 		const spawnCmd = runtime.buildSpawnCommand({
 			model: resolvedModel.model,
 			permissionMode: "bypass",
 			cwd: projectRoot,
 			appendSystemPromptFile,
-			env: {
-				...runtime.buildEnv(resolvedModel),
-				OVERSTORY_AGENT_NAME: opts.name,
-				OVERSTORY_TASK_ID: opts.task,
-			},
+			env: sessionEnv,
 		});
-		const pid = await createSession(tmuxSession, projectRoot, spawnCmd, {
-			...runtime.buildEnv(resolvedModel),
-			OVERSTORY_AGENT_NAME: opts.name,
-			OVERSTORY_TASK_ID: opts.task,
-		});
+		const pid = await createSession(tmuxSession, projectRoot, spawnCmd, sessionEnv);
 
 		// Wait for Claude Code TUI to render before sending input
 		await waitForTuiReady(tmuxSession, (content) => runtime.detectReady(content));
