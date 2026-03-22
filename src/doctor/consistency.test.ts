@@ -375,6 +375,41 @@ describe("checkConsistency", () => {
 		expect(warnOrFail.length).toBe(0);
 	});
 
+	test("ignores completed sessions whose tmux, pid, and worktree are gone", async () => {
+		const dbPath = join(overstoryDir, "sessions.db");
+		const store = createSessionStore(dbPath);
+
+		store.upsert({
+			id: "session-1",
+			agentName: "completed-agent",
+			capability: "builder",
+			worktreePath: join(overstoryDir, "worktrees", "completed-agent"),
+			branchName: "overstory/completed-agent/test-123",
+			taskId: "test-123",
+			tmuxSession: "overstory-testproject-completed-agent",
+			state: "completed",
+			pid: 99999,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+			transcriptPath: null,
+		});
+		store.close();
+
+		mockIsProcessAlive.mockReturnValue(false);
+		mockListSessions.mockResolvedValue([]);
+
+		const checks = await checkConsistency(config, overstoryDir, mockDeps);
+
+		expect(checks.find((c) => c.name === "dead-pids")?.status).toBe("pass");
+		expect(checks.find((c) => c.name === "missing-worktrees")?.status).toBe("pass");
+		expect(checks.find((c) => c.name === "missing-tmux")?.status).toBe("pass");
+	});
+
 	test("handles tmux not installed gracefully", async () => {
 		// Mock tmux listing to throw an error
 		mockListSessions.mockRejectedValue(new Error("tmux: command not found"));

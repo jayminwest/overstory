@@ -124,13 +124,41 @@ describe("checkAgents", () => {
 		expect(parseCheck?.status).toBe("pass");
 	});
 
-	test("fails when agent has invalid model", async () => {
+	test("passes when agent uses a non-empty model string", async () => {
 		const manifest = {
 			version: "1.0",
 			agents: {
 				scout: {
 					file: "scout.md",
-					model: "invalid-model",
+					model: "gpt-5-4",
+					tools: ["Read"],
+					capabilities: ["explore"],
+					canSpawn: false,
+					constraints: [],
+				},
+			},
+			capabilityIndex: {
+				explore: ["scout"],
+			},
+		};
+
+		await mkdir(join(overstoryDir, "agent-defs"), { recursive: true });
+		await Bun.write(join(overstoryDir, "agent-manifest.json"), JSON.stringify(manifest, null, 2));
+		await Bun.write(join(overstoryDir, "agent-defs", "scout.md"), "# Scout");
+
+		const checks = await checkAgents(mockConfig, overstoryDir);
+
+		const parseCheck = checks.find((c) => c.name === "Manifest parsing");
+		expect(parseCheck?.status).toBe("pass");
+	});
+
+	test("fails when agent model is empty", async () => {
+		const manifest = {
+			version: "1.0",
+			agents: {
+				scout: {
+					file: "scout.md",
+					model: "",
 					tools: ["Read"],
 					capabilities: ["explore"],
 					canSpawn: false,
@@ -148,7 +176,9 @@ describe("checkAgents", () => {
 
 		const parseCheck = checks.find((c) => c.name === "Manifest parsing");
 		expect(parseCheck?.status).toBe("fail");
-		expect(parseCheck?.details?.some((d) => d.includes("model"))).toBe(true);
+		expect(parseCheck?.details?.some((d) => d.includes('"model" must be a non-empty string'))).toBe(
+			true,
+		);
 	});
 
 	test("fails when agent has zero capabilities", async () => {
@@ -378,7 +408,44 @@ sessionsCompleted: -5
 		expect(identityCheck?.details?.some((d) => d.includes("sessionsCompleted"))).toBe(true);
 	});
 
-	test("warns about stale identity files", async () => {
+	test("does not warn for runtime-named identities when the recorded role exists", async () => {
+		const manifest = {
+			version: "1.0",
+			agents: {
+				scout: {
+					file: "scout.md",
+					model: "haiku",
+					tools: ["Read"],
+					capabilities: ["explore"],
+					canSpawn: false,
+					constraints: [],
+				},
+			},
+			capabilityIndex: {
+				explore: ["scout"],
+			},
+		};
+
+		await mkdir(join(overstoryDir, "agent-defs"), { recursive: true });
+		await mkdir(join(overstoryDir, "agents", "scout-task-123"), { recursive: true });
+		await Bun.write(join(overstoryDir, "agent-manifest.json"), JSON.stringify(manifest, null, 2));
+		await Bun.write(join(overstoryDir, "agent-defs", "scout.md"), "# Scout");
+
+		const identity = `name: scout-task-123
+capability: scout
+created: "2024-01-01T00:00:00Z"
+sessionsCompleted: 5
+`;
+
+		await Bun.write(join(overstoryDir, "agents", "scout-task-123", "identity.yaml"), identity);
+
+		const checks = await checkAgents(mockConfig, overstoryDir);
+
+		const staleCheck = checks.find((c) => c.name === "Stale identities");
+		expect(staleCheck).toBeUndefined();
+	});
+
+	test("warns about stale identity files when the recorded role is missing", async () => {
 		const manifest = {
 			version: "1.0",
 			agents: {
@@ -413,7 +480,7 @@ sessionsCompleted: 5
 
 		const staleCheck = checks.find((c) => c.name === "Stale identities");
 		expect(staleCheck?.status).toBe("warn");
-		expect(staleCheck?.details?.some((d) => d.includes("old-agent"))).toBe(true);
+		expect(staleCheck?.details?.some((d) => d.includes("obsolete"))).toBe(true);
 	});
 
 	test("warns when identity name contains invalid characters", async () => {
