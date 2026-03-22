@@ -399,6 +399,41 @@ describe("logCommand", () => {
 		expect(updatedSession?.state).toBe("working");
 	});
 
+	test("session-end does NOT transition orchestrator to completed (persistent agent)", async () => {
+		const dbPath = join(tempDir, ".overstory", "sessions.db");
+		const session: AgentSession = {
+			id: "session-orch",
+			agentName: "orchestrator",
+			capability: "orchestrator",
+			worktreePath: tempDir,
+			branchName: "main",
+			taskId: "",
+			tmuxSession: "overstory-orchestrator",
+			state: "working",
+			pid: 33333,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date(Date.now() - 60_000).toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+			transcriptPath: null,
+		};
+		const store = createSessionStore(dbPath);
+		store.upsert(session);
+		store.close();
+
+		await logCommand(["session-end", "--agent", "orchestrator"]);
+
+		const readStore = createSessionStore(dbPath);
+		const updatedSession = readStore.getByName("orchestrator");
+		readStore.close();
+
+		expect(updatedSession).toBeDefined();
+		expect(updatedSession?.state).toBe("working");
+	});
+
 	describe("session-end coordinator run completion", () => {
 		test("session-end does NOT auto-complete the active run for coordinator agent (per-turn Stop hook guard)", async () => {
 			// Regression test for overstory-adc5:

@@ -165,6 +165,7 @@ export const SUPPORTED_CAPABILITIES = [
 	"reviewer",
 	"lead",
 	"merger",
+	"orchestrator",
 	"coordinator",
 	"supervisor",
 	"monitor",

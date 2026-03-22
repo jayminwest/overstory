@@ -71,13 +71,14 @@ const NON_IMPLEMENTATION_CAPABILITIES = new Set([
 	"scout",
 	"reviewer",
 	"lead",
+	"orchestrator",
 	"coordinator",
 	"supervisor",
 	"monitor",
 ]);
 
 /** Coordination capabilities that get git add/commit whitelisted for metadata sync. */
-const COORDINATION_CAPABILITIES = new Set(["coordinator", "supervisor", "monitor"]);
+const COORDINATION_CAPABILITIES = new Set(["coordinator", "orchestrator", "supervisor", "monitor"]);
 
 /**
  * Build the full guards configuration object for .sapling/guards.json.

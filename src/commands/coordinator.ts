@@ -46,6 +46,24 @@ import { isRunningAsRoot } from "./sling.ts";
 /** Default coordinator agent name. */
 const COORDINATOR_NAME = "coordinator";
 
+export interface PersistentAgentSpec {
+	commandName: string;
+	displayName: string;
+	agentName: string;
+	capability: string;
+	agentDefFile: string;
+	beaconBuilder: (trackerCli: string) => string;
+}
+
+const COORDINATOR_SPEC: PersistentAgentSpec = {
+	commandName: "coordinator",
+	displayName: "Coordinator",
+	agentName: COORDINATOR_NAME,
+	capability: "coordinator",
+	agentDefFile: "coordinator.md",
+	beaconBuilder: buildCoordinatorBeacon,
+};
+
 /** Poll interval for the ask subcommand reply loop. */
 const ASK_POLL_INTERVAL_MS = 2_000;
 
@@ -302,6 +320,14 @@ export interface CoordinatorSessionOptions {
 	profile?: string;
 	/** Override coordinator name (default: "coordinator"). */
 	coordinatorName?: string;
+	/** Generic persistent agent name override. Preferred over coordinatorName for new callers. */
+	agentName?: string;
+	/** Capability stored in the session registry and used for manifest/runtime resolution. */
+	capability?: string;
+	/** Agent definition file to append as the system prompt. */
+	agentDefFile?: string;
+	/** Human-readable label for output. */
+	displayName?: string;
 	/** Custom beacon builder. Receives tracker CLI name, returns beacon string. */
 	beaconBuilder?: (trackerCli: string) => string;
 }
@@ -332,10 +358,17 @@ export async function startCoordinatorSession(
 		monitor: monitorFlag,
 		profile: profileFlag,
 		coordinatorName: coordinatorNameOpt,
+		agentName: agentNameOpt,
+		capability: capabilityOpt,
+		agentDefFile: agentDefFileOpt,
+		displayName: displayNameOpt,
 		beaconBuilder: beaconBuilderOpt,
 	} = opts;
 
-	const coordinatorName = coordinatorNameOpt ?? COORDINATOR_NAME;
+	const coordinatorName = agentNameOpt ?? coordinatorNameOpt ?? COORDINATOR_NAME;
+	const capability = capabilityOpt ?? COORDINATOR_SPEC.capability;
+	const agentDefFile = agentDefFileOpt ?? COORDINATOR_SPEC.agentDefFile;
+	const displayName = displayNameOpt ?? COORDINATOR_SPEC.displayName;
 	const beaconBuilder = beaconBuilderOpt ?? buildCoordinatorBeacon;
 
 	if (isRunningAsRoot()) {
@@ -359,7 +392,7 @@ export async function startCoordinatorSession(
 
 		if (
 			existing &&
-			existing.capability === "coordinator" &&
+			existing.capability === capability &&
 			existing.state !== "completed" &&
 			existing.state !== "zombie"
 		) {
@@ -378,7 +411,7 @@ export async function startCoordinatorSession(
 					// (e.g. sessions migrated from an older schema). In both cases we
 					// cannot prove the session is a zombie, so treat it as active.
 					throw new AgentError(
-						`Coordinator is already running (tmux: ${existing.tmuxSession}, since: ${existing.startedAt})`,
+						`${displayName} is already running (tmux: ${existing.tmuxSession}, since: ${existing.startedAt})`,
 						{ agentName: coordinatorName },
 					);
 				}
@@ -394,8 +427,8 @@ export async function startCoordinatorSession(
 			join(projectRoot, config.agents.baseDir),
 		);
 		const manifest = await manifestLoader.load();
-		const resolvedModel = resolveModel(config, manifest, "coordinator", "opus");
-		const runtime = getRuntime(undefined, config, "coordinator");
+		const resolvedModel = resolveModel(config, manifest, capability, "opus");
+		const runtime = getRuntime(undefined, config, capability);
 
 		// Deploy hooks to the project root so the coordinator gets event logging,
 		// mail check --inject, and activity tracking via the standard hook pipeline.
@@ -405,7 +438,7 @@ export async function startCoordinatorSession(
 		// at the project root is unaffected.
 		await runtime.deployConfig(projectRoot, undefined, {
 			agentName: coordinatorName,
-			capability: "coordinator",
+			capability,
 			worktreePath: projectRoot,
 		});
 
@@ -416,7 +449,7 @@ export async function startCoordinatorSession(
 		if (!existingIdentity) {
 			await createIdentity(identityBaseDir, {
 				name: coordinatorName,
-				capability: "coordinator",
+				capability,
 				created: new Date().toISOString(),
 				sessionsCompleted: 0,
 				expertiseDomains: config.mulch.enabled ? config.mulch.domains : [],
@@ -435,10 +468,10 @@ export async function startCoordinatorSession(
 		// Pass the file path (not content) so the shell inside the tmux pane reads
 		// it via $(cat ...) — avoids tmux IPC "command too long" errors with large
 		// agent definitions (overstory#45).
-		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "coordinator.md");
-		const agentDefFile = Bun.file(agentDefPath);
+		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", agentDefFile);
+		const agentDefHandle = Bun.file(agentDefPath);
 		let appendSystemPromptFile: string | undefined;
-		if (await agentDefFile.exists()) {
+		if (await agentDefHandle.exists()) {
 			appendSystemPromptFile = agentDefPath;
 		}
 		const spawnCmd = runtime.buildSpawnCommand({
@@ -484,7 +517,7 @@ export async function startCoordinatorSession(
 		const session: AgentSession = {
 			id: sessionId,
 			agentName: coordinatorName,
-			capability: "coordinator",
+			capability,
 			worktreePath: projectRoot, // Coordinator uses project root, not a worktree
 			branchName: config.project.canonicalBranch, // Operates on canonical branch
 			taskId: "", // No specific task assignment
@@ -525,14 +558,14 @@ export async function startCoordinatorSession(
 						? "The tmux server is no longer running. It may have crashed or been killed externally."
 						: "The Claude Code process may have crashed or exited immediately. Check tmux logs or try running the claude command manually.";
 				throw new AgentError(
-					`Coordinator tmux session "${tmuxSession}" died during startup. ${detail}`,
+					`${displayName} tmux session "${tmuxSession}" died during startup. ${detail}`,
 					{ agentName: coordinatorName },
 				);
 			}
 			await tmux.killSession(tmuxSession);
 			store.updateState(coordinatorName, "completed");
 			throw new AgentError(
-				`Coordinator tmux session "${tmuxSession}" did not become ready during startup. Claude Code may still be waiting on an interactive dialog or initializing too slowly.`,
+				`${displayName} tmux session "${tmuxSession}" did not become ready during startup. Claude Code may still be waiting on an interactive dialog or initializing too slowly.`,
 				{ agentName: coordinatorName },
 			);
 		}
@@ -579,7 +612,7 @@ export async function startCoordinatorSession(
 
 		const output = {
 			agentName: coordinatorName,
-			capability: "coordinator",
+			capability,
 			tmuxSession,
 			projectRoot,
 			pid,
@@ -588,9 +621,9 @@ export async function startCoordinatorSession(
 		};
 
 		if (json) {
-			jsonOutput("coordinator start", output);
+			jsonOutput(`${capability} start`, output);
 		} else {
-			printSuccess("Coordinator started");
+			printSuccess(`${displayName} started`);
 			process.stdout.write(`  Tmux:    ${tmuxSession}\n`);
 			process.stdout.write(`  Root:    ${projectRoot}\n`);
 			process.stdout.write(`  PID:     ${pid}\n`);
@@ -606,17 +639,33 @@ export async function startCoordinatorSession(
 	}
 }
 
-async function startCoordinator(
+async function startPersistentAgent(
+	spec: PersistentAgentSpec,
 	opts: { json: boolean; attach: boolean; watchdog: boolean; monitor: boolean; profile?: string },
 	deps: CoordinatorDeps = {},
 ): Promise<void> {
 	await startCoordinatorSession(
 		{
 			...opts,
-			coordinatorName: COORDINATOR_NAME,
-			beaconBuilder: buildCoordinatorBeacon,
+			agentName: spec.agentName,
+			capability: spec.capability,
+			agentDefFile: spec.agentDefFile,
+			displayName: spec.displayName,
+			beaconBuilder: spec.beaconBuilder,
 		},
 		deps,
+	);
+}
+
+function isActivePersistentAgentSession(
+	session: AgentSession | null,
+	spec: PersistentAgentSpec,
+): session is AgentSession {
+	return (
+		session !== null &&
+		session.capability === spec.capability &&
+		session.state !== "completed" &&
+		session.state !== "zombie"
 	);
 }
 
@@ -628,7 +677,11 @@ async function startCoordinator(
  * 3. Mark session as completed in SessionStore
  * 4. Auto-complete the active run (if current-run.txt exists)
  */
-async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = {}): Promise<void> {
+async function stopPersistentAgent(
+	spec: PersistentAgentSpec,
+	opts: { json: boolean },
+	deps: CoordinatorDeps = {},
+): Promise<void> {
 	const tmux = deps._tmux ?? {
 		createSession,
 		isSessionAlive,
@@ -649,16 +702,11 @@ async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = 
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 	try {
-		const session = store.getByName(COORDINATOR_NAME);
+		const session = store.getByName(spec.agentName);
 
-		if (
-			!session ||
-			session.capability !== "coordinator" ||
-			session.state === "completed" ||
-			session.state === "zombie"
-		) {
-			throw new AgentError("No active coordinator session found", {
-				agentName: COORDINATOR_NAME,
+		if (!isActivePersistentAgentSession(session, spec)) {
+			throw new AgentError(`No active ${spec.commandName} session found`, {
+				agentName: spec.agentName,
 			});
 		}
 
@@ -675,8 +723,8 @@ async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = 
 		const monitorStopped = await monitor.stop();
 
 		// Update session state
-		store.updateState(COORDINATOR_NAME, "completed");
-		store.updateLastActivity(COORDINATOR_NAME);
+		store.updateState(spec.agentName, "completed");
+		store.updateLastActivity(spec.agentName);
 
 		// Auto-complete the current run
 		let runCompleted = false;
@@ -705,7 +753,7 @@ async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = 
 		}
 
 		if (json) {
-			jsonOutput("coordinator stop", {
+			jsonOutput(`${spec.commandName} stop`, {
 				stopped: true,
 				sessionId: session.id,
 				watchdogStopped,
@@ -713,7 +761,7 @@ async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = 
 				runCompleted,
 			});
 		} else {
-			printSuccess("Coordinator stopped", session.id);
+			printSuccess(`${spec.displayName} stopped`, session.id);
 			if (watchdogStopped) {
 				printHint("Watchdog stopped");
 			} else {
@@ -740,7 +788,8 @@ async function stopCoordinator(opts: { json: boolean }, deps: CoordinatorDeps = 
  *
  * Checks session registry and tmux liveness to report actual state.
  */
-async function statusCoordinator(
+async function statusPersistentAgent(
+	spec: PersistentAgentSpec,
 	opts: { json: boolean },
 	deps: CoordinatorDeps = {},
 ): Promise<void> {
@@ -764,20 +813,19 @@ async function statusCoordinator(
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 	try {
-		const session = store.getByName(COORDINATOR_NAME);
+		const session = store.getByName(spec.agentName);
 		const watchdogRunning = await watchdog.isRunning();
 		const monitorRunning = await monitor.isRunning();
 
-		if (
-			!session ||
-			session.capability !== "coordinator" ||
-			session.state === "completed" ||
-			session.state === "zombie"
-		) {
+		if (!isActivePersistentAgentSession(session, spec)) {
 			if (json) {
-				jsonOutput("coordinator status", { running: false, watchdogRunning, monitorRunning });
+				jsonOutput(`${spec.commandName} status`, {
+					running: false,
+					watchdogRunning,
+					monitorRunning,
+				});
 			} else {
-				printHint("Coordinator is not running");
+				printHint(`${spec.displayName} is not running`);
 				if (watchdogRunning) {
 					printHint("Watchdog: running");
 				}
@@ -794,8 +842,8 @@ async function statusCoordinator(
 		// We already filtered out completed/zombie states above, so if tmux is dead
 		// this session needs to be marked as zombie.
 		if (!alive) {
-			store.updateState(COORDINATOR_NAME, "zombie");
-			store.updateLastActivity(COORDINATOR_NAME);
+			store.updateState(spec.agentName, "zombie");
+			store.updateLastActivity(spec.agentName);
 			session.state = "zombie";
 		}
 
@@ -812,10 +860,10 @@ async function statusCoordinator(
 		};
 
 		if (json) {
-			jsonOutput("coordinator status", status);
+			jsonOutput(`${spec.commandName} status`, status);
 		} else {
 			const stateLabel = alive ? "running" : session.state;
-			process.stdout.write(`Coordinator: ${stateLabel}\n`);
+			process.stdout.write(`${spec.displayName}: ${stateLabel}\n`);
 			process.stdout.write(`  Session:   ${session.id}\n`);
 			process.stdout.write(`  Tmux:      ${session.tmuxSession}\n`);
 			process.stdout.write(`  PID:       ${session.pid}\n`);
@@ -835,7 +883,8 @@ async function statusCoordinator(
  * Sends a mail message (from: operator, type: dispatch) and auto-nudges the
  * coordinator via tmux sendKeys. Replaces the two-step `ov mail send + ov nudge` pattern.
  */
-async function sendToCoordinator(
+async function sendToPersistentAgent(
+	spec: PersistentAgentSpec,
 	body: string,
 	opts: { subject: string; json: boolean },
 	deps: CoordinatorDeps = {},
@@ -859,26 +908,24 @@ async function sendToCoordinator(
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 	try {
-		const session = store.getByName(COORDINATOR_NAME);
+		const session = store.getByName(spec.agentName);
 
-		if (
-			!session ||
-			session.capability !== "coordinator" ||
-			session.state === "completed" ||
-			session.state === "zombie"
-		) {
-			throw new AgentError("No active coordinator session found", {
-				agentName: COORDINATOR_NAME,
+		if (!isActivePersistentAgentSession(session, spec)) {
+			throw new AgentError(`No active ${spec.commandName} session found`, {
+				agentName: spec.agentName,
 			});
 		}
 
 		const alive = await tmux.isSessionAlive(session.tmuxSession);
 		if (!alive) {
-			store.updateState(COORDINATOR_NAME, "zombie");
-			store.updateLastActivity(COORDINATOR_NAME);
-			throw new AgentError(`Coordinator tmux session "${session.tmuxSession}" is not alive`, {
-				agentName: COORDINATOR_NAME,
-			});
+			store.updateState(spec.agentName, "zombie");
+			store.updateLastActivity(spec.agentName);
+			throw new AgentError(
+				`${spec.displayName} tmux session "${session.tmuxSession}" is not alive`,
+				{
+					agentName: spec.agentName,
+				},
+			);
 		}
 
 		// Send mail
@@ -889,7 +936,7 @@ async function sendToCoordinator(
 		try {
 			id = mailClient.send({
 				from: "operator",
-				to: COORDINATOR_NAME,
+				to: spec.agentName,
 				subject,
 				body,
 				type: "dispatch",
@@ -903,16 +950,16 @@ async function sendToCoordinator(
 		const nudgeMessage = `[DISPATCH] ${subject}: ${body.slice(0, 500)}`;
 		let nudged = false;
 		try {
-			const nudgeResult = await nudge(projectRoot, COORDINATOR_NAME, nudgeMessage, true);
+			const nudgeResult = await nudge(projectRoot, spec.agentName, nudgeMessage, true);
 			nudged = nudgeResult.delivered;
 		} catch {
 			// Nudge is fire-and-forget — silently ignore errors
 		}
 
 		if (json) {
-			jsonOutput("coordinator send", { id, nudged });
+			jsonOutput(`${spec.commandName} send`, { id, nudged });
 		} else {
-			printSuccess("Sent to coordinator", id);
+			printSuccess(`Sent to ${spec.commandName}`, id);
 		}
 	} finally {
 		store.close();
@@ -928,6 +975,15 @@ async function sendToCoordinator(
  * Throws AgentError if no reply arrives before the timeout.
  */
 export async function askCoordinator(
+	body: string,
+	opts: { subject: string; timeout: number; json: boolean },
+	deps: CoordinatorDeps = {},
+): Promise<void> {
+	await askPersistentAgent(COORDINATOR_SPEC, body, opts, deps);
+}
+
+export async function askPersistentAgent(
+	spec: PersistentAgentSpec,
 	body: string,
 	opts: { subject: string; timeout: number; json: boolean },
 	deps: CoordinatorDeps = {},
@@ -952,26 +1008,24 @@ export async function askCoordinator(
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 	try {
-		const session = store.getByName(COORDINATOR_NAME);
+		const session = store.getByName(spec.agentName);
 
-		if (
-			!session ||
-			session.capability !== "coordinator" ||
-			session.state === "completed" ||
-			session.state === "zombie"
-		) {
-			throw new AgentError("No active coordinator session found", {
-				agentName: COORDINATOR_NAME,
+		if (!isActivePersistentAgentSession(session, spec)) {
+			throw new AgentError(`No active ${spec.commandName} session found`, {
+				agentName: spec.agentName,
 			});
 		}
 
 		const alive = await tmux.isSessionAlive(session.tmuxSession);
 		if (!alive) {
-			store.updateState(COORDINATOR_NAME, "zombie");
-			store.updateLastActivity(COORDINATOR_NAME);
-			throw new AgentError(`Coordinator tmux session "${session.tmuxSession}" is not alive`, {
-				agentName: COORDINATOR_NAME,
-			});
+			store.updateState(spec.agentName, "zombie");
+			store.updateLastActivity(spec.agentName);
+			throw new AgentError(
+				`${spec.displayName} tmux session "${session.tmuxSession}" is not alive`,
+				{
+					agentName: spec.agentName,
+				},
+			);
 		}
 
 		// Generate correlation ID for tracking this request/response pair
@@ -985,7 +1039,7 @@ export async function askCoordinator(
 		try {
 			sentId = mailClient.send({
 				from: "operator",
-				to: COORDINATOR_NAME,
+				to: spec.agentName,
 				subject,
 				body,
 				type: "dispatch",
@@ -999,7 +1053,7 @@ export async function askCoordinator(
 		// Auto-nudge (fire-and-forget)
 		const nudgeMessage = `[ASK] ${subject}: ${body.slice(0, 500)}`;
 		try {
-			await nudge(projectRoot, COORDINATOR_NAME, nudgeMessage, true);
+			await nudge(projectRoot, spec.agentName, nudgeMessage, true);
 		} catch {
 			// Nudge is fire-and-forget — silently ignore errors
 		}
@@ -1013,13 +1067,13 @@ export async function askCoordinator(
 			let reply: import("../types.ts").MailMessage | undefined;
 			try {
 				const replies = pollStore.getByThread(sentId);
-				reply = replies.find((m) => m.from === COORDINATOR_NAME && m.to === "operator");
+				reply = replies.find((m) => m.from === spec.agentName && m.to === "operator");
 			} finally {
 				pollStore.close();
 			}
 			if (reply) {
 				if (json) {
-					jsonOutput("coordinator ask", {
+					jsonOutput(`${spec.commandName} ask`, {
 						correlationId,
 						sentId,
 						replyId: reply.id,
@@ -1035,8 +1089,8 @@ export async function askCoordinator(
 		}
 
 		throw new AgentError(
-			`Timed out after ${timeout}s waiting for coordinator reply (correlationId: ${correlationId})`,
-			{ agentName: COORDINATOR_NAME },
+			`Timed out after ${timeout}s waiting for ${spec.commandName} reply (correlationId: ${correlationId})`,
+			{ agentName: spec.agentName },
 		);
 	} finally {
 		store.close();
@@ -1048,7 +1102,8 @@ export async function askCoordinator(
  *
  * Wraps capturePaneContent() from tmux.ts. Supports --follow for continuous polling.
  */
-async function outputCoordinator(
+async function outputPersistentAgent(
+	spec: PersistentAgentSpec,
 	opts: { follow: boolean; lines: number; interval: number; json: boolean },
 	deps: CoordinatorDeps = {},
 ): Promise<void> {
@@ -1071,26 +1126,24 @@ async function outputCoordinator(
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
 	try {
-		const session = store.getByName(COORDINATOR_NAME);
+		const session = store.getByName(spec.agentName);
 
-		if (
-			!session ||
-			session.capability !== "coordinator" ||
-			session.state === "completed" ||
-			session.state === "zombie"
-		) {
-			throw new AgentError("No active coordinator session found", {
-				agentName: COORDINATOR_NAME,
+		if (!isActivePersistentAgentSession(session, spec)) {
+			throw new AgentError(`No active ${spec.commandName} session found`, {
+				agentName: spec.agentName,
 			});
 		}
 
 		const alive = await tmux.isSessionAlive(session.tmuxSession);
 		if (!alive) {
-			store.updateState(COORDINATOR_NAME, "zombie");
-			store.updateLastActivity(COORDINATOR_NAME);
-			throw new AgentError(`Coordinator tmux session "${session.tmuxSession}" is not alive`, {
-				agentName: COORDINATOR_NAME,
-			});
+			store.updateState(spec.agentName, "zombie");
+			store.updateLastActivity(spec.agentName);
+			throw new AgentError(
+				`${spec.displayName} tmux session "${session.tmuxSession}" is not alive`,
+				{
+					agentName: spec.agentName,
+				},
+			);
 		}
 
 		const tmuxSession = session.tmuxSession;
@@ -1105,7 +1158,7 @@ async function outputCoordinator(
 			while (running) {
 				const content = await capturePane(tmuxSession, lines);
 				if (json) {
-					jsonOutput("coordinator output", { content, lines });
+					jsonOutput(`${spec.commandName} output`, { content, lines });
 				} else {
 					process.stdout.write(content ?? "");
 				}
@@ -1116,7 +1169,7 @@ async function outputCoordinator(
 		} else {
 			const content = await capturePane(tmuxSession, lines);
 			if (json) {
-				jsonOutput("coordinator output", { content, lines });
+				jsonOutput(`${spec.commandName} output`, { content, lines });
 			} else {
 				process.stdout.write(content ?? "");
 			}
@@ -1290,19 +1343,21 @@ export async function checkComplete(
 	return result;
 }
 
-/**
- * Create the Commander command for `ov coordinator`.
- */
-export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
-	const cmd = new Command("coordinator").description("Manage the persistent coordinator agent");
+export function createPersistentAgentCommand(
+	spec: PersistentAgentSpec,
+	deps: CoordinatorDeps = {},
+): Command {
+	const cmd = new Command(spec.commandName).description(
+		`Manage the persistent ${spec.commandName} agent`,
+	);
 
 	cmd
 		.command("start")
-		.description("Start the coordinator (spawns Claude Code at project root)")
+		.description(`Start the ${spec.commandName} (spawns Claude Code at project root)`)
 		.option("--attach", "Always attach to tmux session after start")
 		.option("--no-attach", "Never attach to tmux session after start")
-		.option("--watchdog", "Auto-start watchdog daemon with coordinator")
-		.option("--monitor", "Auto-start Tier 2 monitor agent with coordinator")
+		.option("--watchdog", `Auto-start watchdog daemon with ${spec.commandName}`)
+		.option("--monitor", `Auto-start Tier 2 monitor agent with ${spec.commandName}`)
 		.option("--profile <name>", "Canopy profile to apply to spawned agents")
 		.option("--json", "Output as JSON")
 		.action(
@@ -1315,7 +1370,8 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 			}) => {
 				// opts.attach = true if --attach, false if --no-attach, undefined if neither
 				const shouldAttach = opts.attach !== undefined ? opts.attach : !!process.stdout.isTTY;
-				await startCoordinator(
+				await startPersistentAgent(
+					spec,
 					{
 						json: opts.json ?? false,
 						attach: shouldAttach,
@@ -1330,39 +1386,45 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 
 	cmd
 		.command("stop")
-		.description("Stop the coordinator (kills tmux session)")
+		.description(`Stop the ${spec.commandName} (kills tmux session)`)
 		.option("--json", "Output as JSON")
 		.action(async (opts: { json?: boolean }) => {
-			await stopCoordinator({ json: opts.json ?? false }, deps);
+			await stopPersistentAgent(spec, { json: opts.json ?? false }, deps);
 		});
 
 	cmd
 		.command("status")
-		.description("Show coordinator state")
+		.description(`Show ${spec.commandName} state`)
 		.option("--json", "Output as JSON")
 		.action(async (opts: { json?: boolean }) => {
-			await statusCoordinator({ json: opts.json ?? false }, deps);
+			await statusPersistentAgent(spec, { json: opts.json ?? false }, deps);
 		});
 
 	cmd
 		.command("send")
-		.description("Send a message to the coordinator (fire-and-forget)")
+		.description(`Send a message to the ${spec.commandName} (fire-and-forget)`)
 		.requiredOption("--body <text>", "Message body")
 		.option("--subject <text>", "Message subject", "operator dispatch")
 		.option("--json", "Output as JSON")
 		.action(async (opts: { body: string; subject: string; json?: boolean }) => {
-			await sendToCoordinator(opts.body, { subject: opts.subject, json: opts.json ?? false }, deps);
+			await sendToPersistentAgent(
+				spec,
+				opts.body,
+				{ subject: opts.subject, json: opts.json ?? false },
+				deps,
+			);
 		});
 
 	cmd
 		.command("ask")
-		.description("Send a request to the coordinator and wait for a reply")
+		.description(`Send a request to the ${spec.commandName} and wait for a reply`)
 		.requiredOption("--body <text>", "Message body")
 		.option("--subject <text>", "Message subject", "operator request")
 		.option("--timeout <seconds>", "Timeout in seconds", String(ASK_DEFAULT_TIMEOUT_S))
 		.option("--json", "Output as JSON")
 		.action(async (opts: { body: string; subject: string; timeout?: string; json?: boolean }) => {
-			await askCoordinator(
+			await askPersistentAgent(
+				spec,
 				opts.body,
 				{
 					subject: opts.subject,
@@ -1375,14 +1437,15 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 
 	cmd
 		.command("output")
-		.description("Show recent coordinator output (tmux pane content)")
+		.description(`Show recent ${spec.commandName} output (tmux pane content)`)
 		.option("--follow, -f", "Continuously poll for new output")
 		.option("--lines <n>", "Number of lines to capture", "50")
 		.option("--interval <ms>", "Poll interval in milliseconds (with --follow)", "2000")
 		.option("--json", "Output as JSON")
 		.action(
 			async (opts: { follow?: boolean; lines?: string; interval?: string; json?: boolean }) => {
-				await outputCoordinator(
+				await outputPersistentAgent(
+					spec,
 					{
 						follow: opts.follow ?? false,
 						lines: Number.parseInt(opts.lines ?? "50", 10),
@@ -1394,6 +1457,15 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 			},
 		);
 
+	return cmd;
+}
+
+/**
+ * Create the Commander command for `ov coordinator`.
+ */
+export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
+	const cmd = createPersistentAgentCommand(COORDINATOR_SPEC, deps);
+
 	cmd
 		.command("check-complete")
 		.description("Evaluate exit triggers and report completion status")
@@ -1403,6 +1475,36 @@ export function createCoordinatorCommand(deps: CoordinatorDeps = {}): Command {
 		});
 
 	return cmd;
+}
+
+export async function persistentAgentCommand(
+	args: string[],
+	spec: PersistentAgentSpec,
+	deps: CoordinatorDeps = {},
+): Promise<void> {
+	const cmd = createPersistentAgentCommand(spec, deps);
+	cmd.exitOverride();
+
+	if (args.length === 0) {
+		process.stdout.write(cmd.helpInformation());
+		return;
+	}
+
+	try {
+		await cmd.parseAsync(args, { from: "user" });
+	} catch (err: unknown) {
+		if (err && typeof err === "object" && "code" in err) {
+			const code = (err as { code: string }).code;
+			if (code === "commander.helpDisplayed" || code === "commander.version") {
+				return;
+			}
+			if (code === "commander.unknownCommand") {
+				const message = err instanceof Error ? err.message : String(err);
+				throw new ValidationError(message, { field: "subcommand" });
+			}
+		}
+		throw err;
+	}
 }
 
 /**

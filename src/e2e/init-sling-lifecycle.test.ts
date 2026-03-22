@@ -124,7 +124,7 @@ describe("E2E: init→sling lifecycle on external project", () => {
 
 		const manifest = await loader.load();
 
-		// All 7 agents present (supervisor removed: deprecated, use lead instead)
+		// All 8 agents present (supervisor removed: deprecated, use lead instead)
 		const agentNames = Object.keys(manifest.agents).sort();
 		expect(agentNames).toEqual([
 			"builder",
@@ -132,6 +132,7 @@ describe("E2E: init→sling lifecycle on external project", () => {
 			"lead",
 			"merger",
 			"monitor",
+			"orchestrator",
 			"reviewer",
 			"scout",
 		]);

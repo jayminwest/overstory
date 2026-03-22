@@ -32,6 +32,7 @@ import { mergeCommand } from "./commands/merge.ts";
 import { createMetricsCommand } from "./commands/metrics.ts";
 import { createMonitorCommand } from "./commands/monitor.ts";
 import { nudgeCommand } from "./commands/nudge.ts";
+import { createOrchestratorCommand } from "./commands/orchestrator.ts";
 import { primeCommand } from "./commands/prime.ts";
 import { createReplayCommand } from "./commands/replay.ts";
 import { createRunCommand } from "./commands/run.ts";
@@ -81,6 +82,7 @@ const COMMANDS = [
 	"inspect",
 	"clean",
 	"doctor",
+	"orchestrator",
 	"coordinator",
 	"supervisor",
 	"hooks",
@@ -235,6 +237,7 @@ program.hook("postAction", () => {
 // Migrated commands — use addCommand() with createXCommand() factories
 program.addCommand(createAgentsCommand());
 program.addCommand(createDoctorCommand());
+program.addCommand(createOrchestratorCommand());
 program.addCommand(createCoordinatorCommand());
 program.addCommand(createSupervisorCommand());
 program.addCommand(createHooksCommand());

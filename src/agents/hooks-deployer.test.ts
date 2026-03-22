@@ -2555,7 +2555,15 @@ describe("deployHooks tracker close guard integration", () => {
 	});
 
 	test("deployHooks includes tracker close guard in PreToolUse for all capabilities", async () => {
-		const capabilities = ["builder", "scout", "reviewer", "lead", "merger", "coordinator"];
+		const capabilities = [
+			"builder",
+			"scout",
+			"reviewer",
+			"lead",
+			"merger",
+			"orchestrator",
+			"coordinator",
+		];
 
 		for (const cap of capabilities) {
 			const wt = join(tempDir, `${cap}-tc-wt`);

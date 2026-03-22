@@ -223,7 +223,7 @@ export function createAgentsCommand(): Command {
 		.description("Find active agents by capability")
 		.option(
 			"--capability <type>",
-			"Filter by capability (builder, scout, reviewer, lead, merger, coordinator, supervisor)",
+			"Filter by capability (builder, scout, reviewer, lead, merger, orchestrator, coordinator, supervisor)",
 		)
 		.option("--all", "Include completed and zombie agents (default: active only)")
 		.option("--json", "Output as JSON")

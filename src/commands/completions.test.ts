@@ -2,7 +2,7 @@
  * Tests for shell completion generation.
  */
 
-import { describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 import {
 	COMMANDS,
 	completionsCommand,
@@ -11,9 +11,13 @@ import {
 	generateZsh,
 } from "./completions.ts";
 
+afterEach(() => {
+	process.exitCode = undefined;
+});
+
 describe("COMMANDS array", () => {
-	it("should have exactly 33 commands", () => {
-		expect(COMMANDS).toHaveLength(33);
+	it("should have exactly 34 commands", () => {
+		expect(COMMANDS).toHaveLength(34);
 	});
 
 	it("should include all expected command names", () => {
@@ -37,6 +41,7 @@ describe("COMMANDS array", () => {
 		expect(names).toContain("costs");
 		expect(names).toContain("metrics");
 		expect(names).toContain("spec");
+		expect(names).toContain("orchestrator");
 		expect(names).toContain("coordinator");
 		expect(names).toContain("supervisor");
 		expect(names).toContain("hooks");
@@ -62,7 +67,7 @@ describe("generateBash", () => {
 		expect(script).toContain("_init_completion");
 	});
 
-	it("should include all 33 command names", () => {
+	it("should include all 34 command names", () => {
 		const script = generateBash();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);
@@ -96,7 +101,7 @@ describe("generateZsh", () => {
 		expect(script).toContain("_arguments");
 	});
 
-	it("should include all 33 command names", () => {
+	it("should include all 34 command names", () => {
 		const script = generateZsh();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);
@@ -126,7 +131,7 @@ describe("generateFish", () => {
 		expect(script).toContain("__fish_use_subcommand");
 	});
 
-	it("should include all 33 command names", () => {
+	it("should include all 34 command names", () => {
 		const script = generateFish();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);
@@ -147,6 +152,13 @@ describe("generateFish", () => {
 		expect(script).toContain("result");
 		expect(script).toContain("error");
 		expect(script).toContain("worker_done");
+	});
+
+	it("should include orchestrator command with start/stop/status subcommands", () => {
+		const orchestrator = COMMANDS.find((c) => c.name === "orchestrator");
+		expect(orchestrator).toBeDefined();
+		const subcommands = orchestrator?.subcommands?.map((s) => s.name);
+		expect(subcommands).toEqual(["start", "stop", "status"]);
 	});
 });
 

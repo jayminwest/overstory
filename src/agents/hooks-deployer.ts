@@ -20,6 +20,7 @@ const NON_IMPLEMENTATION_CAPABILITIES = new Set([
 	"scout",
 	"reviewer",
 	"lead",
+	"orchestrator",
 	"coordinator",
 	"supervisor",
 	"monitor",
@@ -29,7 +30,7 @@ const NON_IMPLEMENTATION_CAPABILITIES = new Set([
  * Capabilities that coordinate work and need git add/commit for syncing
  * tasks, mulch, and other metadata — but must NOT git push.
  */
-const COORDINATION_CAPABILITIES = new Set(["coordinator", "supervisor", "monitor"]);
+const COORDINATION_CAPABILITIES = new Set(["coordinator", "orchestrator", "supervisor", "monitor"]);
 
 /**
  * Additional safe Bash prefixes for coordination capabilities.

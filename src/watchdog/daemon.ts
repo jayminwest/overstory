@@ -46,7 +46,7 @@ const MAX_ESCALATION_LEVEL = 3;
  * Persistent agent capabilities that are excluded from run-level completion checks.
  * These agents are long-running and should not count toward "all workers done".
  */
-const PERSISTENT_CAPABILITIES = new Set(["coordinator", "monitor"]);
+const PERSISTENT_CAPABILITIES = new Set(["coordinator", "orchestrator", "monitor"]);
 
 /**
  * Module-level registry of active event tailers for headless agents.

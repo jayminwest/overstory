@@ -83,13 +83,13 @@ function updateLastActivity(projectRoot: string, agentName: string): void {
  * The Stop hook fires every turn for these agents (not just at session end),
  * so they must NOT auto-transition to 'completed' on session-end events.
  */
-const PERSISTENT_CAPABILITIES = new Set(["coordinator", "monitor"]);
+const PERSISTENT_CAPABILITIES = new Set(["coordinator", "orchestrator", "monitor"]);
 
 /**
  * Transition agent state to 'completed' in the SessionStore.
  * Called when session-end event fires.
  *
- * Skips the transition for persistent agent types (coordinator, monitor)
+ * Skips the transition for persistent agent types (coordinator, orchestrator, monitor)
  * whose Stop hook fires every turn, not just at true session end.
  *
  * Non-fatal: silently ignores errors to avoid breaking hook execution.
@@ -101,15 +101,19 @@ function transitionToCompleted(projectRoot: string, agentName: string): void {
 		try {
 			const session = store.getByName(agentName);
 			if (session && PERSISTENT_CAPABILITIES.has(session.capability)) {
-				// Check if coordinator self-exited by verifying the run is already completed.
+				// Check if a persistent top-level agent self-exited by verifying the run
+				// is already completed.
 				// If `ov run complete` was called before session-end, the run status is 'completed'
-				// and we should transition the coordinator session to completed too.
-				if (session.capability === "coordinator" && session.runId) {
+				// and we should transition the persistent session to completed too.
+				if (
+					(session.capability === "coordinator" || session.capability === "orchestrator") &&
+					session.runId
+				) {
 					const runStore = createRunStore(join(overstoryDir, "sessions.db"));
 					try {
 						const run = runStore.getRun(session.runId);
 						if (run && run.status === "completed") {
-							// Self-exit: coordinator called ov run complete before session ended
+							// Self-exit: the persistent agent called ov run complete before session ended
 							store.updateState(agentName, "completed");
 							store.updateLastActivity(agentName);
 							return;

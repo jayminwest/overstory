@@ -29,6 +29,11 @@ import {
 	createCoordinatorCommand,
 	resolveAttach,
 } from "./coordinator.ts";
+import {
+	buildOrchestratorBeacon,
+	createOrchestratorCommand,
+	orchestratorCommand,
+} from "./orchestrator.ts";
 
 // --- Fake Tmux ---
 
@@ -272,14 +277,26 @@ beforeEach(async () => {
 				canSpawn: true,
 				constraints: [],
 			},
+			orchestrator: {
+				file: "orchestrator.md",
+				model: "opus",
+				tools: ["Read", "Bash"],
+				capabilities: ["orchestrate", "coordinate"],
+				canSpawn: true,
+				constraints: [],
+			},
 		},
-		capabilityIndex: { coordinate: ["coordinator"] },
+		capabilityIndex: {
+			coordinate: ["coordinator", "orchestrator"],
+			orchestrate: ["orchestrator"],
+		},
 	};
 	await Bun.write(
 		join(overstoryDir, "agent-manifest.json"),
 		`${JSON.stringify(manifest, null, "\t")}\n`,
 	);
 	await Bun.write(join(agentDefsDir, "coordinator.md"), "# Coordinator\n");
+	await Bun.write(join(agentDefsDir, "orchestrator.md"), "# Orchestrator\n");
 
 	// Override cwd so coordinator commands find our temp project
 	process.chdir(tempDir);
@@ -1270,6 +1287,60 @@ describe("buildCoordinatorBeacon", () => {
 		// Should have exactly 4 " — " separators (5 parts)
 		const dashes = beacon.split(" — ");
 		expect(dashes).toHaveLength(5);
+	});
+});
+
+describe("orchestratorCommand", () => {
+	test("help shows orchestrator command name", async () => {
+		const output = await captureStdout(() => orchestratorCommand(["--help"]));
+		expect(output).toContain("orchestrator");
+	});
+
+	test("start creates orchestrator session with orchestrator capability", async () => {
+		const { deps, calls } = makeDeps({ "overstory-test-project-orchestrator": true });
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			const output = await captureStdout(() =>
+				orchestratorCommand(["start", "--no-attach", "--json"], deps),
+			);
+			const parsed = JSON.parse(output) as Record<string, unknown>;
+
+			expect(parsed.agentName).toBe("orchestrator");
+			expect(parsed.capability).toBe("orchestrator");
+			expect(parsed.tmuxSession).toBe("overstory-test-project-orchestrator");
+			expect(calls.createSession[0]?.name).toBe("overstory-test-project-orchestrator");
+			expect(calls.createSession[0]?.command).toContain("orchestrator.md");
+
+			const session = loadSessionsFromDb().find((entry) => entry.agentName === "orchestrator");
+			expect(session?.capability).toBe("orchestrator");
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+	});
+
+	test("command registration includes orchestrator start/stop/status", () => {
+		const cmd = createOrchestratorCommand({});
+		const subcommandNames = cmd.commands.map((c) => c.name());
+		expect(subcommandNames).toContain("start");
+		expect(subcommandNames).toContain("stop");
+		expect(subcommandNames).toContain("status");
+		expect(subcommandNames).not.toContain("check-complete");
+	});
+});
+
+describe("buildOrchestratorBeacon", () => {
+	test("includes orchestrator identity in header", () => {
+		const beacon = buildOrchestratorBeacon();
+		expect(beacon).toContain("[OVERSTORY] orchestrator (orchestrator)");
+	});
+
+	test("includes ecosystem startup instructions", () => {
+		const beacon = buildOrchestratorBeacon("sd");
+		expect(beacon).toContain("ov mail check --agent orchestrator");
+		expect(beacon).toContain("sd ready");
+		expect(beacon).toContain("inspect ecosystem status");
 	});
 });
 

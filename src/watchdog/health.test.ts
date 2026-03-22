@@ -196,7 +196,7 @@ describe("evaluateHealth", () => {
 		expect(check.action).toBe("escalate");
 	});
 
-	// --- Persistent capabilities (coordinator, monitor) ---
+	// --- Persistent capabilities (coordinator, orchestrator, monitor) ---
 
 	test("persistent capability: coordinator with stale activity → still working, no escalation", () => {
 		const staleActivity = new Date(Date.now() - 60_000).toISOString();
@@ -228,6 +228,20 @@ describe("evaluateHealth", () => {
 		const staleActivity = new Date(Date.now() - 60_000).toISOString();
 		const session = makeSession({
 			capability: "monitor",
+			state: "working",
+			lastActivity: staleActivity,
+		});
+		const check = evaluateHealth(session, true, THRESHOLDS);
+
+		expect(check.state).toBe("working");
+		expect(check.action).toBe("none");
+	});
+
+	test("persistent capability: orchestrator with stale activity → still working", () => {
+		const staleActivity = new Date(Date.now() - 60_000).toISOString();
+		const session = makeSession({
+			agentName: "orchestrator",
+			capability: "orchestrator",
 			state: "working",
 			lastActivity: staleActivity,
 		});

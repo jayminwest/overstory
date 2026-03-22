@@ -396,6 +396,14 @@ export function buildAgentManifest(): AgentManifest {
 			canSpawn: true,
 			constraints: ["read-only", "no-worktree"],
 		},
+		orchestrator: {
+			file: "orchestrator.md",
+			model: "opus",
+			tools: ["Read", "Glob", "Grep", "Bash"],
+			capabilities: ["orchestrate", "coordinate", "dispatch", "escalate"],
+			canSpawn: true,
+			constraints: ["read-only", "no-worktree"],
+		},
 		monitor: {
 			file: "monitor.md",
 			model: "sonnet",
