@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { AgentManifest } from "../types.ts";
 import type { DoctorCheck, DoctorCheckFn } from "./types.ts";
 
-const VALID_MODELS = new Set(["sonnet", "opus", "haiku"]);
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_-]+$/;
 
 /**
@@ -64,8 +63,8 @@ async function loadAndValidateManifest(
 				errors.push(`Agent "${name}": "file" must be a non-empty string`);
 			}
 
-			if (typeof agentDef.model !== "string" || !VALID_MODELS.has(agentDef.model)) {
-				errors.push(`Agent "${name}": "model" must be one of: sonnet, opus, haiku`);
+			if (typeof agentDef.model !== "string" || agentDef.model.length === 0) {
+				errors.push(`Agent "${name}": "model" must be a non-empty string`);
 			}
 
 			if (!Array.isArray(agentDef.tools)) {
@@ -313,12 +312,6 @@ export const checkAgents: DoctorCheckFn = async (_config, overstoryDir): Promise
 
 			identityFileCount++;
 
-			// Check if agent still exists in manifest
-			if (!manifest.agents[agentName]) {
-				staleIdentities.push(agentName);
-				continue;
-			}
-
 			// Parse and validate identity
 			try {
 				const content = await Bun.file(identityPath).text();
@@ -344,6 +337,13 @@ export const checkAgents: DoctorCheckFn = async (_config, overstoryDir): Promise
 
 				if (typeof identity.sessionsCompleted !== "number" || identity.sessionsCompleted < 0) {
 					identityErrors.push(`${agentName}: "sessionsCompleted" must be a non-negative integer`);
+				}
+
+				// Identity directories are keyed by runtime agent names (for example
+				// lead-foo-1234), not by manifest role names. Validate the recorded
+				// role/capability against the manifest instead of the directory name.
+				if (identity.capability && !manifest.agents[identity.capability]) {
+					staleIdentities.push(`${agentName} (capability: ${identity.capability})`);
 				}
 
 				// Validate name is valid identifier
@@ -384,7 +384,7 @@ export const checkAgents: DoctorCheckFn = async (_config, overstoryDir): Promise
 				category: "agents",
 				status: "warn",
 				message: `Found ${staleIdentities.length} stale identity file(s)`,
-				details: staleIdentities.map((name) => `${name} (agent no longer in manifest)`),
+				details: staleIdentities.map((name) => `${name} (role not present in manifest)`),
 				fixable: true,
 			});
 		}

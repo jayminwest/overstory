@@ -89,6 +89,10 @@ export async function checkConsistency(
 		return checks;
 	}
 
+	// Completed/zombie sessions are retained for history and metrics. Their tmux
+	// sessions, PIDs, and worktrees may legitimately be gone.
+	const liveSessions = storeSessions.filter((s) => s.state !== "completed" && s.state !== "zombie");
+
 	// Now perform cross-validation checks
 
 	// 4. Check for orphaned worktrees (worktree exists but no SessionStore entry)
@@ -155,7 +159,7 @@ export async function checkConsistency(
 	}
 
 	// 6. Check for dead processes in SessionStore
-	const deadSessions = storeSessions.filter((s) => s.pid !== null && !isProcessAliveFn(s.pid));
+	const deadSessions = liveSessions.filter((s) => s.pid !== null && !isProcessAliveFn(s.pid));
 
 	if (deadSessions.length > 0) {
 		checks.push({
@@ -177,7 +181,7 @@ export async function checkConsistency(
 
 	// 7. Check for SessionStore entries with missing worktrees
 	const existingWorktreePaths = new Set(worktrees.map((wt) => wt.path));
-	const missingWorktrees = storeSessions.filter((s) => {
+	const missingWorktrees = liveSessions.filter((s) => {
 		// Try to normalize the SessionStore path for comparison
 		try {
 			const normalizedPath = realpathSync(s.worktreePath);
@@ -208,7 +212,7 @@ export async function checkConsistency(
 
 	// 8. Check for SessionStore entries with missing tmux sessions
 	const existingTmuxNames = new Set(tmuxSessions.map((s) => s.name));
-	const missingTmux = storeSessions.filter((s) => !existingTmuxNames.has(s.tmuxSession));
+	const missingTmux = liveSessions.filter((s) => !existingTmuxNames.has(s.tmuxSession));
 
 	if (missingTmux.length > 0) {
 		checks.push({
