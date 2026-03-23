@@ -16,8 +16,8 @@ afterEach(() => {
 });
 
 describe("COMMANDS array", () => {
-	it("should have exactly 34 commands", () => {
-		expect(COMMANDS).toHaveLength(34);
+	it("should have exactly 35 commands", () => {
+		expect(COMMANDS).toHaveLength(35);
 	});
 
 	it("should include all expected command names", () => {
@@ -68,7 +68,7 @@ describe("generateBash", () => {
 		expect(script).toContain("_init_completion");
 	});
 
-	it("should include all 34 command names", () => {
+	it("should include all 35 command names", () => {
 		const script = generateBash();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);
@@ -102,7 +102,7 @@ describe("generateZsh", () => {
 		expect(script).toContain("_arguments");
 	});
 
-	it("should include all 34 command names", () => {
+	it("should include all 35 command names", () => {
 		const script = generateZsh();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);
@@ -132,7 +132,7 @@ describe("generateFish", () => {
 		expect(script).toContain("__fish_use_subcommand");
 	});
 
-	it("should include all 34 command names", () => {
+	it("should include all 35 command names", () => {
 		const script = generateFish();
 		for (const cmd of COMMANDS) {
 			expect(script).toContain(cmd.name);

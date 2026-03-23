@@ -30,6 +30,7 @@ const AGENT_DEF_FILES = [
 	"monitor.md",
 	"orchestrator.md",
 	"ov-co-creation.md",
+	"ov-delivery.md",
 	"reviewer.md",
 	"scout.md",
 ];
