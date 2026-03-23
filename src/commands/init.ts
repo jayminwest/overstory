@@ -772,7 +772,12 @@ export async function initCommand(opts: InitOptions): Promise<void> {
 	// 2. Detect project info
 	const projectName = opts.name ?? (await detectProjectName(projectRoot));
 	const canonicalBranch = await detectCanonicalBranch(projectRoot);
-	const defaultRuntime = await detectDefaultRuntime(spawner);
+	let defaultRuntime = "claude";
+	try {
+		defaultRuntime = await detectDefaultRuntime(spawner);
+	} catch {
+		// Non-fatal: fall back to claude if runtime detection fails
+	}
 
 	process.stdout.write(`Initializing overstory for "${projectName}"...\n\n`);
 
