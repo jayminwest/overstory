@@ -137,6 +137,25 @@ describe("writeSpec", () => {
 		const content = await Bun.file(specPath).text();
 		expect(content).toBe("version 2\n");
 	});
+
+	test("writes OpenSpec task artifacts for co-creation workflow", async () => {
+		const specPath = await writeSpec(tempDir, "task-open", "# OpenSpec body", "scout-1", {
+			workflow: "co-creation",
+		});
+
+		expect(specPath).toBe(join(tempDir, "openspec", "changes", "task-open", "tasks.md"));
+		const content = await Bun.file(specPath).text();
+		expect(content).toContain("<!-- written-by: scout-1 -->");
+		expect(content).toContain("# OpenSpec body");
+	});
+
+	test("can force openspec output without workflow alias", async () => {
+		const specPath = await writeSpec(tempDir, "task-force", "# Forced", undefined, {
+			openspec: true,
+		});
+
+		expect(specPath).toBe(join(tempDir, "openspec", "changes", "task-force", "tasks.md"));
+	});
 });
 
 // === specWriteCommand (CLI integration) ===
@@ -175,5 +194,32 @@ describe("specWriteCommand (integration)", () => {
 		const content = await Bun.file(specPath).text();
 		expect(content).not.toContain("written-by");
 		expect(content).toBe("# No Agent\n");
+	});
+
+	test("uses workflow alias to select openspec output path", async () => {
+		await specWriteCommand("task-cc", { body: "# Co-create", workflow: "co-creation" });
+
+		const specPath = join(tempDir, "openspec", "changes", "task-cc", "tasks.md");
+		const content = await Bun.file(specPath).text();
+		expect(content).toBe("# Co-create\n");
+	});
+
+	test("uses OVERSTORY_PROFILE env to default co-creation specs into openspec", async () => {
+		const previous = process.env.OVERSTORY_PROFILE;
+		process.env.OVERSTORY_PROFILE = "ov-co-creation";
+
+		try {
+			await specWriteCommand("task-env", { body: "# Env profile" });
+		} finally {
+			if (previous === undefined) {
+				delete process.env.OVERSTORY_PROFILE;
+			} else {
+				process.env.OVERSTORY_PROFILE = previous;
+			}
+		}
+
+		const specPath = join(tempDir, "openspec", "changes", "task-env", "tasks.md");
+		const content = await Bun.file(specPath).text();
+		expect(content).toBe("# Env profile\n");
 	});
 });

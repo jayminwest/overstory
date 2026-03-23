@@ -29,6 +29,7 @@ import { createRunStore, createSessionStore } from "../sessions/store.ts";
 import { resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession } from "../types.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
+import { resolveProfileName } from "../workflow.ts";
 import type { SessionState } from "../worktree/tmux.ts";
 import {
 	capturePaneContent,
@@ -319,6 +320,7 @@ export interface CoordinatorSessionOptions {
 	watchdog: boolean;
 	monitor: boolean;
 	profile?: string;
+	workflow?: string;
 	/** Override coordinator name (default: "coordinator"). */
 	coordinatorName?: string;
 	/** Generic persistent agent name override. Preferred over coordinatorName for new callers. */
@@ -358,6 +360,7 @@ export async function startCoordinatorSession(
 		watchdog: watchdogFlag,
 		monitor: monitorFlag,
 		profile: profileFlag,
+		workflow: workflowFlag,
 		coordinatorName: coordinatorNameOpt,
 		agentName: agentNameOpt,
 		capability: capabilityOpt,
@@ -371,6 +374,7 @@ export async function startCoordinatorSession(
 	const agentDefFile = agentDefFileOpt ?? COORDINATOR_SPEC.agentDefFile;
 	const displayName = displayNameOpt ?? COORDINATOR_SPEC.displayName;
 	const beaconBuilder = beaconBuilderOpt ?? buildCoordinatorBeacon;
+	const effectiveProfile = resolveProfileName(profileFlag ?? workflowFlag);
 
 	if (isRunningAsRoot()) {
 		throw new AgentError(
@@ -483,13 +487,13 @@ export async function startCoordinatorSession(
 			env: {
 				...runtime.buildEnv(resolvedModel),
 				OVERSTORY_AGENT_NAME: coordinatorName,
-				...(profileFlag ? { OVERSTORY_PROFILE: profileFlag } : {}),
+				...(effectiveProfile ? { OVERSTORY_PROFILE: effectiveProfile } : {}),
 			},
 		});
 		const pid = await tmux.createSession(tmuxSession, projectRoot, spawnCmd, {
 			...runtime.buildEnv(resolvedModel),
 			OVERSTORY_AGENT_NAME: coordinatorName,
-			...(profileFlag ? { OVERSTORY_PROFILE: profileFlag } : {}),
+			...(effectiveProfile ? { OVERSTORY_PROFILE: effectiveProfile } : {}),
 		});
 
 		// Create a run for this coordinator session BEFORE recording the session,
@@ -642,7 +646,14 @@ export async function startCoordinatorSession(
 
 async function startPersistentAgent(
 	spec: PersistentAgentSpec,
-	opts: { json: boolean; attach: boolean; watchdog: boolean; monitor: boolean; profile?: string },
+	opts: {
+		json: boolean;
+		attach: boolean;
+		watchdog: boolean;
+		monitor: boolean;
+		profile?: string;
+		workflow?: string;
+	},
 	deps: CoordinatorDeps = {},
 ): Promise<void> {
 	await startCoordinatorSession(
@@ -656,6 +667,20 @@ async function startPersistentAgent(
 		},
 		deps,
 	);
+}
+
+export async function startCoordinator(
+	opts: {
+		json: boolean;
+		attach: boolean;
+		watchdog: boolean;
+		monitor: boolean;
+		profile?: string;
+		workflow?: string;
+	},
+	deps: CoordinatorDeps = {},
+): Promise<void> {
+	await startPersistentAgent(COORDINATOR_SPEC, opts, deps);
 }
 
 function isActivePersistentAgentSession(
@@ -1360,6 +1385,7 @@ export function createPersistentAgentCommand(
 		.option("--watchdog", `Auto-start watchdog daemon with ${spec.commandName}`)
 		.option("--monitor", `Auto-start Tier 2 monitor agent with ${spec.commandName}`)
 		.option("--profile <name>", "Canopy profile to apply to spawned agents")
+		.option("--workflow <name>", "Workflow profile alias: delivery or co-creation")
 		.option("--json", "Output as JSON")
 		.action(
 			async (opts: {
@@ -1368,6 +1394,7 @@ export function createPersistentAgentCommand(
 				monitor?: boolean;
 				json?: boolean;
 				profile?: string;
+				workflow?: string;
 			}) => {
 				// opts.attach = true if --attach, false if --no-attach, undefined if neither
 				const shouldAttach = opts.attach !== undefined ? opts.attach : !!process.stdout.isTTY;
@@ -1379,6 +1406,7 @@ export function createPersistentAgentCommand(
 						watchdog: opts.watchdog ?? false,
 						monitor: opts.monitor ?? false,
 						profile: opts.profile,
+						workflow: opts.workflow,
 					},
 					deps,
 				);

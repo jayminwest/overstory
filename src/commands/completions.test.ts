@@ -43,6 +43,7 @@ describe("COMMANDS array", () => {
 		expect(names).toContain("spec");
 		expect(names).toContain("orchestrator");
 		expect(names).toContain("coordinator");
+		expect(names).toContain("workflow");
 		expect(names).toContain("supervisor");
 		expect(names).toContain("hooks");
 		expect(names).toContain("monitor");
