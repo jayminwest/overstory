@@ -180,7 +180,7 @@ async function startSupervisor(opts: {
 		}
 		const sessionEnv = buildOverstorySessionEnv({
 			baseEnv: runtime.buildEnv(resolvedModel),
-			sessionKind: "coordinator",
+			sessionKind: "supervisor",
 			agentName: opts.name,
 			capability: "supervisor",
 			worktreePath: projectRoot,

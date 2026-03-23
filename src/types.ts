@@ -32,6 +32,27 @@ export interface PiRuntimeConfig {
 	modelMap: Record<string, string>;
 }
 
+/** Session-kind contract exported to managed runtimes/extensions. */
+export type OverstorySessionKind =
+	| "standalone"
+	| "orchestrator"
+	| "coordinator"
+	| "supervisor"
+	| "monitor"
+	| "worker";
+
+/** Options for building the exported Overstory session environment. */
+export interface OverstorySessionEnvOpts {
+	baseEnv?: Record<string, string>;
+	sessionKind: OverstorySessionKind;
+	agentName: string;
+	capability: string;
+	worktreePath: string;
+	projectRoot: string;
+	taskId?: string;
+	profile?: string;
+}
+
 // === Task Tracker ===
 
 /** Backend for the task tracker. Defined here for use in OverstoryConfig. */

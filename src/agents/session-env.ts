@@ -1,20 +1,4 @@
-export type OverstorySessionKind =
-	| "standalone"
-	| "orchestrator"
-	| "coordinator"
-	| "monitor"
-	| "worker";
-
-export interface OverstorySessionEnvOpts {
-	baseEnv?: Record<string, string>;
-	sessionKind: OverstorySessionKind;
-	agentName: string;
-	capability: string;
-	worktreePath: string;
-	projectRoot: string;
-	taskId?: string;
-	profile?: string;
-}
+import type { OverstorySessionEnvOpts } from "../types.ts";
 
 export function buildOverstorySessionEnv(opts: OverstorySessionEnvOpts): Record<string, string> {
 	return {
