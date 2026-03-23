@@ -399,11 +399,11 @@ describe("PiRuntime", () => {
 				`${JSON.stringify({ packages: [extensionSource] }, null, "\t")}\n`,
 			);
 
-			await runtimeWithExtensionSync.deployConfig(
+			await runtimeWithExtensionSync.deployConfig(worktreePath, undefined, {
+				agentName: "test-builder",
+				capability: "builder",
 				worktreePath,
-				undefined,
-				{ agentName: "test-builder", capability: "builder", worktreePath },
-			);
+			});
 
 			expect(piCalls).toEqual([{ args: ["update", extensionSource], cwd: projectRoot }]);
 		});

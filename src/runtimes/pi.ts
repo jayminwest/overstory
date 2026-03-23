@@ -65,11 +65,7 @@ function inferProjectRoot(worktreePath: string): string {
 }
 
 function isPathLikePiSource(source: string): boolean {
-	return (
-		source.startsWith(".") ||
-		source.startsWith("/") ||
-		/^[A-Za-z]:[\\/]/.test(source)
-	);
+	return source.startsWith(".") || source.startsWith("/") || /^[A-Za-z]:[\\/]/.test(source);
 }
 
 function normalizePiSource(source: string, projectRoot: string): string {
