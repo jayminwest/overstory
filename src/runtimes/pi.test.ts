@@ -347,7 +347,7 @@ describe("PiRuntime", () => {
 
 		beforeEach(async () => {
 			tempDir = await mkdtemp(join(tmpdir(), "overstory-pi-test-"));
-			extensionSource = "https://github.com/RogerNavelsaker/os-eco-pi-extension";
+			extensionSource = "https://github.com/RogerNavelsaker/pi-os-eco";
 			piCalls = [];
 			runtimeWithExtensionSync = new PiRuntime(undefined, {
 				runPiCommand: async (args, cwd) => {

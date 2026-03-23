@@ -24,7 +24,7 @@ const DEFAULT_PI_CONFIG: PiRuntimeConfig = {
 };
 
 const PI_READY_MARKER_PREFIX = "\u2713 os-eco";
-const PI_EXTENSION_SOURCE = "https://github.com/RogerNavelsaker/os-eco-pi-extension";
+const PI_EXTENSION_SOURCE = "https://github.com/RogerNavelsaker/pi-os-eco";
 const OVERSTORY_WORKTREE_RE = /^(.*?)(?:[\\/]\.overstory[\\/]worktrees[\\/].*)$/;
 
 interface PiCommandResult {

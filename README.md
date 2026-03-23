@@ -183,7 +183,7 @@ Overstory is runtime-agnostic. The `AgentRuntime` interface (`src/runtimes/types
 |---------|-----|-----------------|-----------|
 | Claude Code | `claude` | `settings.local.json` hooks | Stable |
 | Sapling | `sp` | `.sapling/guards.json` | Stable |
-| Pi | `pi` | Project-root `.pi/settings.json` package via `pi install -l https://github.com/RogerNavelsaker/os-eco-pi-extension` | Experimental |
+| Pi | `pi` | Project-root `.pi/settings.json` package via `pi install -l https://github.com/RogerNavelsaker/pi-os-eco` | Experimental |
 | Copilot | `copilot` | (none — `--allow-all-tools`) | Experimental |
 | Cursor | `agent` | (none — `--yolo`) | Experimental |
 | Codex | `codex` | OS-level sandbox (Seatbelt/Landlock) | Experimental |
