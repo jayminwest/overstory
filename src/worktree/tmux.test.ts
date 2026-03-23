@@ -9,6 +9,7 @@ import {
 	checkSessionState,
 	createSession,
 	ensureTmuxAvailable,
+	getCurrentSessionName,
 	getDescendantPids,
 	getPanePid,
 	isProcessAlive,
@@ -928,6 +929,21 @@ describe("killSession", () => {
 		await expect(killSession("broken-session")).rejects.toThrow(AgentError);
 	});
 
+	test("does not swallow unrelated errors that mention session text", async () => {
+		spawnSpy.mockImplementation((...args: unknown[]) => {
+			const cmd = args[0] as string[];
+			if (cmd[0] === "tmux" && cmd[1] === "display-message") {
+				return mockSpawnResult("", "can't find session", 1);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "kill-session") {
+				return mockSpawnResult("", "failed to find session lockfile", 1);
+			}
+			return mockSpawnResult("", "", 0);
+		});
+
+		await expect(killSession("broken-session")).rejects.toThrow(AgentError);
+	});
+
 	test("AgentError contains session name on failure", async () => {
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
@@ -949,6 +965,47 @@ describe("killSession", () => {
 			expect(agentErr.message).toContain("ghost-agent");
 			expect(agentErr.agentName).toBe("ghost-agent");
 		}
+	});
+});
+
+describe("getCurrentSessionName", () => {
+	let spawnSpy: ReturnType<typeof spyOn>;
+	let originalTmux: string | undefined;
+
+	beforeEach(() => {
+		spawnSpy = spyOn(Bun, "spawn");
+		originalTmux = process.env.TMUX;
+	});
+
+	afterEach(() => {
+		spawnSpy.mockRestore();
+		if (originalTmux === undefined) {
+			delete process.env.TMUX;
+		} else {
+			process.env.TMUX = originalTmux;
+		}
+	});
+
+	test("returns null when not running inside tmux", async () => {
+		delete process.env.TMUX;
+
+		const sessionName = await getCurrentSessionName();
+
+		expect(sessionName).toBeNull();
+		expect(spawnSpy).not.toHaveBeenCalled();
+	});
+
+	test("queries the current tmux server without the project socket override", async () => {
+		process.env.TMUX = "/tmp/tmux-1000/default,123,0";
+		spawnSpy.mockImplementation(() => mockSpawnResult("personal-session\n", "", 0));
+
+		const sessionName = await getCurrentSessionName();
+
+		expect(sessionName).toBe("personal-session");
+		expect(spawnSpy).toHaveBeenCalledTimes(1);
+		const callArgs = spawnSpy.mock.calls[0] as unknown[];
+		const cmd = callArgs[0] as string[];
+		expect(cmd).toEqual(["tmux", "display-message", "-p", "#{session_name}"]);
 	});
 });
 

@@ -79,9 +79,18 @@ describe("E2E: init→sling lifecycle on external project", () => {
 		const hooksFile = Bun.file(join(overstoryDir, "hooks.json"));
 		expect(await hooksFile.exists()).toBe(true);
 
+		// tmux.conf exists with project-local agent defaults
+		const tmuxConfigFile = Bun.file(join(overstoryDir, "tmux.conf"));
+		expect(await tmuxConfigFile.exists()).toBe(true);
+		const tmuxConfig = await tmuxConfigFile.text();
+		expect(tmuxConfig).toContain("set -g status off");
+		expect(tmuxConfig).toContain("set -g extended-keys on");
+		expect(tmuxConfig).toContain("set -g extended-keys-format csi-u");
+
 		// .gitignore exists
 		const gitignoreFile = Bun.file(join(overstoryDir, ".gitignore"));
 		expect(await gitignoreFile.exists()).toBe(true);
+		expect(await gitignoreFile.text()).toContain("!tmux.conf");
 
 		// agent-defs/ contains all 9 agent definition files (supervisor deprecated)
 		const agentDefsDir = join(overstoryDir, "agent-defs");
