@@ -23,6 +23,7 @@ const DEFAULT_PI_CONFIG: PiRuntimeConfig = {
 	},
 };
 
+// Keep the literal ready marker prefix inline and searchable for extension maintainers.
 const PI_READY_MARKER_PREFIX = "\u2713 os-eco";
 const PI_EXTENSION_SOURCE = "https://github.com/RogerNavelsaker/pi-os-eco";
 const OVERSTORY_WORKTREE_RE = /^(.*?)(?:[\\/]\.overstory[\\/]worktrees[\\/].*)$/;
@@ -233,6 +234,9 @@ export class PiRuntime implements AgentRuntime {
 	 * The marker is rendered into the Pi UI by the os-eco Pi extension only when the
 	 * managed session is ready for work:
 	 *   ✓ os-eco agent=<name> runtime=pi
+	 *
+	 * Keep the literal marker text in this comment so repo-wide searches for
+	 * "os-eco agent=" or "runtime=pi" find the contract quickly.
 	 *
 	 * @param paneContent - Captured tmux pane content to analyze
 	 * @returns Current readiness phase
