@@ -93,6 +93,7 @@ Every command supports `--json` where noted. Global flags: `-q`/`--quiet`, `--ti
 | `ov spec write <task-id>` | Write a task specification (`--body`) |
 | `ov discover` | Discover a brownfield codebase via coordinator-driven scout swarm (`--skip`, `--name`, `--attach`, `--watchdog`, `--json`) |
 | `ov update` | Refresh `.overstory/` managed files from installed package (`--agents`, `--manifest`, `--hooks`, `--dry-run`, `--json`) |
+| `ov sessions <subcommand>` | Manage project-local tmux sessions (`list`, `attach`, `kill`, `current`) |
 
 ### Coordination
 
@@ -183,6 +184,16 @@ Every command supports `--json` where noted. Global flags: `-q`/`--quiet`, `--ti
 ## Architecture
 
 Overstory uses instruction overlays and tool-call guards to turn agent sessions into orchestrated workers. Each agent runs in an isolated git worktree via tmux. Inter-agent messaging is handled by a custom SQLite mail system (WAL mode, ~1-5ms per query) with typed protocol messages and broadcast support. A FIFO merge queue with 4-tier conflict resolution merges agent branches back to canonical. A tiered watchdog system (Tier 0 mechanical daemon, Tier 1 AI-assisted triage, Tier 2 monitor agent) ensures fleet health. See [CLAUDE.md](CLAUDE.md) for full technical details.
+
+### Project-Local Tmux
+
+Overstory-managed agent sessions use a project-local tmux socket under `.overstory/tmux.sock` instead of the user's personal tmux server. `ov init` also writes `.overstory/tmux.conf` with agent-friendly defaults:
+
+- `set -g status off`
+- `set -g extended-keys on`
+- `set -g extended-keys-format csi-u`
+
+Use `ov sessions list`, `ov sessions attach [agent]`, `ov sessions kill <agent>`, and `ov sessions current` to inspect those sessions without manually calling `tmux -S .overstory/tmux.sock`.
 
 ### Runtime Adapters
 

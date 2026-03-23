@@ -39,7 +39,6 @@ import {
 	isSessionAlive,
 	killSession,
 	sendKeys,
-	TMUX_SOCKET,
 	waitForTuiReady,
 } from "../worktree/tmux.ts";
 import { nudgeAgent } from "./nudge.ts";
