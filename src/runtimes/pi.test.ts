@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ResolvedModel } from "../types.ts";
@@ -274,14 +274,19 @@ describe("PiRuntime", () => {
 			const pane = [
 				" pi v0.55.1",
 				" escape to interrupt",
-				"[OVERSTORY:READY] agent=builder-1 runtime=pi",
+				"\u2713 os-eco agent=builder-1 runtime=pi",
 			].join("\n");
 			const state = runtime.detectReady(pane);
 			expect(state).toEqual({ phase: "ready" });
 		});
 
 		test("returns loading for the marker prefix without the runtime token", () => {
-			const state = runtime.detectReady("[OVERSTORY:READY] agent=builder-1");
+			const state = runtime.detectReady("\u2713 os-eco agent=builder-1");
+			expect(state).toEqual({ phase: "loading" });
+		});
+
+		test("returns loading for the legacy unprefixed marker text", () => {
+			const state = runtime.detectReady("[OVERSTORY:READY] agent=builder-1 runtime=pi");
 			expect(state).toEqual({ phase: "loading" });
 		});
 
@@ -336,9 +341,20 @@ describe("PiRuntime", () => {
 
 	describe("deployConfig", () => {
 		let tempDir: string;
+		let extensionSource: string;
+		let piCalls: Array<{ args: string[]; cwd: string }>;
+		let runtimeWithExtensionSync: PiRuntime;
 
 		beforeEach(async () => {
 			tempDir = await mkdtemp(join(tmpdir(), "overstory-pi-test-"));
+			extensionSource = "https://github.com/RogerNavelsaker/os-eco-pi-extension";
+			piCalls = [];
+			runtimeWithExtensionSync = new PiRuntime(undefined, {
+				runPiCommand: async (args, cwd) => {
+					piCalls.push({ args, cwd });
+					return { exitCode: 0, stdout: "ok", stderr: "" };
+				},
+			});
 		});
 
 		afterEach(async () => {
@@ -348,7 +364,7 @@ describe("PiRuntime", () => {
 		test("writes overlay to .claude/CLAUDE.md when overlay is provided", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
-			await runtime.deployConfig(
+			await runtimeWithExtensionSync.deployConfig(
 				worktreePath,
 				{ content: "# Pi Agent Overlay\nThis is the overlay content." },
 				{ agentName: "test-builder", capability: "builder", worktreePath },
@@ -359,10 +375,43 @@ describe("PiRuntime", () => {
 			expect(content).toBe("# Pi Agent Overlay\nThis is the overlay content.");
 		});
 
-		test("does not deploy the legacy guard extension file", async () => {
-			const worktreePath = join(tempDir, "worktree");
+		test("installs the os-eco Pi extension into the project root when missing", async () => {
+			const projectRoot = join(tempDir, "project");
+			const worktreePath = join(projectRoot, ".overstory", "worktrees", "worker-1");
 
-			await runtime.deployConfig(
+			await runtimeWithExtensionSync.deployConfig(
+				worktreePath,
+				{ content: "# Overlay" },
+				{ agentName: "test-builder", capability: "builder", worktreePath },
+			);
+
+			expect(piCalls).toEqual([{ args: ["install", extensionSource, "-l"], cwd: projectRoot }]);
+		});
+
+		test("updates the configured os-eco Pi extension at the project root", async () => {
+			const projectRoot = join(tempDir, "project");
+			const settingsDir = join(projectRoot, ".pi");
+			const worktreePath = join(projectRoot, ".overstory", "worktrees", "worker-1");
+			await mkdir(settingsDir, { recursive: true });
+
+			await Bun.write(
+				join(settingsDir, "settings.json"),
+				`${JSON.stringify({ packages: [extensionSource] }, null, "\t")}\n`,
+			);
+
+			await runtimeWithExtensionSync.deployConfig(
+				worktreePath,
+				undefined,
+				{ agentName: "test-builder", capability: "builder", worktreePath },
+			);
+
+			expect(piCalls).toEqual([{ args: ["update", extensionSource], cwd: projectRoot }]);
+		});
+
+		test("does not deploy the legacy guard extension file into worktrees", async () => {
+			const worktreePath = join(tempDir, "project", ".overstory", "worktrees", "worker-1");
+
+			await runtimeWithExtensionSync.deployConfig(
 				worktreePath,
 				{ content: "# Overlay" },
 				{ agentName: "test-builder", capability: "builder", worktreePath },
@@ -373,10 +422,10 @@ describe("PiRuntime", () => {
 			expect(exists).toBe(false);
 		});
 
-		test("does not deploy Pi settings.json", async () => {
-			const worktreePath = join(tempDir, "my-worktree");
+		test("does not deploy per-worktree Pi settings.json", async () => {
+			const worktreePath = join(tempDir, "project", ".overstory", "worktrees", "worker-1");
 
-			await runtime.deployConfig(
+			await runtimeWithExtensionSync.deployConfig(
 				worktreePath,
 				{ content: "# Overlay" },
 				{ agentName: "my-pi-agent", capability: "builder", worktreePath },
@@ -390,7 +439,7 @@ describe("PiRuntime", () => {
 		test("skips CLAUDE.md when overlay is undefined", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
-			await runtime.deployConfig(worktreePath, undefined, {
+			await runtimeWithExtensionSync.deployConfig(worktreePath, undefined, {
 				agentName: "coordinator",
 				capability: "coordinator",
 				worktreePath,
@@ -404,7 +453,7 @@ describe("PiRuntime", () => {
 		test("does not deploy Pi-specific files when overlay is undefined", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
-			await runtime.deployConfig(worktreePath, undefined, {
+			await runtimeWithExtensionSync.deployConfig(worktreePath, undefined, {
 				agentName: "coordinator",
 				capability: "coordinator",
 				worktreePath,
@@ -420,7 +469,7 @@ describe("PiRuntime", () => {
 		test("only CLAUDE.md is present when overlay is provided", async () => {
 			const worktreePath = join(tempDir, "worktree");
 
-			await runtime.deployConfig(
+			await runtimeWithExtensionSync.deployConfig(
 				worktreePath,
 				{ content: "# Overlay" },
 				{ agentName: "test-builder", capability: "builder", worktreePath },

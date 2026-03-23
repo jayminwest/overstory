@@ -2,7 +2,7 @@
 // Implements the AgentRuntime contract for the `pi` CLI (Mario Zechner's Pi coding agent).
 
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { PiRuntimeConfig, ResolvedModel } from "../types.ts";
 import type {
 	AgentRuntime,
@@ -23,7 +23,73 @@ const DEFAULT_PI_CONFIG: PiRuntimeConfig = {
 	},
 };
 
-const PI_READY_MARKER_PREFIX = "[OVERSTORY:READY]";
+const PI_READY_MARKER_PREFIX = "\u2713 os-eco";
+const PI_EXTENSION_SOURCE = "https://github.com/RogerNavelsaker/os-eco-pi-extension";
+const OVERSTORY_WORKTREE_RE = /^(.*?)(?:[\\/]\.overstory[\\/]worktrees[\\/].*)$/;
+
+interface PiCommandResult {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+}
+
+type PiCommandRunner = (args: string[], cwd: string) => Promise<PiCommandResult>;
+
+interface PiRuntimeDeps {
+	runPiCommand?: PiCommandRunner;
+}
+
+const defaultRunPiCommand: PiCommandRunner = async (args, cwd) => {
+	try {
+		const proc = Bun.spawn(["pi", ...args], {
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const exitCode = await proc.exited;
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		return { exitCode, stdout, stderr };
+	} catch (error) {
+		return {
+			exitCode: 1,
+			stdout: "",
+			stderr: error instanceof Error ? error.message : String(error),
+		};
+	}
+};
+
+function inferProjectRoot(worktreePath: string): string {
+	return worktreePath.match(OVERSTORY_WORKTREE_RE)?.[1] ?? worktreePath;
+}
+
+function isPathLikePiSource(source: string): boolean {
+	return (
+		source.startsWith(".") ||
+		source.startsWith("/") ||
+		/^[A-Za-z]:[\\/]/.test(source)
+	);
+}
+
+function normalizePiSource(source: string, projectRoot: string): string {
+	return isPathLikePiSource(source) ? resolve(projectRoot, source) : source;
+}
+
+async function hasConfiguredPiExtension(projectRoot: string, source: string): Promise<boolean> {
+	const settingsFile = Bun.file(join(projectRoot, ".pi", "settings.json"));
+	if (!(await settingsFile.exists())) return false;
+
+	try {
+		const parsed = JSON.parse(await settingsFile.text()) as { packages?: unknown };
+		const packages = Array.isArray(parsed.packages)
+			? parsed.packages.filter((value): value is string => typeof value === "string")
+			: [];
+		const normalizedSource = normalizePiSource(source, projectRoot);
+		return packages.some((pkg) => normalizePiSource(pkg, projectRoot) === normalizedSource);
+	} catch {
+		return false;
+	}
+}
 
 /**
  * Pi runtime adapter.
@@ -43,9 +109,23 @@ export class PiRuntime implements AgentRuntime {
 	readonly instructionPath = ".claude/CLAUDE.md";
 
 	private readonly config: PiRuntimeConfig;
+	private readonly runPiCommand: PiCommandRunner;
 
-	constructor(config?: PiRuntimeConfig) {
+	constructor(config?: PiRuntimeConfig, deps?: PiRuntimeDeps) {
 		this.config = config ?? DEFAULT_PI_CONFIG;
+		this.runPiCommand = deps?.runPiCommand ?? defaultRunPiCommand;
+	}
+
+	private async syncProjectPiExtension(projectRoot: string): Promise<void> {
+		const commandArgs = (await hasConfiguredPiExtension(projectRoot, PI_EXTENSION_SOURCE))
+			? ["update", PI_EXTENSION_SOURCE]
+			: ["install", PI_EXTENSION_SOURCE, "-l"];
+		const result = await this.runPiCommand(commandArgs, projectRoot);
+		if (result.exitCode === 0) return;
+
+		const action = commandArgs[0] ?? "sync";
+		const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`;
+		throw new Error(`Pi extension ${action} failed: ${detail}`);
 	}
 
 	/**
@@ -127,6 +207,8 @@ export class PiRuntime implements AgentRuntime {
 		overlay: OverlayContent | undefined,
 		_hooks: HooksDef,
 	): Promise<void> {
+		await this.syncProjectPiExtension(inferProjectRoot(worktreePath));
+
 		if (overlay) {
 			const claudeDir = join(worktreePath, ".claude");
 			await mkdir(claudeDir, { recursive: true });
@@ -151,7 +233,7 @@ export class PiRuntime implements AgentRuntime {
 	 *
 	 * The marker is rendered into the Pi UI by the os-eco Pi extension only when the
 	 * managed session is ready for work:
-	 *   [OVERSTORY:READY] agent=<name> runtime=pi
+	 *   ✓ os-eco agent=<name> runtime=pi
 	 *
 	 * @param paneContent - Captured tmux pane content to analyze
 	 * @returns Current readiness phase
