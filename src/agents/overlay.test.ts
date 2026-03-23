@@ -523,6 +523,32 @@ describe("generateOverlay", () => {
 		expect(output).toContain("3");
 	});
 
+	test("dispatch overrides: maxAgentsOverride of 1 enables combined lead/worker guidance", async () => {
+		const config = makeConfig({
+			capability: "lead",
+			maxAgentsOverride: 1,
+			canSpawn: true,
+		});
+		const output = await generateOverlay(config);
+
+		expect(output).toContain("MAX AGENTS");
+		expect(output).toContain("combined **lead/worker**");
+		expect(output).toContain("only slot");
+	});
+
+	test("dispatch overrides: maxAgentsOverride of 2 enables compressed-mode guidance", async () => {
+		const config = makeConfig({
+			capability: "lead",
+			maxAgentsOverride: 2,
+			canSpawn: true,
+		});
+		const output = await generateOverlay(config);
+
+		expect(output).toContain("MAX AGENTS");
+		expect(output).toContain("compressed mode");
+		expect(output).toContain("self-verification");
+	});
+
 	test("dispatch overrides: both skipReview and maxAgentsOverride together", async () => {
 		const config = makeConfig({
 			capability: "lead",

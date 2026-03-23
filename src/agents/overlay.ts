@@ -102,10 +102,24 @@ function formatDispatchOverrides(config: OverlayConfig): string {
 	}
 
 	if (config.maxAgentsOverride !== undefined && config.maxAgentsOverride > 0) {
-		sections.push(
-			`- **MAX AGENTS**: Your per-lead agent ceiling has been set to **${config.maxAgentsOverride}**. ` +
-				"Do not spawn more than this many sub-workers.",
-		);
+		if (config.maxAgentsOverride === 1) {
+			sections.push(
+				"- **MAX AGENTS**: Your per-lead agent ceiling has been set to **1**. " +
+					"Operate as a combined **lead/worker**: implement the task yourself unless a single specialist is absolutely necessary. " +
+					"Do not spend your only slot on a scout or reviewer unless that specialist work is the real bottleneck.",
+			);
+		} else if (config.maxAgentsOverride === 2) {
+			sections.push(
+				"- **MAX AGENTS**: Your per-lead agent ceiling has been set to **2**. " +
+					"Operate in compressed mode: use at most one helper at a time when possible, then complete the remaining implementation and verification yourself. " +
+					"Prefer self-verification over spawning a separate reviewer.",
+			);
+		} else {
+			sections.push(
+				`- **MAX AGENTS**: Your per-lead agent ceiling has been set to **${config.maxAgentsOverride}**. ` +
+					"Do not spawn more than this many sub-workers.",
+			);
+		}
 	}
 
 	if (sections.length === 0) return "";

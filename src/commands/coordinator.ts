@@ -275,8 +275,8 @@ export function buildCoordinatorBeacon(cliName = "bd"): string {
 	const parts = [
 		`[OVERSTORY] ${COORDINATOR_NAME} (coordinator) ${timestamp}`,
 		"Depth: 0 | Parent: none | Role: persistent orchestrator",
-		"HIERARCHY: You ONLY spawn leads (ov sling --capability lead). Leads spawn scouts, builders, reviewers. NEVER spawn non-lead agents directly.",
-		"DELEGATION: For any exploration/scouting, spawn a lead who will spawn scouts. Do NOT explore the codebase yourself beyond initial planning.",
+		"HIERARCHY: Default to leads (ov sling --capability lead). For low-budget or very narrow work, you may spawn scout/builder directly. NEVER spawn reviewer or merger directly.",
+		"DELEGATION: For substantial work streams, spawn a lead who will handle scouts/builders/reviewers. For tight agent budgets, compress roles by using direct scout/builder fallback or --dispatch-max-agents 1/2 on the lead.",
 		`Startup: run mulch prime, check mail (ov mail check --agent ${COORDINATOR_NAME}), check ${cliName} ready, check ov group status, then begin work`,
 	];
 	return parts.join(" — ");

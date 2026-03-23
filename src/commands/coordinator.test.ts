@@ -1255,14 +1255,16 @@ describe("buildCoordinatorBeacon", () => {
 
 	test("includes hierarchy enforcement instruction", () => {
 		const beacon = buildCoordinatorBeacon();
-		expect(beacon).toContain("ONLY spawn leads");
-		expect(beacon).toContain("NEVER spawn non-lead agents directly");
+		expect(beacon).toContain("Default to leads");
+		expect(beacon).toContain("spawn scout/builder directly");
+		expect(beacon).toContain("NEVER spawn reviewer or merger directly");
 	});
 
 	test("includes delegation instruction", () => {
 		const beacon = buildCoordinatorBeacon();
 		expect(beacon).toContain("DELEGATION");
-		expect(beacon).toContain("spawn a lead who will spawn scouts");
+		expect(beacon).toContain("spawn a lead who will handle scouts/builders/reviewers");
+		expect(beacon).toContain("--dispatch-max-agents 1/2");
 	});
 
 	test("parts are joined with em-dash separator", () => {
