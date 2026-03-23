@@ -270,7 +270,7 @@ describe("PiRuntime", () => {
 			expect(state).toEqual({ phase: "loading" });
 		});
 
-		test("returns ready when the explicit Overstory ready marker is present", () => {
+		test("returns ready when the explicit os-eco ready marker is present", () => {
 			const pane = [
 				" pi v0.55.1",
 				" escape to interrupt",
