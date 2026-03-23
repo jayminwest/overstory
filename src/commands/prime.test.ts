@@ -364,6 +364,7 @@ recentTasks: []
 !config.yaml
 !agent-manifest.json
 !hooks.json
+!tmux.conf
 !groups.json
 !agent-defs/
 !agent-defs/**
