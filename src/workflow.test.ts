@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
 	normalizeWorkflowName,
+	repoRootFromCommandDir,
 	resolveProfileName,
 	resolveSpecPathForWorkflow,
 	resolveWorkflowProfile,
+	validateWorkflowName,
 } from "./workflow.ts";
 
 describe("normalizeWorkflowName", () => {
@@ -23,6 +25,17 @@ describe("normalizeWorkflowName", () => {
 	test("returns undefined for unknown workflows", () => {
 		expect(normalizeWorkflowName("discovery")).toBeUndefined();
 		expect(normalizeWorkflowName(undefined)).toBeUndefined();
+	});
+});
+
+describe("validateWorkflowName", () => {
+	test("returns normalized workflows", () => {
+		expect(validateWorkflowName("ov-delivery")).toBe("delivery");
+		expect(validateWorkflowName("co_creation")).toBe("co-creation");
+	});
+
+	test("throws for unknown workflows", () => {
+		expect(() => validateWorkflowName("discovery")).toThrow("Unknown workflow");
 	});
 });
 
@@ -72,5 +85,11 @@ describe("resolveSpecPathForWorkflow", () => {
 		expect(resolveSpecPathForWorkflow("/repo", "task-1", undefined, true)).toBe(
 			join("/repo", "openspec", "changes", "task-1", "tasks.md"),
 		);
+	});
+});
+
+describe("repoRootFromCommandDir", () => {
+	test("resolves two levels up from src/commands", () => {
+		expect(repoRootFromCommandDir("/repo/src/commands")).toBe("/repo");
 	});
 });

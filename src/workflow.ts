@@ -1,4 +1,5 @@
-import { dirname, join } from "node:path";
+import { join, resolve } from "node:path";
+import { ValidationError } from "./errors.ts";
 
 export type WorkflowName = "delivery" | "co-creation";
 export type WorkflowSpecLayout = "overstory" | "openspec";
@@ -36,6 +37,18 @@ export function normalizeWorkflowName(input: string | undefined): WorkflowName |
 	return WORKFLOW_ALIASES.get(input.trim().toLowerCase());
 }
 
+export function validateWorkflowName(input: string | undefined): WorkflowName | undefined {
+	if (input === undefined) return undefined;
+	const normalized = normalizeWorkflowName(input);
+	if (!normalized) {
+		throw new ValidationError(`Unknown workflow '${input}'. Valid workflows: delivery, co-creation`, {
+			field: "workflow",
+			value: input,
+		});
+	}
+	return normalized;
+}
+
 export function resolveWorkflowProfile(input: string | undefined): WorkflowProfile | undefined {
 	const workflow = normalizeWorkflowName(input);
 	return workflow ? WORKFLOW_PROFILES[workflow] : undefined;
@@ -64,5 +77,7 @@ export function workflowPromptPath(repoRoot: string, workflow: WorkflowName): st
 }
 
 export function repoRootFromCommandDir(commandDir: string): string {
-	return join(dirname(commandDir), "..");
+	// Command modules currently live at <package-root>/src/commands/.
+	// Resolve two levels up from the command directory instead of relying on dirname().
+	return resolve(commandDir, "..", "..");
 }
