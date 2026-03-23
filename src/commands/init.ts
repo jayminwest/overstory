@@ -640,7 +640,7 @@ CREATE TABLE IF NOT EXISTS sessions (
  * Content for .overstory/.gitignore — runtime state that should not be tracked.
  * Uses wildcard+whitelist pattern: ignore everything, whitelist tracked files.
  * Auto-healed by ov prime on each session start.
- * Config files (config.yaml, agent-manifest.json, hooks.json) remain tracked.
+ * Config files (config.yaml, agent-manifest.json, hooks.json, tmux.conf) remain tracked.
  */
 export const OVERSTORY_GITIGNORE = `# Wildcard+whitelist: ignore everything, whitelist tracked files
 # Auto-healed by ov prime on each session start
@@ -649,10 +649,17 @@ export const OVERSTORY_GITIGNORE = `# Wildcard+whitelist: ignore everything, whi
 !config.yaml
 !agent-manifest.json
 !hooks.json
+!tmux.conf
 !groups.json
 !agent-defs/
 !agent-defs/**
 !README.md
+`;
+
+export const OVERSTORY_TMUX_CONFIG = `# Project-local tmux defaults for overstory-managed agent sessions
+set -g status off
+set -g extended-keys on
+set -g extended-keys-format csi-u
 `;
 
 /**
@@ -679,6 +686,7 @@ Overstory turns a single Claude Code session into a multi-agent team by spawning
 - \`config.yaml\`             — Project configuration
 - \`agent-manifest.json\`     — Agent registry
 - \`hooks.json\`              — Claude Code hooks config
+- \`tmux.conf\`               — Project-local tmux config for agent sessions
 - \`agent-defs/\`             — Agent definition files (.md)
 - \`specs/\`                  — Task specifications
 - \`agents/\`                 — Per-agent state and identity
@@ -702,6 +710,11 @@ export async function writeOverstoryGitignore(overstoryPath: string): Promise<vo
 export async function writeOverstoryReadme(overstoryPath: string): Promise<void> {
 	const readmePath = join(overstoryPath, "README.md");
 	await Bun.write(readmePath, OVERSTORY_README);
+}
+
+export async function writeOverstoryTmuxConfig(overstoryPath: string): Promise<void> {
+	const tmuxConfigPath = join(overstoryPath, "tmux.conf");
+	await Bun.write(tmuxConfigPath, OVERSTORY_TMUX_CONFIG);
 }
 
 export interface InitOptions {
@@ -839,7 +852,11 @@ export async function initCommand(opts: InitOptions): Promise<void> {
 	await writeOverstoryGitignore(overstoryPath);
 	printCreated(`${OVERSTORY_DIR}/.gitignore`);
 
-	// 7b. Write .overstory/README.md
+	// 7b. Write .overstory/tmux.conf for project-local agent tmux sessions
+	await writeOverstoryTmuxConfig(overstoryPath);
+	printCreated(`${OVERSTORY_DIR}/tmux.conf`);
+
+	// 7c. Write .overstory/README.md
 	await writeOverstoryReadme(overstoryPath);
 	printCreated(`${OVERSTORY_DIR}/README.md`);
 

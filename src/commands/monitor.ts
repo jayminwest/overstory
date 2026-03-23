@@ -26,11 +26,11 @@ import { getRuntime } from "../runtimes/registry.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import {
+	buildProjectTmuxCliArgs,
 	createSession,
 	isSessionAlive,
 	killSession,
 	sendKeys,
-	TMUX_SOCKET,
 } from "../worktree/tmux.ts";
 import { isRunningAsRoot } from "./sling.ts";
 
@@ -221,7 +221,7 @@ async function startMonitor(opts: { json: boolean; attach: boolean }): Promise<v
 		}
 
 		if (shouldAttach) {
-			Bun.spawnSync(["tmux", "-L", TMUX_SOCKET, "attach-session", "-t", tmuxSession], {
+			Bun.spawnSync(buildProjectTmuxCliArgs(["attach-session", "-t", tmuxSession], projectRoot), {
 				stdio: ["inherit", "inherit", "inherit"],
 			});
 		}

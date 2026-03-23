@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AgentError } from "../errors.ts";
 import type { ReadyState } from "../runtimes/types.ts";
 import {
@@ -6,6 +9,7 @@ import {
 	checkSessionState,
 	createSession,
 	ensureTmuxAvailable,
+	getCurrentSessionName,
 	getDescendantPids,
 	getPanePid,
 	isProcessAlive,
@@ -45,6 +49,39 @@ function mockSpawnResult(
 		pid: 12345,
 	};
 }
+
+function expectTmuxCommand(cmd: string[], expected: string[]): void {
+	expect(cmd).toEqual(["tmux", ...expected]);
+}
+
+function tmuxSubcommand(cmd: string[]): string | undefined {
+	return cmd.find((part) =>
+		[
+			"new-session",
+			"list-panes",
+			"list-sessions",
+			"display-message",
+			"kill-session",
+			"has-session",
+			"capture-pane",
+			"send-keys",
+		].includes(part),
+	);
+}
+
+let originalCwd: string;
+let tempCwd: string;
+
+beforeEach(async () => {
+	originalCwd = process.cwd();
+	tempCwd = await mkdtemp(join(tmpdir(), "overstory-tmux-cwd-"));
+	process.chdir(tempCwd);
+});
+
+afterEach(async () => {
+	process.chdir(originalCwd);
+	await rm(tempCwd, { recursive: true, force: true });
+});
 
 describe("createSession", () => {
 	let spawnSpy: ReturnType<typeof spyOn>;
@@ -102,13 +139,13 @@ describe("createSession", () => {
 		const tmuxCallArgs = spawnSpy.mock.calls[1] as unknown[];
 		const cmd = tmuxCallArgs[0] as string[];
 		expect(cmd[0]).toBe("tmux");
-		expect(cmd[3]).toBe("new-session");
-		expect(cmd[5]).toBe("-s");
-		expect(cmd[6]).toBe("my-session");
-		expect(cmd[7]).toBe("-c");
-		expect(cmd[8]).toBe("/work/dir");
+		expect(cmd[1]).toBe("new-session");
+		expect(cmd[3]).toBe("-s");
+		expect(cmd[4]).toBe("my-session");
+		expect(cmd[5]).toBe("-c");
+		expect(cmd[6]).toBe("/work/dir");
 		// The command should be wrapped with PATH export
-		const wrappedCmd = cmd[9] as string;
+		const wrappedCmd = cmd[7] as string;
 		expect(wrappedCmd).toContain("echo hello");
 		expect(wrappedCmd).toContain("export PATH=");
 
@@ -136,16 +173,7 @@ describe("createSession", () => {
 		expect(spawnSpy).toHaveBeenCalledTimes(3);
 		const thirdCallArgs = spawnSpy.mock.calls[2] as unknown[];
 		const cmd = thirdCallArgs[0] as string[];
-		expect(cmd).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"list-panes",
-			"-t",
-			"test-agent",
-			"-F",
-			"#{pane_pid}",
-		]);
+		expectTmuxCommand(cmd, ["list-panes", "-t", "test-agent", "-F", "#{pane_pid}"]);
 	});
 
 	test("throws AgentError if session creation fails", async () => {
@@ -248,7 +276,7 @@ describe("createSession", () => {
 		// Call 0: which ov, Call 1: which overstory, Call 2: tmux new-session
 		const tmuxCallArgs = spawnSpy.mock.calls[2] as unknown[];
 		const cmd = tmuxCallArgs[0] as string[];
-		const tmuxCmd = cmd[9] as string;
+		const tmuxCmd = cmd[7] as string;
 		expect(tmuxCmd).toContain("echo test");
 	});
 
@@ -276,6 +304,80 @@ describe("createSession", () => {
 		expect(pid).toBe(42);
 		// which + new-session + list-panes(fail) + list-panes(ok)
 		expect(spawnSpy).toHaveBeenCalledTimes(4);
+	});
+
+	test("uses project-local tmux socket and config when .overstory/tmux.conf exists", async () => {
+		await mkdir(join(tempCwd, ".overstory"), { recursive: true });
+		await Bun.write(join(tempCwd, ".overstory", "tmux.conf"), "set -g mouse on\n");
+
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) {
+				return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			}
+			if (callCount === 2) {
+				return mockSpawnResult("", "", 0);
+			}
+			return mockSpawnResult("4242\n", "", 0);
+		});
+
+		await createSession("isolated-agent", tempCwd, "echo hello");
+
+		const tmuxCallArgs = spawnSpy.mock.calls[1] as unknown[];
+		const cmd = tmuxCallArgs[0] as string[];
+		expect(cmd).toEqual([
+			"tmux",
+			"-S",
+			join(tempCwd, ".overstory", "tmux.sock"),
+			"-f",
+			join(tempCwd, ".overstory", "tmux.conf"),
+			"new-session",
+			"-d",
+			"-s",
+			"isolated-agent",
+			"-c",
+			tempCwd,
+			expect.any(String),
+		]);
+	});
+
+	test("uses canonical project tmux socket when cwd is an overstory worktree with its own copied .overstory", async () => {
+		const projectOverstoryDir = join(tempCwd, ".overstory");
+		const worktreePath = join(projectOverstoryDir, "worktrees", "builder-123");
+		await mkdir(join(worktreePath, ".overstory"), { recursive: true });
+		await Bun.write(join(projectOverstoryDir, "tmux.conf"), "set -g mouse on\n");
+
+		let callCount = 0;
+		spawnSpy.mockImplementation(() => {
+			callCount++;
+			if (callCount === 1) {
+				return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			}
+			if (callCount === 2) {
+				return mockSpawnResult("", "", 0);
+			}
+			return mockSpawnResult("4242\n", "", 0);
+		});
+
+		await createSession("isolated-agent", worktreePath, "echo hello");
+
+		const tmuxCallArgs = spawnSpy.mock.calls[1] as unknown[];
+		const cmd = tmuxCallArgs[0] as string[];
+		expect(cmd).toEqual([
+			"tmux",
+			"-S",
+			join(projectOverstoryDir, "tmux.sock"),
+			"-f",
+			join(projectOverstoryDir, "tmux.conf"),
+			"new-session",
+			"-d",
+			"-s",
+			"isolated-agent",
+			"-c",
+			worktreePath,
+			expect.any(String),
+		]);
 	});
 
 	test("throws after exhausting all list-panes retries", async () => {
@@ -369,10 +471,21 @@ describe("listSessions", () => {
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
+		expectTmuxCommand(cmd, ["list-sessions", "-F", "#{session_name}:#{pid}"]);
+	});
+
+	test("uses project-local tmux socket when .overstory exists", async () => {
+		await mkdir(join(tempCwd, ".overstory"), { recursive: true });
+		spawnSpy.mockImplementation(() => mockSpawnResult("", "", 0));
+
+		await listSessions();
+
+		const callArgs = spawnSpy.mock.calls[0] as unknown[];
+		const cmd = callArgs[0] as string[];
 		expect(cmd).toEqual([
 			"tmux",
-			"-L",
-			"overstory",
+			"-S",
+			join(tempCwd, ".overstory", "tmux.sock"),
 			"list-sessions",
 			"-F",
 			"#{session_name}:#{pid}",
@@ -399,16 +512,7 @@ describe("getPanePid", () => {
 		expect(pid).toBe(42);
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expect(cmd).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"display-message",
-			"-p",
-			"-t",
-			"overstory-auth",
-			"#{pane_pid}",
-		]);
+		expectTmuxCommand(cmd, ["display-message", "-p", "-t", "overstory-auth", "#{pane_pid}"]);
 	});
 
 	test("returns null when session does not exist", async () => {
@@ -704,7 +808,7 @@ describe("killSession", () => {
 			const cmd = args[0] as string[];
 			cmds.push(cmd);
 
-			if (cmd[0] === "tmux" && cmd[3] === "display-message") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "display-message") {
 				// getPanePid → returns PID 500
 				return mockSpawnResult("500\n", "", 0);
 			}
@@ -712,7 +816,7 @@ describe("killSession", () => {
 				// getDescendantPids → no children
 				return mockSpawnResult("", "", 1);
 			}
-			if (cmd[0] === "tmux" && cmd[3] === "kill-session") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "kill-session") {
 				return mockSpawnResult("", "", 0);
 			}
 			return mockSpawnResult("", "", 0);
@@ -723,10 +827,7 @@ describe("killSession", () => {
 		await killSession("overstory-auth");
 
 		// Should have called: tmux display-message, pgrep, tmux kill-session
-		expect(cmds[0]).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
+		expectTmuxCommand(cmds[0] ?? [], [
 			"display-message",
 			"-p",
 			"-t",
@@ -735,7 +836,7 @@ describe("killSession", () => {
 		]);
 		expect(cmds[1]).toEqual(["pgrep", "-P", "500"]);
 		const lastCmd = cmds[cmds.length - 1];
-		expect(lastCmd).toEqual(["tmux", "-L", "overstory", "kill-session", "-t", "overstory-auth"]);
+		expectTmuxCommand(lastCmd ?? [], ["kill-session", "-t", "overstory-auth"]);
 
 		// Should have sent SIGTERM to root PID 500
 		expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
@@ -747,11 +848,11 @@ describe("killSession", () => {
 			const cmd = args[0] as string[];
 			cmds.push(cmd);
 
-			if (cmd[0] === "tmux" && cmd[3] === "display-message") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "display-message") {
 				// getPanePid → session not found
 				return mockSpawnResult("", "can't find session", 1);
 			}
-			if (cmd[0] === "tmux" && cmd[3] === "kill-session") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "kill-session") {
 				return mockSpawnResult("", "", 0);
 			}
 			return mockSpawnResult("", "", 0);
@@ -761,8 +862,8 @@ describe("killSession", () => {
 
 		// Should go straight to tmux kill-session (no pgrep calls)
 		expect(cmds).toHaveLength(2);
-		expect(cmds[0]?.[3]).toBe("display-message");
-		expect(cmds[1]?.[3]).toBe("kill-session");
+		expect(tmuxSubcommand(cmds[0] ?? [])).toBe("display-message");
+		expect(tmuxSubcommand(cmds[1] ?? [])).toBe("kill-session");
 		// No process.kill calls since we had no PID
 		expect(killSpy).not.toHaveBeenCalled();
 	});
@@ -770,13 +871,13 @@ describe("killSession", () => {
 	test("succeeds silently when session is already gone after process cleanup", async () => {
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[0] === "tmux" && cmd[3] === "display-message") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "display-message") {
 				return mockSpawnResult("500\n", "", 0);
 			}
 			if (cmd[0] === "pgrep") {
 				return mockSpawnResult("", "", 1);
 			}
-			if (cmd[0] === "tmux" && cmd[3] === "kill-session") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "kill-session") {
 				// Session already gone after process cleanup
 				return mockSpawnResult("", "can't find session: overstory-auth", 1);
 			}
@@ -789,14 +890,44 @@ describe("killSession", () => {
 		await killSession("overstory-auth");
 	});
 
+	test("succeeds silently when the isolated tmux server is already gone", async () => {
+		spawnSpy.mockImplementation((...args: unknown[]) => {
+			const cmd = args[0] as string[];
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "display-message") {
+				return mockSpawnResult("", "can't find session", 1);
+			}
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "kill-session") {
+				return mockSpawnResult("", "no server running on /tmp/isolated.sock", 1);
+			}
+			return mockSpawnResult("", "", 0);
+		});
+
+		await killSession("overstory-auth");
+	});
+
 	test("throws AgentError on unexpected tmux kill-session failure", async () => {
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[0] === "tmux" && cmd[3] === "display-message") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "display-message") {
 				return mockSpawnResult("", "can't find session", 1);
 			}
-			if (cmd[0] === "tmux" && cmd[3] === "kill-session") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "kill-session") {
 				return mockSpawnResult("", "server exited unexpectedly", 1);
+			}
+			return mockSpawnResult("", "", 0);
+		});
+
+		await expect(killSession("broken-session")).rejects.toThrow(AgentError);
+	});
+
+	test("does not swallow unrelated errors that mention session text", async () => {
+		spawnSpy.mockImplementation((...args: unknown[]) => {
+			const cmd = args[0] as string[];
+			if (cmd[0] === "tmux" && cmd[1] === "display-message") {
+				return mockSpawnResult("", "can't find session", 1);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "kill-session") {
+				return mockSpawnResult("", "failed to find session lockfile", 1);
 			}
 			return mockSpawnResult("", "", 0);
 		});
@@ -807,10 +938,10 @@ describe("killSession", () => {
 	test("AgentError contains session name on failure", async () => {
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[0] === "tmux" && cmd[3] === "display-message") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "display-message") {
 				return mockSpawnResult("", "error", 1);
 			}
-			if (cmd[0] === "tmux" && cmd[3] === "kill-session") {
+			if (cmd[0] === "tmux" && tmuxSubcommand(cmd) === "kill-session") {
 				return mockSpawnResult("", "server exited unexpectedly", 1);
 			}
 			return mockSpawnResult("", "", 0);
@@ -825,6 +956,47 @@ describe("killSession", () => {
 			expect(agentErr.message).toContain("ghost-agent");
 			expect(agentErr.agentName).toBe("ghost-agent");
 		}
+	});
+});
+
+describe("getCurrentSessionName", () => {
+	let spawnSpy: ReturnType<typeof spyOn>;
+	let originalTmux: string | undefined;
+
+	beforeEach(() => {
+		spawnSpy = spyOn(Bun, "spawn");
+		originalTmux = process.env.TMUX;
+	});
+
+	afterEach(() => {
+		spawnSpy.mockRestore();
+		if (originalTmux === undefined) {
+			delete process.env.TMUX;
+		} else {
+			process.env.TMUX = originalTmux;
+		}
+	});
+
+	test("returns null when not running inside tmux", async () => {
+		delete process.env.TMUX;
+
+		const sessionName = await getCurrentSessionName();
+
+		expect(sessionName).toBeNull();
+		expect(spawnSpy).not.toHaveBeenCalled();
+	});
+
+	test("queries the current tmux server without the project socket override", async () => {
+		process.env.TMUX = "/tmp/tmux-1000/default,123,0";
+		spawnSpy.mockImplementation(() => mockSpawnResult("personal-session\n", "", 0));
+
+		const sessionName = await getCurrentSessionName();
+
+		expect(sessionName).toBe("personal-session");
+		expect(spawnSpy).toHaveBeenCalledTimes(1);
+		const callArgs = spawnSpy.mock.calls[0] as unknown[];
+		const cmd = callArgs[0] as string[];
+		expect(cmd).toEqual(["tmux", "display-message", "-p", "#{session_name}"]);
 	});
 });
 
@@ -863,7 +1035,7 @@ describe("isSessionAlive", () => {
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expect(cmd).toEqual(["tmux", "-L", "overstory", "has-session", "-t", "my-agent"]);
+		expectTmuxCommand(cmd, ["has-session", "-t", "my-agent"]);
 	});
 });
 
@@ -934,16 +1106,7 @@ describe("sendKeys", () => {
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expect(cmd).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-auth",
-			"echo hello world",
-			"Enter",
-		]);
+		expectTmuxCommand(cmd, ["send-keys", "-t", "overstory-auth", "echo hello world", "Enter"]);
 	});
 
 	test("flattens newlines in keys to spaces", async () => {
@@ -954,16 +1117,7 @@ describe("sendKeys", () => {
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expect(cmd).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"line1 line2 line3",
-			"Enter",
-		]);
+		expectTmuxCommand(cmd, ["send-keys", "-t", "overstory-agent", "line1 line2 line3", "Enter"]);
 	});
 
 	test("throws AgentError on failure", async () => {
@@ -994,16 +1148,7 @@ describe("sendKeys", () => {
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expect(cmd).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"",
-			"Enter",
-		]);
+		expectTmuxCommand(cmd, ["send-keys", "-t", "overstory-agent", "", "Enter"]);
 	});
 
 	test("throws descriptive error when tmux server is not running", async () => {
@@ -1086,17 +1231,7 @@ describe("capturePaneContent", () => {
 
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expect(cmd).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"capture-pane",
-			"-t",
-			"my-session",
-			"-p",
-			"-S",
-			"-100",
-		]);
+		expectTmuxCommand(cmd, ["capture-pane", "-t", "my-session", "-p", "-S", "-100"]);
 	});
 
 	test("uses default 50 lines when not specified", async () => {
@@ -1106,7 +1241,7 @@ describe("capturePaneContent", () => {
 
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expect(cmd[8]).toBe("-50");
+		expect(cmd[6]).toBe("-50");
 	});
 
 	test("returns null when capture-pane fails", async () => {
@@ -1179,7 +1314,7 @@ describe("waitForTuiReady", () => {
 		let captureCallCount = 0;
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				captureCallCount++;
 				if (captureCallCount <= 3) {
 					// First 3 capture-pane polls: empty pane (TUI still loading)
@@ -1231,7 +1366,7 @@ describe("waitForTuiReady", () => {
 		// capture-pane fails (session dead), has-session also fails (session dead)
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				return mockSpawnResult("", "can't find session", 1);
 			}
 			// has-session: session is dead
@@ -1249,7 +1384,7 @@ describe("waitForTuiReady", () => {
 		let captureCallCount = 0;
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				captureCallCount++;
 				// Pane stays empty for all polls (session alive but TUI not rendered yet)
 				return mockSpawnResult("", "", 0);
@@ -1271,7 +1406,7 @@ describe("waitForTuiReady", () => {
 		// Pane always shows prompt indicator but never shows status bar text
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				return mockSpawnResult("Welcome to Claude Code!\n\u276f", "", 0);
 			}
 			// has-session: session is alive
@@ -1287,7 +1422,7 @@ describe("waitForTuiReady", () => {
 		// Pane always shows status bar but never shows prompt indicator
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				return mockSpawnResult("bypass permissions", "", 0);
 			}
 			// has-session: session is alive
@@ -1303,7 +1438,7 @@ describe("waitForTuiReady", () => {
 		let captureCallCount = 0;
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				captureCallCount++;
 				if (captureCallCount <= 2) {
 					// First 2 polls: only prompt indicator visible (phase 1 only)
@@ -1328,7 +1463,7 @@ describe("waitForTuiReady", () => {
 		let captureCallCount = 0;
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				captureCallCount++;
 				if (captureCallCount === 1) {
 					// First poll: trust dialog is showing
@@ -1337,7 +1472,7 @@ describe("waitForTuiReady", () => {
 				// Subsequent polls: trust confirmed, real TUI with both indicators
 				return mockSpawnResult('Try "help"\nshift+tab', "", 0);
 			}
-			if (cmd[3] === "send-keys") {
+			if (tmuxSubcommand(cmd) === "send-keys") {
 				sendKeysCalls.push(cmd);
 				return mockSpawnResult("", "", 0);
 			}
@@ -1351,16 +1486,7 @@ describe("waitForTuiReady", () => {
 		// sendKeys should have been called once to confirm the trust dialog
 		expect(sendKeysCalls).toHaveLength(1);
 		const trustCall = sendKeysCalls[0];
-		expect(trustCall).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"",
-			"Enter",
-		]);
+		expectTmuxCommand(trustCall ?? [], ["send-keys", "-t", "overstory-agent", "", "Enter"]);
 	});
 
 	test("detects bypass permissions dialog and types 2 before Enter", async () => {
@@ -1368,7 +1494,7 @@ describe("waitForTuiReady", () => {
 		let captureCallCount = 0;
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				captureCallCount++;
 				if (captureCallCount === 1) {
 					return mockSpawnResult(
@@ -1379,7 +1505,7 @@ describe("waitForTuiReady", () => {
 				}
 				return mockSpawnResult('Try "help"\nshift+tab', "", 0);
 			}
-			if (cmd[3] === "send-keys") {
+			if (tmuxSubcommand(cmd) === "send-keys") {
 				sendKeysCalls.push(cmd);
 				return mockSpawnResult("", "", 0);
 			}
@@ -1390,25 +1516,8 @@ describe("waitForTuiReady", () => {
 
 		expect(ready).toBe(true);
 		expect(sendKeysCalls).toHaveLength(2);
-		expect(sendKeysCalls[0]).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"2",
-		]);
-		expect(sendKeysCalls[1]).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"",
-			"Enter",
-		]);
+		expectTmuxCommand(sendKeysCalls[0] ?? [], ["send-keys", "-t", "overstory-agent", "2"]);
+		expectTmuxCommand(sendKeysCalls[1] ?? [], ["send-keys", "-t", "overstory-agent", "", "Enter"]);
 	});
 
 	test("retries typed bypass dialog action when the same dialog persists", async () => {
@@ -1416,7 +1525,7 @@ describe("waitForTuiReady", () => {
 		let captureCallCount = 0;
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				captureCallCount++;
 				if (captureCallCount <= 3) {
 					return mockSpawnResult(
@@ -1427,7 +1536,7 @@ describe("waitForTuiReady", () => {
 				}
 				return mockSpawnResult('Try "help"\nshift+tab', "", 0);
 			}
-			if (cmd[3] === "send-keys") {
+			if (tmuxSubcommand(cmd) === "send-keys") {
 				sendKeysCalls.push(cmd);
 				return mockSpawnResult("", "", 0);
 			}
@@ -1438,44 +1547,10 @@ describe("waitForTuiReady", () => {
 
 		expect(ready).toBe(true);
 		expect(sendKeysCalls).toHaveLength(4);
-		expect(sendKeysCalls[0]).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"2",
-		]);
-		expect(sendKeysCalls[1]).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"",
-			"Enter",
-		]);
-		expect(sendKeysCalls[2]).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"2",
-		]);
-		expect(sendKeysCalls[3]).toEqual([
-			"tmux",
-			"-L",
-			"overstory",
-			"send-keys",
-			"-t",
-			"overstory-agent",
-			"",
-			"Enter",
-		]);
+		expectTmuxCommand(sendKeysCalls[0] ?? [], ["send-keys", "-t", "overstory-agent", "2"]);
+		expectTmuxCommand(sendKeysCalls[1] ?? [], ["send-keys", "-t", "overstory-agent", "", "Enter"]);
+		expectTmuxCommand(sendKeysCalls[2] ?? [], ["send-keys", "-t", "overstory-agent", "2"]);
+		expectTmuxCommand(sendKeysCalls[3] ?? [], ["send-keys", "-t", "overstory-agent", "", "Enter"]);
 	});
 
 	test("handles trust dialog only once (trustHandled flag)", async () => {
@@ -1483,7 +1558,7 @@ describe("waitForTuiReady", () => {
 		let captureCallCount = 0;
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
-			if (cmd[3] === "capture-pane") {
+			if (tmuxSubcommand(cmd) === "capture-pane") {
 				captureCallCount++;
 				if (captureCallCount <= 3) {
 					// Multiple polls still show trust dialog (slow dialog dismissal)
@@ -1492,7 +1567,7 @@ describe("waitForTuiReady", () => {
 				// Eventually TUI loads with both indicators
 				return mockSpawnResult('Try "help"\nbypass permissions', "", 0);
 			}
-			if (cmd[3] === "send-keys") {
+			if (tmuxSubcommand(cmd) === "send-keys") {
 				sendKeysCalls.push(cmd);
 				return mockSpawnResult("", "", 0);
 			}

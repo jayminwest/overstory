@@ -31,6 +31,7 @@ import type { AgentSession } from "../types.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
 import type { SessionState } from "../worktree/tmux.ts";
 import {
+	buildProjectTmuxCliArgs,
 	capturePaneContent,
 	checkSessionState,
 	createSession,
@@ -38,7 +39,6 @@ import {
 	isSessionAlive,
 	killSession,
 	sendKeys,
-	TMUX_SOCKET,
 	waitForTuiReady,
 } from "../worktree/tmux.ts";
 import { nudgeAgent } from "./nudge.ts";
@@ -631,7 +631,7 @@ export async function startCoordinatorSession(
 		}
 
 		if (shouldAttach) {
-			Bun.spawnSync(["tmux", "-L", TMUX_SOCKET, "attach-session", "-t", tmuxSession], {
+			Bun.spawnSync(buildProjectTmuxCliArgs(["attach-session", "-t", tmuxSession], projectRoot), {
 				stdio: ["inherit", "inherit", "inherit"],
 			});
 		}

@@ -64,6 +64,7 @@ overstory/                        # This repo (the overstory tool itself)
       status.ts                   # ov status
       dashboard.ts                # ov dashboard (live TUI)
       inspect.ts                  # ov inspect (deep agent view)
+      sessions.ts                 # ov sessions list/attach/kill/current
       coordinator.ts              # ov coordinator start/stop/status/send/ask/output/check-complete
       supervisor.ts               # ov supervisor start/stop/status [DEPRECATED]
       hooks.ts                    # ov hooks install/uninstall/status
@@ -198,6 +199,7 @@ target-project/
     config.local.yaml             # Machine-specific overrides (gitignored)
     agent-manifest.json           # Agent registry
     hooks.json                    # Central hooks config
+    tmux.conf                     # Project-local tmux defaults for agent sessions
     current-run.txt               # Active run ID
     session-branch.txt            # Branch at session start (merge target default)
     README.md                     # Contributor-facing directory explanation
@@ -213,6 +215,16 @@ target-project/
     events.db                     # SQLite events/timelines (gitignored, WAL mode)
     metrics.db                    # SQLite metrics (gitignored, WAL mode)
 ```
+
+### Project-Local Tmux
+
+Overstory runs managed agents on a project-local tmux server rooted at `.overstory/tmux.sock`. Session creation loads `.overstory/tmux.conf` when present, and `ov init` now writes a minimal config with:
+
+- `set -g status off`
+- `set -g extended-keys on`
+- `set -g extended-keys-format csi-u`
+
+Use `ov sessions` for user-facing access to that server instead of manual `tmux -S ...` commands.
 
 ## Coding Conventions
 
