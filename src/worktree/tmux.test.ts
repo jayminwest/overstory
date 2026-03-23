@@ -512,13 +512,7 @@ describe("getPanePid", () => {
 		expect(pid).toBe(42);
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expectTmuxCommand(cmd, [
-			"display-message",
-			"-p",
-			"-t",
-			"overstory-auth",
-			"#{pane_pid}",
-		]);
+		expectTmuxCommand(cmd, ["display-message", "-p", "-t", "overstory-auth", "#{pane_pid}"]);
 	});
 
 	test("returns null when session does not exist", async () => {

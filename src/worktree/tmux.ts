@@ -479,7 +479,12 @@ export async function getCurrentSessionName(): Promise<string | null> {
 	if (!process.env.TMUX) {
 		return null;
 	}
-	const { exitCode, stdout } = await runCommand(["tmux", "display-message", "-p", "#{session_name}"]);
+	const { exitCode, stdout } = await runCommand([
+		"tmux",
+		"display-message",
+		"-p",
+		"#{session_name}",
+	]);
 	if (exitCode !== 0) {
 		return null;
 	}

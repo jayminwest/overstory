@@ -2310,7 +2310,7 @@ describe("startDaemon() stop() cleans up tailer registry", () => {
 					agentName: "agent-one",
 					logPath: "/fake/one/stdout.log",
 					stop: () => {
-						stopped["tailer1"] = true;
+						stopped.tailer1 = true;
 					},
 				},
 			],
@@ -2320,7 +2320,7 @@ describe("startDaemon() stop() cleans up tailer registry", () => {
 					agentName: "agent-two",
 					logPath: "/fake/two/stdout.log",
 					stop: () => {
-						stopped["tailer2"] = true;
+						stopped.tailer2 = true;
 					},
 				},
 			],
@@ -2350,8 +2350,8 @@ describe("startDaemon() stop() cleans up tailer registry", () => {
 
 		daemon.stop();
 
-		expect(stopped["tailer1"]).toBe(true);
-		expect(stopped["tailer2"]).toBe(true);
+		expect(stopped.tailer1).toBe(true);
+		expect(stopped.tailer2).toBe(true);
 		expect(registry.size).toBe(0);
 	});
 });
