@@ -456,7 +456,8 @@ export async function killSession(name: string): Promise<void> {
 		// If the session is already gone (e.g., died during process cleanup), that's fine
 		if (
 			stderr.includes("session not found") ||
-			stderr.includes("find session") ||
+			stderr.includes("can't find session") ||
+			stderr.includes("cant find session") ||
 			stderr.includes("no server running")
 		) {
 			return;
@@ -478,7 +479,8 @@ export async function getCurrentSessionName(): Promise<string | null> {
 	if (!process.env.TMUX) {
 		return null;
 	}
-	const { exitCode, stdout } = await runProjectTmuxCommand([
+	const { exitCode, stdout } = await runCommand([
+		"tmux",
 		"display-message",
 		"-p",
 		"#{session_name}",

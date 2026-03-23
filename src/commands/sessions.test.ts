@@ -65,7 +65,7 @@ describe("sessions command", () => {
 		} else {
 			process.env.TMUX = originalTmux;
 		}
-		process.exitCode = undefined;
+		process.exitCode = 0;
 		await cleanupTempDir(tempDir);
 	});
 
