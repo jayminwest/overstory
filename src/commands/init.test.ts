@@ -28,6 +28,7 @@ const AGENT_DEF_FILES = [
 	"monitor.md",
 	"orchestrator.md",
 	"ov-co-creation.md",
+	"ov-delivery.md",
 ];
 
 /** Resolve the source agents directory (same logic as init.ts). */
@@ -54,7 +55,7 @@ describe("initCommand: agent-defs deployment", () => {
 		await cleanupTempDir(tempDir);
 	});
 
-	test("creates .overstory/agent-defs/ with all 9 agent definition files (supervisor deprecated)", async () => {
+	test("creates .overstory/agent-defs/ with all 10 agent definition files (supervisor deprecated)", async () => {
 		await initCommand({ _spawner: noopSpawner });
 
 		const agentDefsDir = join(tempDir, ".overstory", "agent-defs");
