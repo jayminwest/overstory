@@ -9,6 +9,11 @@ Your overlay may contain a **Dispatch Overrides** section with directives from y
 - **SKIP REVIEW**: Do not spawn a reviewer. Self-verify by reading the builder diff and running quality gates. This is appropriate for simple or well-tested changes.
 - **MAX AGENTS**: Limits the number of sub-workers you may spawn. Plan your decomposition to fit within this budget.
 
+Budget compression rules:
+- **MAX AGENTS = 1**: Act as a combined **lead/worker**. Default to doing the implementation yourself. Only use the single spawn slot if one specialist is clearly more valuable than your own direct work.
+- **MAX AGENTS = 2**: Act as a compressed lead. Prefer at most one helper at a time, then finish remaining implementation and verification yourself. Do not assume there is room for a separate reviewer.
+- **MAX AGENTS >= 3**: Use normal lead behavior and choose the right scout/builder/reviewer mix for the task.
+
 Always check your overlay for dispatch overrides before following the default three-phase workflow. If no overrides section exists, follow the standard playbook.
 
 ## cost-awareness
@@ -18,6 +23,8 @@ Always check your overlay for dispatch overrides before following the default th
 Scouts and reviewers are quality investments, not overhead. Skipping a scout to "save tokens" costs far more when specs are wrong and builders produce incorrect work. The most expensive mistake is spawning builders with bad specs — scouts prevent this.
 
 Reviewers are valuable for complex changes but optional for simple ones. The lead can self-verify simple changes by reading the diff and running quality gates, saving a full agent spawn.
+
+When your overlay gives you a very small agent budget, role compression beats ceremony. A correct combined lead/worker execution is better than blocking on an ideal scout -> builder -> reviewer chain that the budget cannot support.
 
 Where to actually save tokens:
 - Prefer fewer, well-scoped builders over many small ones.
@@ -143,7 +150,7 @@ Criteria — ANY:
 - Straightforward implementation with clear spec
 - Single builder can handle the full scope
 
-Action: Skip scouts if you have sufficient context (mulch records, dispatch details, file reads). Spawn one builder. Lead verifies by reading the diff and checking quality gates instead of spawning a reviewer.
+Action: Skip scouts if you have sufficient context (mulch records, dispatch details, file reads). Spawn one builder. Lead verifies by reading the diff and checking quality gates instead of spawning a reviewer. If **MAX AGENTS = 1**, do this work yourself instead of spawning the builder.
 
 ### Complex Tasks (Full Pipeline)
 Criteria — ANY:
@@ -153,6 +160,9 @@ Criteria — ANY:
 - Multiple builders needed with file scope partitioning
 
 Action: Full Scout → Build → Verify pipeline. Spawn scouts for exploration, multiple builders for parallel work, reviewers for independent verification.
+If your overlay budget is too small to support that pipeline, compress roles deliberately:
+- With **MAX AGENTS = 2**, use one scout or one builder, not both in parallel, then do the remaining work and verification yourself.
+- With **MAX AGENTS = 1**, you are effectively the worker. Explore just enough to ground the change, implement directly, and self-verify.
 
 ## three-phase-workflow
 

@@ -371,11 +371,11 @@ export function checkParentAgentLimit(
 }
 
 /**
- * Validate hierarchy constraints: the coordinator (no parent) may only spawn leads.
+ * Validate hierarchy constraints for direct coordinator/human spawns.
  *
  * When parentAgent is null, the caller is the coordinator or a human.
- * Only "lead" capability is allowed in that case. All other capabilities
- * (builder, scout, reviewer, merger) must be spawned by a lead
+ * Direct spawns are allowed for "lead", "scout", and "builder".
+ * Other capabilities (reviewer, merger, etc.) must be spawned by a lead
  * that passes --parent.
  *
  * @param parentAgent - The --parent flag value (null = coordinator/human)
