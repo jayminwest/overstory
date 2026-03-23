@@ -766,64 +766,6 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			taskId: taskId,
 		});
 
-<<<<<<< HEAD
-=======
-		// 8. Generate + write overlay CLAUDE.md
-		const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
-		const baseDefinition = await Bun.file(agentDefPath).text();
-
-		// 8a. Fetch file-scoped mulch expertise if mulch is enabled and files are provided
-		let mulchExpertise: string | undefined;
-		if (config.mulch.enabled && fileScope.length > 0) {
-			try {
-				const mulch = createMulchClient(config.project.root);
-				mulchExpertise = await mulch.prime(undefined, undefined, {
-					files: fileScope,
-					sortByScore: true,
-				});
-			} catch {
-				// Non-fatal: mulch expertise is supplementary context
-				mulchExpertise = undefined;
-			}
-		}
-
-		// Resolve runtime before overlayConfig so we can pass runtime.instructionPath
-		const runtime = getRuntime(opts.runtime, config, capability);
-
-		// 7b. Runtime-specific worktree preparation (e.g., Copilot folder trust)
-		if (runtime.prepareWorktree) {
-			await runtime.prepareWorktree(worktreePath);
-		}
-
-		const overlayConfig: OverlayConfig = {
-			agentName: name,
-			taskId: taskId,
-			specPath: absoluteSpecPath,
-			branchName,
-			worktreePath,
-			fileScope,
-			mulchDomains: config.mulch.enabled
-				? inferDomainsFromFiles(fileScope, config.mulch.domains)
-				: [],
-			parentAgent: parentAgent,
-			depth,
-			canSpawn: agentDef.canSpawn,
-			capability,
-			baseDefinition,
-			mulchExpertise,
-			skipScout: skipScout && capability === "lead",
-			skipReview: opts.skipReview === true && capability === "lead",
-			maxAgentsOverride:
-				opts.dispatchMaxAgents !== undefined
-					? Number.parseInt(opts.dispatchMaxAgents, 10)
-					: undefined,
-			qualityGates: config.project.qualityGates,
-			trackerCli: trackerCliName(resolvedBackend),
-			trackerName: resolvedBackend,
-			instructionPath: runtime.instructionPath,
-		};
-
->>>>>>> 175657c (feat: add prepareWorktree interface + Copilot folder trust)
 		try {
 			// 8. Generate + write overlay CLAUDE.md
 			const agentDefPath = join(config.project.root, config.agents.baseDir, agentDef.file);
@@ -863,6 +805,11 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 			// Resolve runtime before overlayConfig so we can pass runtime.instructionPath
 			const runtime = getRuntime(opts.runtime, config, capability);
+
+			// Runtime-specific worktree preparation (e.g., Copilot folder trust)
+			if (runtime.prepareWorktree) {
+				await runtime.prepareWorktree(worktreePath);
+			}
 
 			const overlayConfig: OverlayConfig = {
 				agentName: name,

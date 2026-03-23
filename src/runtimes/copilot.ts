@@ -15,14 +15,7 @@ import type {
 	TranscriptSummary,
 } from "./types.ts";
 
-const MODEL_MAP: Record<string, string> = {
-	sonnet: "claude-sonnet-4-6",
-	opus: "claude-opus-4-6",
-	haiku: "claude-haiku-4-5",
-};
-
 /**
-<<<<<<< HEAD
  * Map of overstory model aliases to fully-qualified Copilot model names.
  *
  * The copilot CLI rejects short aliases like "sonnet" and requires fully-qualified
@@ -34,7 +27,8 @@ const MODEL_MAP: Record<string, string> = {
 	opus: "claude-opus-4-6",
 	haiku: "claude-haiku-4-5",
 };
-=======
+
+/**
  * Add a worktree path to the Copilot trusted folders list.
  *
  * Reads `~/.config/github-copilot/config.json`, appends the worktreePath to
@@ -68,7 +62,6 @@ export async function ensureCopilotTrustedFolders(
 		await Bun.write(configPath, `${JSON.stringify(config, null, "\t")}\n`);
 	}
 }
->>>>>>> 175657c (feat: add prepareWorktree interface + Copilot folder trust)
 
 /**
  * GitHub Copilot runtime adapter.
