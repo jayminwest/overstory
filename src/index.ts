@@ -45,6 +45,7 @@ import { traceCommand } from "./commands/trace.ts";
 import { createUpdateCommand } from "./commands/update.ts";
 import { createUpgradeCommand } from "./commands/upgrade.ts";
 import { createWatchCommand } from "./commands/watch.ts";
+import { createWorkflowCommand } from "./commands/workflow.ts";
 import { createWorktreeCommand } from "./commands/worktree.ts";
 import { setProjectRootOverride } from "./config.ts";
 import { ConfigError, OverstoryError, WorktreeError } from "./errors.ts";
@@ -79,6 +80,7 @@ const COMMANDS = [
 	"status",
 	"dashboard",
 	"discover",
+	"workflow",
 	"inspect",
 	"clean",
 	"doctor",
@@ -292,6 +294,7 @@ program
 	.option("--runtime <name>", "Runtime adapter (default: config or claude)")
 	.option("--base-branch <branch>", "Base branch for worktree creation (default: current HEAD)")
 	.option("--profile <name>", "Canopy profile to apply to agent overlay")
+	.option("--workflow <name>", "Workflow profile alias: delivery or co-creation")
 	.option("--json", "Output result as JSON")
 	.action(async (taskId, opts) => {
 		await slingCommand(taskId, opts);
@@ -301,10 +304,12 @@ const specCmd = program.command("spec").description("Manage task specifications"
 
 specCmd
 	.command("write")
-	.description("Write a spec file to .overstory/specs/<task-id>.md")
+	.description("Write a task spec file (.overstory/specs by default, openspec for co-creation)")
 	.argument("<task-id>", "Task ID for the spec file")
 	.option("--body <content>", "Spec content (or pipe via stdin)")
 	.option("--agent <name>", "Agent writing the spec (for attribution)")
+	.option("--workflow <name>", "Workflow profile alias: delivery or co-creation")
+	.option("--openspec", "Write to openspec/changes/<task-id>/tasks.md")
 	.option("--json", "Output as JSON")
 	.action(async (taskId, opts) => {
 		await specWriteCommand(taskId, opts);
@@ -336,6 +341,7 @@ program.addCommand(createStatusCommand());
 program.addCommand(createDashboardCommand());
 
 program.addCommand(createDiscoverCommand());
+program.addCommand(createWorkflowCommand());
 
 program.addCommand(createInspectCommand());
 
