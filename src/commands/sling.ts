@@ -798,10 +798,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 			// 8b. Resolve canopy profile if specified
 			const profileName = resolveProfileName(
-				opts.profile ??
-					workflow ??
-					process.env.OVERSTORY_PROFILE ??
-					config.project.defaultProfile,
+				opts.profile ?? workflow ?? process.env.OVERSTORY_PROFILE ?? config.project.defaultProfile,
 			);
 			let profileContent: string | undefined;
 			if (profileName) {

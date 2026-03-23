@@ -1,5 +1,4 @@
 import { Command } from "commander";
-import { ValidationError } from "../errors.ts";
 import { validateWorkflowName } from "../workflow.ts";
 import { startCoordinator } from "./coordinator.ts";
 
