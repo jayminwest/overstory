@@ -567,6 +567,12 @@ describe("startCoordinator", () => {
 		expect(calls.createSession[0]?.env?.OVERSTORY_PROFILE).toBe("ov-co-creation");
 	});
 
+	test("rejects unknown --workflow values", async () => {
+		await expect(
+			captureStdout(() => coordinatorCommand(["start", "--workflow", "bogus", "--no-attach"])),
+		).rejects.toThrow(ValidationError);
+	});
+
 	test("deploys hooks to project root .claude/settings.local.json", async () => {
 		const { deps } = makeDeps();
 		const originalSleep = Bun.sleep;

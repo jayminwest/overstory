@@ -165,7 +165,6 @@ export async function discoverCommand(
 			watchdog: opts.watchdog ?? false,
 			monitor: false,
 			profile: "ov-discovery",
-			workflow: undefined,
 			coordinatorName,
 			beaconBuilder: (_trackerCli) => buildDiscoveryBeacon(categories, coordinatorName),
 		},

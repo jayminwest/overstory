@@ -410,7 +410,10 @@ export const COMMANDS: readonly CommandDef[] = [
 					{ name: "--attach", desc: "Attach to tmux session" },
 					{ name: "--no-attach", desc: "Do not attach to tmux session" },
 					{ name: "--watchdog", desc: "Auto-start watchdog daemon" },
-					{ name: "--monitor", desc: "Auto-start Tier 2 monitor agent" },
+					{
+						name: "--monitor",
+						desc: "Auto-start the Tier 2 monitor agent alongside the coordinator",
+					},
 					{
 						name: "--workflow",
 						desc: "Workflow profile alias",
@@ -444,7 +447,10 @@ export const COMMANDS: readonly CommandDef[] = [
 					{ name: "--attach", desc: "Attach to tmux session" },
 					{ name: "--no-attach", desc: "Do not attach to tmux session" },
 					{ name: "--watchdog", desc: "Auto-start watchdog daemon" },
-					{ name: "--monitor", desc: "Auto-start Tier 2 monitor agent" },
+					{
+						name: "--monitor",
+						desc: "Auto-start the Tier 2 monitor agent alongside the coordinator",
+					},
 					{ name: "--json", desc: "JSON output" },
 				],
 			},

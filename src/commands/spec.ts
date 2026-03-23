@@ -10,7 +10,7 @@
 
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { loadConfig, resolveProjectRoot } from "../config.ts";
+import { loadProjectDefaultProfile, resolveProjectRoot } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
@@ -98,8 +98,8 @@ export async function specWriteCommand(taskId: string, opts: SpecWriteOptions): 
 	}
 
 	const projectRoot = await resolveProjectRoot(process.cwd());
-	const config = await loadConfig(projectRoot);
-	const workflow = opts.workflow ?? process.env.OVERSTORY_PROFILE ?? config.project.defaultProfile;
+	const defaultProfile = await loadProjectDefaultProfile(projectRoot);
+	const workflow = opts.workflow ?? process.env.OVERSTORY_PROFILE ?? defaultProfile;
 
 	const specPath = await writeSpec(projectRoot, taskId, body, opts.agent, {
 		workflow,

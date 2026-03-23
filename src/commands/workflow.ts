@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { ValidationError } from "../errors.ts";
-import { normalizeWorkflowName } from "../workflow.ts";
+import { validateWorkflowName } from "../workflow.ts";
 import { startCoordinator } from "./coordinator.ts";
 
 export interface WorkflowStartOptions {
@@ -19,13 +19,7 @@ export async function workflowStartCommand(
 	opts: WorkflowStartOptions,
 	deps: WorkflowDeps = {},
 ): Promise<void> {
-	const normalized = normalizeWorkflowName(workflow);
-	if (!normalized) {
-		throw new ValidationError(
-			`Unknown workflow '${workflow}'. Valid workflows: delivery, co-creation`,
-			{ field: "workflow" },
-		);
-	}
+	const normalized = validateWorkflowName(workflow);
 
 	const attach = opts.attach !== undefined ? opts.attach : !!process.stdout.isTTY;
 	const start = deps._startCoordinator ?? startCoordinator;
@@ -48,7 +42,7 @@ export function createWorkflowCommand(deps: WorkflowDeps = {}): Command {
 		.option("--attach", "Always attach to tmux session after start")
 		.option("--no-attach", "Never attach to tmux session after start")
 		.option("--watchdog", "Auto-start watchdog daemon with coordinator")
-		.option("--monitor", "Auto-start Tier 2 monitor agent with coordinator")
+		.option("--monitor", "Auto-start the Tier 2 monitor agent alongside the coordinator")
 		.option("--json", "Output as JSON")
 		.action(
 			async (

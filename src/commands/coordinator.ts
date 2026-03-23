@@ -29,7 +29,7 @@ import { createRunStore, createSessionStore } from "../sessions/store.ts";
 import { resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession } from "../types.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
-import { resolveProfileName } from "../workflow.ts";
+import { resolveProfileName, validateWorkflowName } from "../workflow.ts";
 import type { SessionState } from "../worktree/tmux.ts";
 import {
 	capturePaneContent,
@@ -374,7 +374,8 @@ export async function startCoordinatorSession(
 	const agentDefFile = agentDefFileOpt ?? COORDINATOR_SPEC.agentDefFile;
 	const displayName = displayNameOpt ?? COORDINATOR_SPEC.displayName;
 	const beaconBuilder = beaconBuilderOpt ?? buildCoordinatorBeacon;
-	const effectiveProfile = resolveProfileName(profileFlag ?? workflowFlag);
+	const workflow = validateWorkflowName(workflowFlag);
+	const effectiveProfile = resolveProfileName(profileFlag ?? workflow);
 
 	if (isRunningAsRoot()) {
 		throw new AgentError(
@@ -1383,7 +1384,7 @@ export function createPersistentAgentCommand(
 		.option("--attach", "Always attach to tmux session after start")
 		.option("--no-attach", "Never attach to tmux session after start")
 		.option("--watchdog", `Auto-start watchdog daemon with ${spec.commandName}`)
-		.option("--monitor", `Auto-start Tier 2 monitor agent with ${spec.commandName}`)
+		.option("--monitor", `Auto-start the Tier 2 monitor agent alongside the ${spec.commandName}`)
 		.option("--profile <name>", "Canopy profile to apply to spawned agents")
 		.option("--workflow <name>", "Workflow profile alias: delivery or co-creation")
 		.option("--json", "Output as JSON")

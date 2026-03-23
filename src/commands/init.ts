@@ -445,6 +445,22 @@ export function buildAgentManifest(): AgentManifest {
 			canSpawn: false,
 			constraints: ["read-only", "no-worktree"],
 		},
+		"ov-delivery": {
+			file: "ov-delivery.md",
+			model: "sonnet",
+			tools: ["Read"],
+			capabilities: ["workflow-profile", "workflow-delivery"],
+			canSpawn: false,
+			constraints: ["profile-only"],
+		},
+		"ov-co-creation": {
+			file: "ov-co-creation.md",
+			model: "sonnet",
+			tools: ["Read"],
+			capabilities: ["workflow-profile", "workflow-co-creation"],
+			canSpawn: false,
+			constraints: ["profile-only"],
+		},
 	};
 
 	// Build capability index: map each capability to agent names that declare it

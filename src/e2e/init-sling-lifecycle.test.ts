@@ -32,6 +32,7 @@ const EXPECTED_AGENT_DEFS = [
 	"monitor.md",
 	"orchestrator.md",
 	"ov-co-creation.md",
+	"ov-delivery.md",
 	"reviewer.md",
 	"scout.md",
 ];
@@ -115,7 +116,7 @@ describe("E2E: init→sling lifecycle on external project", () => {
 		expect(config.project.name).toBeTruthy();
 	});
 
-	test("manifest loads successfully with all 8 agents (supervisor deprecated)", async () => {
+	test("manifest loads successfully with the default agents and workflow profiles", async () => {
 		await initCommand({ _spawner: noopSpawner });
 
 		const manifestPath = join(tempDir, ".overstory", "agent-manifest.json");
@@ -124,7 +125,7 @@ describe("E2E: init→sling lifecycle on external project", () => {
 
 		const manifest = await loader.load();
 
-		// All 8 agents present (supervisor removed: deprecated, use lead instead)
+		// Default runtime agents plus workflow profile prompt entries are present.
 		const agentNames = Object.keys(manifest.agents).sort();
 		expect(agentNames).toEqual([
 			"builder",
@@ -133,6 +134,8 @@ describe("E2E: init→sling lifecycle on external project", () => {
 			"merger",
 			"monitor",
 			"orchestrator",
+			"ov-co-creation",
+			"ov-delivery",
 			"reviewer",
 			"scout",
 		]);
