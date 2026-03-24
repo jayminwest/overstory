@@ -54,6 +54,11 @@ import { brand, chalk, muted, setQuiet } from "./logging/color.ts";
 
 export const VERSION = "0.9.3";
 
+function collectValues(value: string, previous: string[] = []): string[] {
+	previous.push(value);
+	return previous;
+}
+
 const rawArgs = process.argv.slice(2);
 
 // Handle --version --json before Commander processes the flag
@@ -304,12 +309,19 @@ const specCmd = program.command("spec").description("Manage task specifications"
 
 specCmd
 	.command("write")
-	.description("Write a task spec file (.overstory/specs by default, openspec for co-creation)")
+	.description("Write a task spec file (.overstory/specs by default, Trellis for co-creation)")
 	.argument("<task-id>", "Task ID for the spec file")
 	.option("--body <content>", "Spec content (or pipe via stdin)")
+	.option("--title <title>", "Title for Trellis spec output")
 	.option("--agent <name>", "Agent writing the spec (for attribution)")
+	.option("--seed <seed>", "Linked Seeds issue ID for Trellis spec output")
+	.option("--reference <text>", "Reference path or URL for Trellis spec output", collectValues, [])
+	.option("--constraint <text>", "Constraint line for Trellis spec output", collectValues, [])
+	.option("--acceptance <text>", "Acceptance line for Trellis spec output", collectValues, [])
 	.option("--workflow <name>", "Workflow profile alias: delivery or co-creation")
-	.option("--openspec", "Write to openspec/changes/<task-id>/tasks.md")
+	.option("--trellis", "Write to .trellis/specs/<task-id>.yaml")
+	.option("--openspec", "Deprecated alias for --trellis")
+	.option("--force", "Replace an existing Trellis spec instead of refusing overwrite")
 	.option("--json", "Output as JSON")
 	.action(async (taskId, opts) => {
 		await specWriteCommand(taskId, opts);

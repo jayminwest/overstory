@@ -52,7 +52,7 @@ describe("resolveWorkflowProfile", () => {
 		expect(resolveWorkflowProfile("co-creation")).toEqual({
 			workflow: "co-creation",
 			profile: "ov-co-creation",
-			specLayout: "openspec",
+			specLayout: "trellis",
 		});
 	});
 });
@@ -75,15 +75,15 @@ describe("resolveSpecPathForWorkflow", () => {
 		);
 	});
 
-	test("uses openspec tasks for co-creation", () => {
+	test("uses Trellis specs for co-creation", () => {
 		expect(resolveSpecPathForWorkflow("/repo", "task-1", "co-creation")).toBe(
-			join("/repo", "openspec", "changes", "task-1", "tasks.md"),
+			join("/repo", ".trellis", "specs", "task-1.yaml"),
 		);
 	});
 
-	test("allows forcing openspec regardless of workflow", () => {
+	test("allows forcing Trellis regardless of workflow", () => {
 		expect(resolveSpecPathForWorkflow("/repo", "task-1", undefined, true)).toBe(
-			join("/repo", "openspec", "changes", "task-1", "tasks.md"),
+			join("/repo", ".trellis", "specs", "task-1.yaml"),
 		);
 	});
 });

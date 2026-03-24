@@ -90,7 +90,7 @@ Every command supports `--json` where noted. Global flags: `-q`/`--quiet`, `--ti
 | `ov sling <task-id>` | Spawn a worker agent (`--capability`, `--name`, `--spec`, `--files`, `--parent`, `--depth`, `--skip-scout`, `--skip-review`, `--max-agents`, `--dispatch-max-agents`, `--skip-task-check`, `--no-scout-check`, `--runtime`, `--base-branch`, `--profile`, `--workflow`, `--json`) |
 | `ov stop <agent-name>` | Terminate a running agent (`--clean-worktree`, `--json`) |
 | `ov prime` | Load context for orchestrator/agent (`--agent`, `--compact`) |
-| `ov spec write <task-id>` | Write a task specification (`--body`, `--workflow`, `--openspec`) |
+| `ov spec write <task-id>` | Write a task specification (`--body`, `--title`, `--seed`, `--reference`, `--constraint`, `--acceptance`, `--workflow`, `--trellis`, `--force`) |
 | `ov discover` | Discover a brownfield codebase via coordinator-driven scout swarm (`--skip`, `--name`, `--attach`, `--watchdog`, `--json`) |
 | `ov workflow start <workflow>` | Start the coordinator in `delivery` or `co-creation` mode |
 | `ov update` | Refresh `.overstory/` managed files from installed package (`--agents`, `--manifest`, `--hooks`, `--dry-run`, `--json`) |

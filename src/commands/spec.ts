@@ -18,9 +18,16 @@ import { resolveSpecPathForWorkflow } from "../workflow.ts";
 
 export interface SpecWriteOptions {
 	body?: string;
+	title?: string;
 	agent?: string;
+	seed?: string;
+	reference?: string[];
+	constraint?: string[];
+	acceptance?: string[];
 	workflow?: string;
+	trellis?: boolean;
 	openspec?: boolean;
+	force?: boolean;
 	json?: boolean;
 }
 
@@ -46,26 +53,120 @@ export async function writeSpec(
 	taskId: string,
 	body: string,
 	agent?: string,
-	opts: { workflow?: string; openspec?: boolean } = {},
+	opts: {
+		title?: string;
+		seed?: string;
+		reference?: string[];
+		constraint?: string[];
+		acceptance?: string[];
+		workflow?: string;
+		trellis?: boolean;
+		openspec?: boolean;
+		force?: boolean;
+	} = {},
 ): Promise<string> {
-	const specPath = resolveSpecPathForWorkflow(projectRoot, taskId, opts.workflow, opts.openspec);
+	const specPath = resolveSpecPathForWorkflow(
+		projectRoot,
+		taskId,
+		opts.workflow,
+		opts.trellis ?? opts.openspec,
+	);
 	await mkdir(dirname(specPath), { recursive: true });
-
-	// Build the spec content with optional attribution header
-	let content = "";
-	if (agent) {
-		content += `<!-- written-by: ${agent} -->\n`;
+	if (specPath.endsWith(".yaml") && !opts.force && (await Bun.file(specPath).exists())) {
+		throw new ValidationError(
+			`Trellis spec already exists for '${taskId}'. Use 'trellis spec update ${taskId} ...' for ongoing edits or pass --force to replace it.`,
+			{ field: "taskId", value: taskId },
+		);
 	}
-	content += body;
 
-	// Ensure trailing newline
-	if (!content.endsWith("\n")) {
-		content += "\n";
-	}
+	const content = specPath.endsWith(".yaml")
+		? buildTrellisSpec(taskId, body, agent, opts)
+		: buildMarkdownSpec(body, agent);
 
 	await Bun.write(specPath, content);
 
 	return specPath;
+}
+
+function buildMarkdownSpec(body: string, agent?: string): string {
+	let content = "";
+	if (agent) content += `<!-- written-by: ${agent} -->\n`;
+	content += body;
+	if (!content.endsWith("\n")) content += "\n";
+	return content;
+}
+
+function buildTrellisSpec(
+	taskId: string,
+	body: string,
+	agent?: string,
+	opts: {
+		title?: string;
+		seed?: string;
+		reference?: string[];
+		constraint?: string[];
+		acceptance?: string[];
+	} = {},
+): string {
+	const timestamp = new Date().toISOString();
+	const objective = body.trimEnd();
+	const title = (opts.title?.trim() || deriveTrellisTitle(taskId, objective)).trim();
+	const lines: string[] = [];
+	if (agent) {
+		lines.push(`# written-by: ${agent}`);
+	}
+	lines.push(`id: ${quoteYamlScalar(taskId)}`);
+	lines.push(`title: ${quoteYamlScalar(title)}`);
+	if (opts.seed?.trim()) {
+		lines.push(`seed: ${quoteYamlScalar(opts.seed.trim())}`);
+	}
+	lines.push("status: draft");
+	lines.push(`createdAt: ${quoteYamlScalar(timestamp)}`);
+	lines.push(`updatedAt: ${quoteYamlScalar(timestamp)}`);
+	lines.push("objective: |");
+	for (const line of objective.split("\n")) {
+		lines.push(`  ${line}`);
+	}
+	if (objective.length === 0) lines.push("  ");
+	lines.push("constraints:");
+	for (const constraint of opts.constraint ?? []) {
+		lines.push(`  - ${quoteYamlScalar(constraint)}`);
+	}
+	lines.push("acceptance:");
+	for (const item of opts.acceptance ?? []) {
+		lines.push(`  - ${quoteYamlScalar(item)}`);
+	}
+	lines.push("references:");
+	for (const reference of opts.reference ?? []) {
+		lines.push(`  - ${quoteYamlScalar(reference)}`);
+	}
+	return `${lines.join("\n")}\n`;
+}
+
+function deriveTrellisTitle(taskId: string, body: string): string {
+	for (const rawLine of body.split("\n")) {
+		const line = rawLine.trim();
+		if (!line || line.startsWith("<!--")) continue;
+		if (line.startsWith("#")) {
+			const heading = line.replace(/^#+\s*/, "").trim();
+			return shortenTrellisTitle(heading || taskId);
+		}
+		return shortenTrellisTitle(line);
+	}
+	return taskId;
+}
+
+function shortenTrellisTitle(input: string, maxLength = 72): string {
+	const collapsed = input.replace(/\s+/g, " ").trim();
+	if (collapsed.length <= maxLength) return collapsed;
+	return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function quoteYamlScalar(value: string): string {
+	if (value === "" || /[:#[\]{}]/.test(value) || value.includes("\n") || value.startsWith(" ")) {
+		return JSON.stringify(value);
+	}
+	return value;
 }
 
 /**
@@ -102,8 +203,14 @@ export async function specWriteCommand(taskId: string, opts: SpecWriteOptions): 
 	const workflow = opts.workflow ?? process.env.OVERSTORY_PROFILE ?? defaultProfile;
 
 	const specPath = await writeSpec(projectRoot, taskId, body, opts.agent, {
+		title: opts.title,
+		seed: opts.seed,
+		reference: opts.reference,
+		constraint: opts.constraint,
+		acceptance: opts.acceptance,
 		workflow,
-		openspec: opts.openspec ?? false,
+		trellis: opts.trellis ?? opts.openspec ?? false,
+		force: opts.force ?? false,
 	});
 	if (opts.json) {
 		jsonOutput("spec-write", { taskId, path: specPath });

@@ -138,23 +138,98 @@ describe("writeSpec", () => {
 		expect(content).toBe("version 2\n");
 	});
 
-	test("writes OpenSpec task artifacts for co-creation workflow", async () => {
+	test("writes Trellis spec artifacts for co-creation workflow", async () => {
 		const specPath = await writeSpec(tempDir, "task-open", "# OpenSpec body", "scout-1", {
 			workflow: "co-creation",
 		});
 
-		expect(specPath).toBe(join(tempDir, "openspec", "changes", "task-open", "tasks.md"));
+		expect(specPath).toBe(join(tempDir, ".trellis", "specs", "task-open.yaml"));
 		const content = await Bun.file(specPath).text();
-		expect(content).toContain("<!-- written-by: scout-1 -->");
-		expect(content).toContain("# OpenSpec body");
+		expect(content).toContain("# written-by: scout-1");
+		expect(content).toContain("id: task-open");
+		expect(content).toContain("title: OpenSpec body");
+		expect(content).toContain("objective: |");
+		expect(content).toContain("  # OpenSpec body");
 	});
 
-	test("can force openspec output without workflow alias", async () => {
-		const specPath = await writeSpec(tempDir, "task-force", "# Forced", undefined, {
-			openspec: true,
+	test("writes richer Trellis metadata when provided", async () => {
+		const specPath = await writeSpec(tempDir, "task-rich", "Document the dogfood flow", "scout-1", {
+			workflow: "co-creation",
+			title: "Dogfood Trellis flow",
+			seed: "agent-context-0002",
+			reference: ["README.md", "docs/README.md"],
+			constraint: ["Keep docs authoritative"],
+			acceptance: ["Agents can find the canon index"],
 		});
 
-		expect(specPath).toBe(join(tempDir, "openspec", "changes", "task-force", "tasks.md"));
+		expect(specPath).toBe(join(tempDir, ".trellis", "specs", "task-rich.yaml"));
+		const content = await Bun.file(specPath).text();
+		expect(content).toContain("title: Dogfood Trellis flow");
+		expect(content).toContain("seed: agent-context-0002");
+		expect(content).toContain("objective: |");
+		expect(content).toContain("  Document the dogfood flow");
+		expect(content).toContain("  - Keep docs authoritative");
+		expect(content).toContain("  - Agents can find the canon index");
+		expect(content).toContain("  - README.md");
+		expect(content).toContain("  - docs/README.md");
+	});
+
+	test("derives a shortened Trellis title instead of copying the full body", async () => {
+		const body =
+			"Create and maintain a stable canon/doctrine index for docs/, separating core canon from supporting context and making the authoritative navigation path obvious to operators and agents.";
+
+		const specPath = await writeSpec(tempDir, "task-short", body, undefined, {
+			workflow: "co-creation",
+		});
+
+		const content = await Bun.file(specPath).text();
+		expect(specPath).toBe(join(tempDir, ".trellis", "specs", "task-short.yaml"));
+		expect(content).toContain(
+			"title: Create and maintain a stable canon/doctrine index for docs/, separating…",
+		);
+		expect(content).toContain("objective: |");
+		expect(content).toContain(`  ${body}`);
+	});
+
+	test("can force Trellis output without workflow alias", async () => {
+		const specPath = await writeSpec(tempDir, "task-force", "# Forced", undefined, {
+			trellis: true,
+		});
+
+		expect(specPath).toBe(join(tempDir, ".trellis", "specs", "task-force.yaml"));
+	});
+
+	test("refuses to overwrite an existing Trellis spec by default", async () => {
+		await writeSpec(tempDir, "task-safe", "version 1", undefined, {
+			workflow: "co-creation",
+		});
+
+		await expect(
+			writeSpec(tempDir, "task-safe", "version 2", undefined, {
+				workflow: "co-creation",
+			}),
+		).rejects.toThrow("Trellis spec already exists");
+
+		const content = await Bun.file(join(tempDir, ".trellis", "specs", "task-safe.yaml")).text();
+		expect(content).toContain("  version 1");
+		expect(content).not.toContain("  version 2");
+	});
+
+	test("allows replacing an existing Trellis spec with --force", async () => {
+		await writeSpec(tempDir, "task-force-replace", "version 1", undefined, {
+			workflow: "co-creation",
+		});
+
+		await writeSpec(tempDir, "task-force-replace", "version 2", undefined, {
+			workflow: "co-creation",
+			force: true,
+		});
+
+		const content = await Bun.file(
+			join(tempDir, ".trellis", "specs", "task-force-replace.yaml"),
+		).text();
+		expect(content).toContain("  version 2");
+		expect(content).not.toContain("  version 1");
 	});
 });
 
@@ -196,15 +271,70 @@ describe("specWriteCommand (integration)", () => {
 		expect(content).toBe("# No Agent\n");
 	});
 
-	test("uses workflow alias to select openspec output path", async () => {
+	test("uses workflow alias to select Trellis output path", async () => {
 		await specWriteCommand("task-cc", { body: "# Co-create", workflow: "co-creation" });
 
-		const specPath = join(tempDir, "openspec", "changes", "task-cc", "tasks.md");
+		const specPath = join(tempDir, ".trellis", "specs", "task-cc.yaml");
 		const content = await Bun.file(specPath).text();
-		expect(content).toBe("# Co-create\n");
+		expect(content).toContain("title: Co-create");
+		expect(content).toContain("  # Co-create");
 	});
 
-	test("uses OVERSTORY_PROFILE env to default co-creation specs into openspec", async () => {
+	test("passes Trellis bootstrap metadata through the CLI surface", async () => {
+		await specWriteCommand("task-meta", {
+			body: "Write a better initial Trellis artifact",
+			title: "Better Trellis bootstrap",
+			seed: "operator-cli-0002",
+			reference: ["README.md", "docs/contract.md"],
+			constraint: ["Keep Trellis as the source of truth"],
+			acceptance: ["Initial spec is useful without immediate rewrite"],
+			workflow: "co-creation",
+		});
+
+		const specPath = join(tempDir, ".trellis", "specs", "task-meta.yaml");
+		const content = await Bun.file(specPath).text();
+		expect(content).toContain("title: Better Trellis bootstrap");
+		expect(content).toContain("seed: operator-cli-0002");
+		expect(content).toContain("  - Keep Trellis as the source of truth");
+		expect(content).toContain("  - Initial spec is useful without immediate rewrite");
+		expect(content).toContain("  - README.md");
+		expect(content).toContain("  - docs/contract.md");
+	});
+
+	test("refuses to overwrite an existing Trellis spec via the CLI surface", async () => {
+		await specWriteCommand("task-existing", {
+			body: "first version",
+			workflow: "co-creation",
+		});
+
+		await expect(
+			specWriteCommand("task-existing", {
+				body: "second version",
+				workflow: "co-creation",
+			}),
+		).rejects.toThrow("Trellis spec already exists");
+	});
+
+	test("allows Trellis overwrite via the CLI surface when forced", async () => {
+		await specWriteCommand("task-existing-force", {
+			body: "first version",
+			workflow: "co-creation",
+		});
+
+		await specWriteCommand("task-existing-force", {
+			body: "second version",
+			workflow: "co-creation",
+			force: true,
+		});
+
+		const content = await Bun.file(
+			join(tempDir, ".trellis", "specs", "task-existing-force.yaml"),
+		).text();
+		expect(content).toContain("  second version");
+		expect(content).not.toContain("  first version");
+	});
+
+	test("uses OVERSTORY_PROFILE env to default co-creation specs into Trellis", async () => {
 		const previous = process.env.OVERSTORY_PROFILE;
 		process.env.OVERSTORY_PROFILE = "ov-co-creation";
 
@@ -218,8 +348,9 @@ describe("specWriteCommand (integration)", () => {
 			}
 		}
 
-		const specPath = join(tempDir, "openspec", "changes", "task-env", "tasks.md");
+		const specPath = join(tempDir, ".trellis", "specs", "task-env.yaml");
 		const content = await Bun.file(specPath).text();
-		expect(content).toBe("# Env profile\n");
+		expect(content).toContain("title: Env profile");
+		expect(content).toContain("  # Env profile");
 	});
 });

@@ -2,7 +2,7 @@ import { join, resolve } from "node:path";
 import { ValidationError } from "./errors.ts";
 
 export type WorkflowName = "delivery" | "co-creation";
-export type WorkflowSpecLayout = "overstory" | "openspec";
+export type WorkflowSpecLayout = "overstory" | "trellis";
 
 export interface WorkflowProfile {
 	workflow: WorkflowName;
@@ -19,7 +19,7 @@ const WORKFLOW_PROFILES: Record<WorkflowName, WorkflowProfile> = {
 	"co-creation": {
 		workflow: "co-creation",
 		profile: "ov-co-creation",
-		specLayout: "openspec",
+		specLayout: "trellis",
 	},
 };
 
@@ -65,11 +65,11 @@ export function resolveSpecPathForWorkflow(
 	projectRoot: string,
 	taskId: string,
 	input: string | undefined,
-	forceOpenSpec = false,
+	forceTrellis = false,
 ): string {
 	const workflow = resolveWorkflowProfile(input);
-	if (forceOpenSpec || workflow?.specLayout === "openspec") {
-		return join(projectRoot, "openspec", "changes", taskId, "tasks.md");
+	if (forceTrellis || workflow?.specLayout === "trellis") {
+		return join(projectRoot, ".trellis", "specs", `${taskId}.yaml`);
 	}
 	return join(projectRoot, ".overstory", "specs", `${taskId}.md`);
 }
