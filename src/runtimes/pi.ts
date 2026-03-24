@@ -150,8 +150,8 @@ export class PiRuntime implements AgentRuntime {
 	 * Claude Code's TUI sometimes swallows Enter during late initialization, so the
 	 * orchestrator resends the beacon until the pane leaves the "idle" state. Pi's TUI
 	 * does not have this issue AND its idle vs. processing states are indistinguishable
-	 * via detectReady (the header "pi v..." and status bar token counter are visible in
-	 * both states). Enabling the resend loop would spam Pi with duplicate beacon messages.
+	 * via detectReady (the status bar token counter is visible in both states).
+	 * Enabling the resend loop would spam Pi with duplicate beacon messages.
 	 */
 	requiresBeaconVerification(): boolean {
 		return false;

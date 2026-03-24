@@ -327,9 +327,9 @@ describe("PiRuntime", () => {
 			expect(state).toEqual({ phase: "ready" });
 		});
 
-		test("returns loading when only 1.0M status bar present (no header)", () => {
+		test("returns ready when only 1.0M status bar present (Pi >=0.55 no header)", () => {
 			const state = runtime.detectReady("0.0%/1.0M (auto)         (anthropic) claude-opus-4-6");
-			expect(state).toEqual({ phase: "loading" });
+			expect(state).toEqual({ phase: "ready" });
 		});
 
 		test("returns ready for 2.0M context window", () => {

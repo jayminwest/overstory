@@ -759,6 +759,17 @@ function validateConfig(config: OverstoryConfig): void {
 		}
 	}
 
+	// runtime.bashWrapper: validate if present
+	if (config.runtime?.bashWrapper !== undefined) {
+		const valid = ["auto", "always", "never"];
+		if (!valid.includes(config.runtime.bashWrapper)) {
+			process.stderr.write(
+				`[overstory] WARNING: runtime.bashWrapper must be one of ${valid.join(", ")}. Got: "${config.runtime.bashWrapper}". Using default ("auto").\n`,
+			);
+			config.runtime.bashWrapper = "auto";
+		}
+	}
+
 	// runtime.shellInitDelayMs: validate if present
 	if (config.runtime?.shellInitDelayMs !== undefined) {
 		const delay = config.runtime.shellInitDelayMs;
