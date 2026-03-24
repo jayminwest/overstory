@@ -486,11 +486,18 @@ export async function startCoordinatorSession(
 				...(profileFlag ? { OVERSTORY_PROFILE: profileFlag } : {}),
 			},
 		});
-		const pid = await tmux.createSession(tmuxSession, projectRoot, spawnCmd, {
-			...runtime.buildEnv(resolvedModel),
-			OVERSTORY_AGENT_NAME: coordinatorName,
-			...(profileFlag ? { OVERSTORY_PROFILE: profileFlag } : {}),
-		});
+		const pid = await tmux.createSession(
+			tmuxSession,
+			projectRoot,
+			spawnCmd,
+			{
+				...runtime.buildEnv(resolvedModel),
+				OVERSTORY_AGENT_NAME: coordinatorName,
+				...(profileFlag ? { OVERSTORY_PROFILE: profileFlag } : {}),
+			},
+			undefined,
+			config.runtime?.bashWrapper ?? "auto",
+		);
 
 		// Create a run for this coordinator session BEFORE recording the session,
 		// so the session can reference the run ID from the start.

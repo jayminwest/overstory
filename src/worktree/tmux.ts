@@ -106,6 +106,7 @@ export async function createSession(
 	command: string,
 	env?: Record<string, string>,
 	maxRetries = 3,
+	bashWrapper: "auto" | "always" | "never" = "auto",
 ): Promise<number> {
 	// Build environment exports for the tmux session
 	const exports: string[] = [];
@@ -129,16 +130,36 @@ export async function createSession(
 		}
 	}
 
-	// Build the startup script using bash syntax (export/unset).
-	// Then wrap it in `/bin/bash -c '...'` so it always runs in bash,
-	// regardless of the user's $SHELL. Without this, tmux uses the user's
-	// default shell (e.g. fish), which rejects bash export/unset syntax and
-	// causes the session to die instantly. Single-quote wrapping with escaped
-	// single quotes prevents any intermediate shell from expanding variables
-	// before bash receives them. (GitHub #86)
+	// Build the startup script with inline exports prepended to the command.
+	//
+	// Bash wrapping (GitHub #86): fish shell rejects bash export/unset syntax,
+	// so we optionally wrap in `/bin/bash -c '...'`. However, the single-quote
+	// escaping breaks commands with complex quoting — notably Pi runtime's
+	// `$(cat '...')` subshells — so we only wrap when actually needed.
+	//
+	// bashWrapper modes:
+	//   "auto"   — detect $SHELL; wrap only for non-POSIX shells (fish)
+	//   "always" — always wrap (legacy behavior)
+	//   "never"  — never wrap (assume POSIX-compatible shell)
 	const startupScript = exports.length > 0 ? `${exports.join(" && ")} && ${command}` : command;
-	const wrappedCommand =
-		exports.length > 0 ? `/bin/bash -c '${startupScript.replace(/'/g, "'\\''")}'` : command;
+
+	let needsWrapper = false;
+	if (exports.length > 0) {
+		if (bashWrapper === "always") {
+			needsWrapper = true;
+		} else if (bashWrapper === "auto") {
+			// Detect fish shell by checking for "/fish" in $SHELL path.
+			// Using "/fish" (with slash) avoids false positives on hypothetical
+			// shells with "fish" elsewhere in the name.
+			const shell = process.env.SHELL ?? "";
+			needsWrapper = shell.includes("/fish");
+		}
+		// "never" → needsWrapper stays false
+	}
+
+	const wrappedCommand = needsWrapper
+		? `/bin/bash -c '${startupScript.replace(/'/g, "'\\''")}'`
+		: startupScript;
 
 	const { exitCode, stderr } = await runCommand(
 		tmuxCmd("new-session", "-d", "-s", name, "-c", cwd, wrappedCommand),

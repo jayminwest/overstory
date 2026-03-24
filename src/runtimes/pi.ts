@@ -150,8 +150,8 @@ export class PiRuntime implements AgentRuntime {
 	 * Claude Code's TUI sometimes swallows Enter during late initialization, so the
 	 * orchestrator resends the beacon until the pane leaves the "idle" state. Pi's TUI
 	 * does not have this issue AND its idle vs. processing states are indistinguishable
-	 * via detectReady (the header "pi v..." and status bar token counter are visible in
-	 * both states). Enabling the resend loop would spam Pi with duplicate beacon messages.
+	 * via detectReady (the status bar token counter is visible in both states).
+	 * Enabling the resend loop would spam Pi with duplicate beacon messages.
 	 */
 	requiresBeaconVerification(): boolean {
 		return false;
@@ -167,13 +167,13 @@ export class PiRuntime implements AgentRuntime {
 	 * @returns Current readiness phase
 	 */
 	detectReady(paneContent: string): ReadyState {
-		// Pi's TUI shows "pi v<version>" in the header and a status bar with
-		// a token usage indicator like "0.0%/200k" or "0.0%/1.0M" when fully rendered.
-		// The context window size uses k-scale (e.g. 200k) for smaller models and
-		// M-scale (e.g. 1.0M) for Opus/Sonnet with 1M+ context windows.
-		const hasHeader = paneContent.includes("pi v");
+		// Pi's TUI shows a status bar with a token usage indicator like
+		// "0.0%/200k" or "0.0%/1.0M" when fully rendered. Older Pi versions
+		// also showed a "pi v<version>" header, but newer versions (>=0.55)
+		// omit it. The status bar alone is a reliable readiness signal.
+		// The context window uses k-scale (200k) or M-scale (1.0M).
 		const hasStatusBar = /\d+\.\d+%\/[\d.]+[kKmM]/.test(paneContent);
-		if (hasHeader && hasStatusBar) {
+		if (hasStatusBar) {
 			return { phase: "ready" };
 		}
 		return { phase: "loading" };
