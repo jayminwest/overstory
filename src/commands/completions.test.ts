@@ -20,6 +20,7 @@ const EXPECTED_COMMAND_NAMES = [
 	"sessions",
 	"status",
 	"dashboard",
+	"discover",
 	"inspect",
 	"merge",
 	"nudge",
@@ -44,6 +45,7 @@ const EXPECTED_COMMAND_NAMES = [
 	"worktree",
 	"run",
 	"ecosystem",
+	"update",
 	"upgrade",
 	"completions",
 ] satisfies string[];

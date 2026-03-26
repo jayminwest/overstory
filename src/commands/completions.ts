@@ -176,6 +176,19 @@ export const COMMANDS: readonly CommandDef[] = [
 		],
 	},
 	{
+		name: "discover",
+		desc: "Discover a brownfield codebase via coordinator-driven scout swarm",
+		flags: [
+			{ name: "--skip", desc: "Skip categories (comma-separated)", takesValue: true },
+			{ name: "--name", desc: "Coordinator agent name", takesValue: true },
+			{ name: "--attach", desc: "Always attach to tmux session after start" },
+			{ name: "--no-attach", desc: "Never attach to tmux session after start" },
+			{ name: "--watchdog", desc: "Auto-start watchdog daemon with coordinator" },
+			{ name: "--json", desc: "JSON output" },
+			{ name: "--help", desc: "Show help" },
+		],
+	},
+	{
 		name: "inspect",
 		desc: "Deep inspection of a single agent",
 		flags: [
@@ -668,6 +681,18 @@ export const COMMANDS: readonly CommandDef[] = [
 		name: "ecosystem",
 		desc: "Show a summary dashboard of all installed os-eco tools",
 		flags: [
+			{ name: "--json", desc: "JSON output" },
+			{ name: "--help", desc: "Show help" },
+		],
+	},
+	{
+		name: "update",
+		desc: "Refresh .overstory/ managed files from the installed package",
+		flags: [
+			{ name: "--agents", desc: "Refresh agent definition files only" },
+			{ name: "--manifest", desc: "Refresh agent-manifest.json only" },
+			{ name: "--hooks", desc: "Refresh hooks.json only" },
+			{ name: "--dry-run", desc: "Show what would change without writing" },
 			{ name: "--json", desc: "JSON output" },
 			{ name: "--help", desc: "Show help" },
 		],

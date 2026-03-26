@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { loadConfig } from "../config.ts";
 import { jsonOutput } from "../json.ts";
-import { accent, printError, printHint } from "../logging/color.ts";
+import { accent, muted, printError, printHint, printSuccess } from "../logging/color.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import {
@@ -32,8 +32,8 @@ function listSessionHints(sessions: readonly AgentSession[]): void {
 
 	printHint("Attachable sessions:");
 	for (const session of sessions) {
-		printHint(
-			`  ${session.agentName} -> ${session.tmuxSession} (${session.capability}, ${session.state})`,
+		console.log(
+			`  ${accent(session.agentName)} -> ${session.tmuxSession} ${muted(`(${session.capability}, ${session.state})`)}`,
 		);
 	}
 }
@@ -129,7 +129,7 @@ async function attachToSession(
 		}
 
 		printError(
-			"Tmux session is not alive",
+			"tmux session is not alive",
 			`${resolved.session.agentName} -> ${resolved.session.tmuxSession}`,
 		);
 		process.exitCode = 1;
@@ -145,7 +145,7 @@ async function attachToSession(
 		return;
 	}
 
-	printHint(`Attaching to ${accent(resolved.session.agentName)} (${resolved.session.tmuxSession})`);
+	printSuccess(`Attaching to ${resolved.session.agentName}`, resolved.session.tmuxSession);
 	Bun.spawnSync(
 		buildProjectTmuxCliArgs(["attach-session", "-t", resolved.session.tmuxSession], projectRoot),
 		{
@@ -188,10 +188,8 @@ export function createSessionsCommand(): Command {
 			}
 
 			for (const row of rows) {
-				printHint(
-					`${row.agentName} -> ${row.tmuxSession} (${row.capability}, ${row.state}, ${
-						row.alive ? "alive" : "dead"
-					})`,
+				console.log(
+					`${accent(row.agentName)} -> ${row.tmuxSession} ${muted(`(${row.capability}, ${row.state}, ${row.alive ? "alive" : "dead"})`)}`,
 				);
 			}
 		});
@@ -241,7 +239,7 @@ export function createSessionsCommand(): Command {
 					tmuxSession: resolved.session.tmuxSession,
 				});
 			} else {
-				printHint(`Killed ${resolved.session.agentName} (${resolved.session.tmuxSession})`);
+				printSuccess(`Killed ${resolved.session.agentName}`, resolved.session.tmuxSession);
 			}
 		});
 
