@@ -9,14 +9,18 @@
  */
 
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname } from "node:path";
+import { loadProjectDefaultProfile, resolveProjectRoot } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
+import { resolveSpecPathForWorkflow } from "../workflow.ts";
 
 export interface SpecWriteOptions {
 	body?: string;
 	agent?: string;
+	workflow?: string;
+	openspec?: boolean;
 	json?: boolean;
 }
 
@@ -42,9 +46,10 @@ export async function writeSpec(
 	taskId: string,
 	body: string,
 	agent?: string,
+	opts: { workflow?: string; openspec?: boolean } = {},
 ): Promise<string> {
-	const specsDir = join(projectRoot, ".overstory", "specs");
-	await mkdir(specsDir, { recursive: true });
+	const specPath = resolveSpecPathForWorkflow(projectRoot, taskId, opts.workflow, opts.openspec);
+	await mkdir(dirname(specPath), { recursive: true });
 
 	// Build the spec content with optional attribution header
 	let content = "";
@@ -58,7 +63,6 @@ export async function writeSpec(
 		content += "\n";
 	}
 
-	const specPath = join(specsDir, `${taskId}.md`);
 	await Bun.write(specPath, content);
 
 	return specPath;
@@ -93,10 +97,14 @@ export async function specWriteCommand(taskId: string, opts: SpecWriteOptions): 
 		});
 	}
 
-	const { resolveProjectRoot } = await import("../config.ts");
 	const projectRoot = await resolveProjectRoot(process.cwd());
+	const defaultProfile = await loadProjectDefaultProfile(projectRoot);
+	const workflow = opts.workflow ?? process.env.OVERSTORY_PROFILE ?? defaultProfile;
 
-	const specPath = await writeSpec(projectRoot, taskId, body, opts.agent);
+	const specPath = await writeSpec(projectRoot, taskId, body, opts.agent, {
+		workflow,
+		openspec: opts.openspec ?? false,
+	});
 	if (opts.json) {
 		jsonOutput("spec-write", { taskId, path: specPath });
 	} else {

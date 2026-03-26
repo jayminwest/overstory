@@ -551,6 +551,28 @@ describe("startCoordinator", () => {
 		expect(session?.runId).toBe(fileRunId);
 	});
 
+	test("maps --workflow co-creation to OVERSTORY_PROFILE env", async () => {
+		const { deps, calls } = makeDeps();
+		const originalSleep = Bun.sleep;
+		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+		try {
+			await captureStdout(() =>
+				coordinatorCommand(["start", "--workflow", "co-creation", "--no-attach"], deps),
+			);
+		} finally {
+			Bun.sleep = originalSleep;
+		}
+
+		expect(calls.createSession[0]?.env?.OVERSTORY_PROFILE).toBe("ov-co-creation");
+	});
+
+	test("rejects unknown --workflow values", async () => {
+		await expect(
+			captureStdout(() => coordinatorCommand(["start", "--workflow", "bogus", "--no-attach"])),
+		).rejects.toThrow(ValidationError);
+	});
+
 	test("deploys hooks to project root .claude/settings.local.json", async () => {
 		const { deps } = makeDeps();
 		const originalSleep = Bun.sleep;
@@ -1599,6 +1621,18 @@ describe("watchdog integration", () => {
 			});
 			expect(output).toContain("--watchdog");
 			expect(output).toContain("watchdog");
+		});
+
+		test("start help text includes --workflow flag", async () => {
+			const cmd = createCoordinatorCommand({});
+			for (const sub of cmd.commands) {
+				sub.exitOverride();
+			}
+			const output = await captureStdout(async () => {
+				await cmd.parseAsync(["start", "--help"], { from: "user" }).catch(() => {});
+			});
+			expect(output).toContain("--workflow");
+			expect(output).toContain("co-creation");
 		});
 	});
 });

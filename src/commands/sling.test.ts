@@ -4,7 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveModel, resolveProviderEnv } from "../agents/manifest.ts";
-import { HierarchyError } from "../errors.ts";
+import { HierarchyError, ValidationError } from "../errors.ts";
 import { ClaudeRuntime } from "../runtimes/claude.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
@@ -27,6 +27,7 @@ import {
 	isRunningAsRoot,
 	parentHasScouts,
 	shouldShowScoutWarning,
+	slingCommand,
 	validateHierarchy,
 } from "./sling.ts";
 
@@ -176,6 +177,14 @@ describe("calculateStaggerDelay", () => {
 		const delay = calculateStaggerDelay(5_000, sessions, now);
 
 		expect(delay).toBe(0);
+	});
+});
+
+describe("slingCommand workflow validation", () => {
+	test("rejects unknown --workflow values before loading project config", async () => {
+		await expect(
+			slingCommand("task-123", { capability: "builder", workflow: "bogus" }),
+		).rejects.toThrow(ValidationError);
 	});
 });
 
