@@ -30,6 +30,8 @@ export interface PiRuntimeConfig {
 	provider: string;
 	/** Maps short aliases (e.g., "opus") to provider-qualified model IDs. */
 	modelMap: Record<string, string>;
+	/** Override the pi-os-eco extension source URL. Defaults to the bundled constant. */
+	extensionSource?: string;
 }
 
 /** Session-kind contract exported to managed runtimes/extensions. */

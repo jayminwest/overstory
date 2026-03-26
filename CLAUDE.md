@@ -46,6 +46,20 @@ Depth limit is configurable (default 2). Prevents runaway spawning.
 
 Purpose-built messaging via `bun:sqlite` in `.overstory/mail.db`. WAL mode for concurrent access from multiple agents. ~1-5ms per query. Independent of beads (which is too slow for high-frequency polling).
 
+### Agent Environment Variables
+
+Overstory injects these into every managed agent session (set via `buildOverstorySessionEnv`):
+
+| Variable | Description |
+|---|---|
+| `OVERSTORY_SESSION_KIND` | Session role: `standalone`, `orchestrator`, `coordinator`, `lead`, `worker`, `monitor` |
+| `OVERSTORY_AGENT_NAME` | Unique agent name within the run |
+| `OVERSTORY_CAPABILITY` | Agent capability: `builder`, `scout`, `reviewer`, `lead`, `merger` |
+| `OVERSTORY_WORKTREE_PATH` | Absolute path to this agent's git worktree |
+| `OVERSTORY_PROJECT_ROOT` | Absolute path to the target project root |
+| `OVERSTORY_TASK_ID` | Task ID (set when a task is assigned) |
+| `OVERSTORY_PROFILE` | Workflow profile name (set when a profile is resolved) |
+
 ## Directory Structure
 
 ```

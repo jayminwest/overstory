@@ -114,9 +114,10 @@ export class PiRuntime implements AgentRuntime {
 	}
 
 	private async syncProjectPiExtension(projectRoot: string): Promise<void> {
-		const commandArgs = (await hasConfiguredPiExtension(projectRoot, PI_EXTENSION_SOURCE))
-			? ["update", PI_EXTENSION_SOURCE]
-			: ["install", PI_EXTENSION_SOURCE, "-l"];
+		const extensionSource = this.config.extensionSource ?? PI_EXTENSION_SOURCE;
+		const commandArgs = (await hasConfiguredPiExtension(projectRoot, extensionSource))
+			? ["update", extensionSource]
+			: ["install", extensionSource, "-l"];
 		const result = await this.runPiCommand(commandArgs, projectRoot);
 		if (result.exitCode === 0) return;
 
