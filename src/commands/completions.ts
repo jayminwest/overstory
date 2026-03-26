@@ -743,7 +743,7 @@ export function generateBash(): string {
 		"  local cur prev words cword",
 		"  _init_completion || return",
 		"",
-		"  local commands='agents init sling prime stop status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run ecosystem upgrade completions'",
+		"  local commands='agents init sling prime stop status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec workflow coordinator supervisor hooks monitor mail group worktree run ecosystem upgrade completions'",
 		"",
 		"  # Top-level completion",
 		"  if [[ $cword -eq 1 ]]; then",

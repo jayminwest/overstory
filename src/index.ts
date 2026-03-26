@@ -304,12 +304,14 @@ const specCmd = program.command("spec").description("Manage task specifications"
 
 specCmd
 	.command("write")
-	.description("Write a task spec file (.overstory/specs by default, openspec for co-creation)")
+	.description(
+		"Write a task spec file (.overstory/specs by default, .trellis/specs for co-creation)",
+	)
 	.argument("<task-id>", "Task ID for the spec file")
 	.option("--body <content>", "Spec content (or pipe via stdin)")
 	.option("--agent <name>", "Agent writing the spec (for attribution)")
 	.option("--workflow <name>", "Workflow profile alias: delivery or co-creation")
-	.option("--openspec", "Write to openspec/changes/<task-id>/tasks.md")
+	.option("--openspec", "Write to .trellis/specs/<task-id>.md (co-creation workflow)")
 	.option("--json", "Output as JSON")
 	.action(async (taskId, opts) => {
 		await specWriteCommand(taskId, opts);
