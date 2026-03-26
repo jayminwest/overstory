@@ -117,7 +117,7 @@ export const COMMANDS: readonly CommandDef[] = [
 	},
 	{
 		name: "sessions",
-		desc: "Manage isolated tmux sessions",
+		desc: "Manage isolated overstory tmux sessions",
 		subcommands: [
 			{
 				name: "list",
@@ -724,7 +724,7 @@ export function generateBash(): string {
 		"  local cur prev words cword",
 		"  _init_completion || return",
 		"",
-		"  local commands='agents init sling prime stop status sessions dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run ecosystem upgrade completions'",
+		"  local commands='agents init sling prime stop status sessions dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run ecosystem update upgrade completions'",
 		"",
 		"  # Top-level completion",
 		"  if [[ $cword -eq 1 ]]; then",
