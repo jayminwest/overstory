@@ -16,6 +16,11 @@ import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
 import { resolveSpecPathForWorkflow } from "../workflow.ts";
 
+export function collectValues(value: string, previous: string[] = []): string[] {
+	previous.push(value);
+	return previous;
+}
+
 export interface SpecWriteOptions {
 	body?: string;
 	title?: string;
@@ -74,7 +79,7 @@ export async function writeSpec(
 	await mkdir(dirname(specPath), { recursive: true });
 	if (specPath.endsWith(".yaml") && !opts.force && (await Bun.file(specPath).exists())) {
 		throw new ValidationError(
-			`Trellis spec already exists for '${taskId}'. Use 'trellis spec update ${taskId} ...' for ongoing edits or pass --force to replace it.`,
+			`Trellis spec already exists for '${taskId}'. Pass --force to replace it.`,
 			{ field: "taskId", value: taskId },
 		);
 	}
@@ -128,17 +133,23 @@ function buildTrellisSpec(
 		lines.push(`  ${line}`);
 	}
 	if (objective.length === 0) lines.push("  ");
-	lines.push("constraints:");
-	for (const constraint of opts.constraint ?? []) {
-		lines.push(`  - ${quoteYamlScalar(constraint)}`);
+	if ((opts.constraint ?? []).length > 0) {
+		lines.push("constraints:");
+		for (const constraint of opts.constraint ?? []) {
+			lines.push(`  - ${quoteYamlScalar(constraint)}`);
+		}
 	}
-	lines.push("acceptance:");
-	for (const item of opts.acceptance ?? []) {
-		lines.push(`  - ${quoteYamlScalar(item)}`);
+	if ((opts.acceptance ?? []).length > 0) {
+		lines.push("acceptance:");
+		for (const item of opts.acceptance ?? []) {
+			lines.push(`  - ${quoteYamlScalar(item)}`);
+		}
 	}
-	lines.push("references:");
-	for (const reference of opts.reference ?? []) {
-		lines.push(`  - ${quoteYamlScalar(reference)}`);
+	if ((opts.reference ?? []).length > 0) {
+		lines.push("references:");
+		for (const reference of opts.reference ?? []) {
+			lines.push(`  - ${quoteYamlScalar(reference)}`);
+		}
 	}
 	return `${lines.join("\n")}\n`;
 }

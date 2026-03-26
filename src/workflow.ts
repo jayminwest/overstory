@@ -42,7 +42,7 @@ export function validateWorkflowName(input: string | undefined): WorkflowName | 
 	const normalized = normalizeWorkflowName(input);
 	if (!normalized) {
 		throw new ValidationError(
-			`Unknown workflow '${input}'. Valid workflows: delivery, co-creation`,
+			`Unknown workflow '${input}'. Valid values: delivery, co-creation (aliases: ov-delivery, ov-co-creation, co_creation, cocreation)`,
 			{
 				field: "workflow",
 				value: input,

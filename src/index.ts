@@ -37,7 +37,7 @@ import { primeCommand } from "./commands/prime.ts";
 import { createReplayCommand } from "./commands/replay.ts";
 import { createRunCommand } from "./commands/run.ts";
 import { slingCommand } from "./commands/sling.ts";
-import { specWriteCommand } from "./commands/spec.ts";
+import { collectValues, specWriteCommand } from "./commands/spec.ts";
 import { createStatusCommand } from "./commands/status.ts";
 import { stopCommand } from "./commands/stop.ts";
 import { createSupervisorCommand } from "./commands/supervisor.ts";
@@ -53,11 +53,6 @@ import { jsonError } from "./json.ts";
 import { brand, chalk, muted, setQuiet } from "./logging/color.ts";
 
 export const VERSION = "0.9.3";
-
-function collectValues(value: string, previous: string[] = []): string[] {
-	previous.push(value);
-	return previous;
-}
 
 const rawArgs = process.argv.slice(2);
 
