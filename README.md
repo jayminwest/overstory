@@ -200,7 +200,7 @@ Overstory is runtime-agnostic. The `AgentRuntime` interface (`src/runtimes/types
 | Aider | `aider` | (none — `--yes-always`) | Experimental |
 | Goose | `goose` | Profile-based permissions | Experimental |
 | Amp | `amp` | Built-in approval system | Experimental |
-| OpenCode | `opencode` | (none) | Experimental |
+| OpenCode | `opencode` | `.opencode/plugins/` guard plugin + `permission` config | Experimental |
 
 ## How It Works
 
