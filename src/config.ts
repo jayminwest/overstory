@@ -481,6 +481,16 @@ function migrateDeprecatedTaskTrackerKeys(parsed: Record<string, unknown>): void
 		process.stderr.write(
 			"[overstory] DEPRECATED: beads: -> use taskTracker: { backend: beads, enabled: true }\n",
 		);
+	} else if (parsed.beads_rust !== undefined) {
+		const brConfig = parsed.beads_rust as Record<string, unknown>;
+		parsed.taskTracker = {
+			backend: "beads_rust",
+			enabled: brConfig.enabled ?? true,
+		};
+		delete parsed.beads_rust;
+		process.stderr.write(
+			"[overstory] DEPRECATED: beads_rust: -> use taskTracker: { backend: beads_rust, enabled: true }\n",
+		);
 	} else if (parsed.seeds !== undefined) {
 		const seedsConfig = parsed.seeds as Record<string, unknown>;
 		parsed.taskTracker = {
@@ -643,7 +653,7 @@ function validateConfig(config: OverstoryConfig): void {
 	}
 
 	// taskTracker.backend must be one of the valid options
-	const validBackends = ["auto", "seeds", "beads"] as const;
+	const validBackends = ["auto", "seeds", "beads", "beads_rust"] as const;
 	if (!validBackends.includes(config.taskTracker.backend as (typeof validBackends)[number])) {
 		throw new ValidationError(`taskTracker.backend must be one of: ${validBackends.join(", ")}`, {
 			field: "taskTracker.backend",
