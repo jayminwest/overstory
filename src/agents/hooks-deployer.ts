@@ -115,6 +115,11 @@ export function buildPathBoundaryGuardScript(filePathField: string): string {
 		`FILE_PATH=$(echo "$INPUT" | sed -n 's/.*"${filePathField}": *"\\([^"]*\\)".*/\\1/p');`,
 		// No path extracted — fail open (tool may be called differently)
 		'[ -z "$FILE_PATH" ] && exit 0;',
+		// Normalize Windows paths to POSIX format when running under Git Bash / MSYS2
+		'if command -v cygpath >/dev/null 2>&1; then',
+		'  OVERSTORY_WORKTREE_PATH=$(cygpath -u "$OVERSTORY_WORKTREE_PATH");',
+		'  FILE_PATH=$(cygpath -u "$FILE_PATH");',
+		'fi;',
 		// Resolve relative paths against cwd
 		'case "$FILE_PATH" in /*) ;; *) FILE_PATH="$(pwd)/$FILE_PATH" ;; esac;',
 		// Allow if path is inside the worktree (exact match or subpath)
@@ -403,6 +408,10 @@ export function buildBashPathBoundaryScript(): string {
 		"PATHS=$(echo \"$CMD\" | tr ' \\t' '\\n\\n' | grep '^/' | sed 's/[\";>]*$//');",
 		// If no absolute paths found, allow (relative paths resolve from worktree cwd)
 		'[ -z "$PATHS" ] && exit 0;',
+		// Normalize Windows paths to POSIX format when running under Git Bash / MSYS2
+		'if command -v cygpath >/dev/null 2>&1; then',
+		'  OVERSTORY_WORKTREE_PATH=$(cygpath -u "$OVERSTORY_WORKTREE_PATH");',
+		'fi;',
 		// Check each absolute path against the worktree boundary
 		'echo "$PATHS" | while IFS= read -r P; do',
 		'  case "$P" in',
