@@ -7,3 +7,5 @@
 .canopy/schemas.jsonl merge=union
 
 .sapling/session.jsonl merge=union
+
+* text=auto eol=lf
