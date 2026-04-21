@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { cleanupTempDir, commitFile, createTempGitRepo } from "./test-helpers.ts";
+import {
+	cleanupTempDir,
+	commitFile,
+	createTempGitRepo,
+	posixShExeNextToGitExe,
+} from "./test-helpers.ts";
 
 describe("createTempGitRepo", () => {
 	let repoDir: string | undefined;
@@ -121,4 +127,34 @@ describe("cleanupTempDir", () => {
 		await cleanupTempDir("/tmp/overstory-nonexistent-test-dir-12345");
 		// No error thrown = pass
 	});
+});
+
+describe("POSIX shell for hook script tests", () => {
+	test.skipIf(process.platform !== "win32")(
+		"Git for Windows: sh.exe is ..\\bin\\sh.exe or ..\\usr\\bin\\sh.exe relative to git.exe",
+		() => {
+			const r = spawnSync("where.exe", ["git"], { encoding: "utf8", windowsHide: true });
+			expect(r.status).toBe(0);
+			const gitExe = r.stdout
+				?.split(/\r?\n/)
+				.map((s) => s.trim())
+				.find(Boolean);
+			expect(gitExe).toBeDefined();
+			if (!gitExe) throw new Error("expected where.exe git to print a git.exe path");
+			expect(existsSync(gitExe)).toBe(true);
+
+			let found = false;
+			for (const line of r.stdout?.split(/\r?\n/) ?? []) {
+				const g = line.trim();
+				if (!g) continue;
+				const sh = posixShExeNextToGitExe(g);
+				if (sh) {
+					expect(sh.toLowerCase()).toMatch(/\\(bin|usr\\bin)\\sh\.exe$/i);
+					found = true;
+					break;
+				}
+			}
+			expect(found).toBe(true);
+		},
+	);
 });

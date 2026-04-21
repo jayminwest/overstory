@@ -1,6 +1,8 @@
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /**
  * Git environment variables for test repos.
@@ -13,6 +15,68 @@ const GIT_TEST_ENV = {
 	GIT_COMMITTER_NAME: "Overstory Test",
 	GIT_COMMITTER_EMAIL: "test@overstory.dev",
 };
+
+/** Env var: absolute path to `sh.exe` if Git’s default relative layout does not apply. */
+export const OVERSTORY_TEST_POSIX_SH = "OVERSTORY_TEST_POSIX_SH";
+
+let cachedPosixSh: string | undefined;
+
+/** First existing `sh.exe` next to a Git for Windows `git.exe`, or `undefined`.
+ * Prefers `Git\bin\sh.exe` (PATH for `sed`, `grep`, etc.) then `Git\usr\bin\sh.exe`. */
+export function posixShExeNextToGitExe(gitExe: string): string | undefined {
+	const root = dirname(gitExe);
+	const candidates = [
+		join(root, "..", "bin", "sh.exe"),
+		join(root, "..", "usr", "bin", "sh.exe"),
+	];
+	for (const p of candidates) {
+		if (existsSync(p)) return p;
+	}
+	return undefined;
+}
+
+function resolvePosixShExecutable(): string {
+	const override = process.env[OVERSTORY_TEST_POSIX_SH]?.trim();
+	if (override) {
+		if (existsSync(override)) return override;
+		throw new Error(
+			`${OVERSTORY_TEST_POSIX_SH} is set to "${override}" but that path does not exist.`,
+		);
+	}
+	if (process.platform !== "win32") {
+		return "sh";
+	}
+	// find where the git for windows executable is, we will use this to find the sh.exe next to it
+	const r = spawnSync("where.exe", ["git"], { encoding: "utf8", windowsHide: true });
+	if (r.status !== 0 || !r.stdout?.trim()) {
+		throw new Error(
+			"`where.exe git` failed; install Git for Windows and ensure `git` is on PATH, or set " +
+				`${OVERSTORY_TEST_POSIX_SH} to the full path of sh.exe.`,
+		);
+	}
+	for (const line of r.stdout.split(/\r?\n/)) {
+		const gitExe = line.trim();
+		if (!gitExe) continue;
+		const candidate = posixShExeNextToGitExe(gitExe);
+		if (candidate) return candidate;
+	}
+	throw new Error(
+		`Could not find bin\\sh.exe or usr\\bin\\sh.exe relative to Git for Windows. Set ${OVERSTORY_TEST_POSIX_SH}.`,
+	);
+}
+
+/**
+ * POSIX shell executable for tests: `sh` on Unix, or Git for Windows `bin\sh.exe` (preferred) / `usr\bin\sh.exe`.
+ *
+ * On Windows: `where.exe git`, then existing `..\bin\sh.exe` or `..\usr\bin\sh.exe` from each `git.exe`.
+ * Override with {@link OVERSTORY_TEST_POSIX_SH}.
+ */
+export function posixShExecutable(): string {
+	if (!cachedPosixSh) {
+		cachedPosixSh = resolvePosixShExecutable();
+	}
+	return cachedPosixSh;
+}
 
 /** Cached template repo path. Created lazily on first call. */
 let _templateDir: string | null = null;

@@ -1,12 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnHeadlessAgent } from "./process.ts";
+import { posixShExecutable } from "../test-helpers.ts";
 
 describe("spawnHeadlessAgent", () => {
+	let sh: string;
+
+	beforeAll(() => {
+		sh = posixShExecutable();
+	});
+
 	it("spawns a command and returns a valid PID", async () => {
-		const proc = await spawnHeadlessAgent(["echo", "hello"], {
+		const proc = await spawnHeadlessAgent([sh, "-c", "echo hello"], {
 			cwd: process.cwd(),
 			env: { ...(process.env as Record<string, string>) },
 		});
@@ -35,7 +42,7 @@ describe("spawnHeadlessAgent", () => {
 
 		it("redirects stdout to file when stdoutFile is provided", async () => {
 			const stdoutFile = join(tmpDir, "stdout.log");
-			const proc = await spawnHeadlessAgent(["echo", "hello from file"], {
+			const proc = await spawnHeadlessAgent([sh, "-c", "echo hello from file"], {
 				cwd: process.cwd(),
 				env: { ...(process.env as Record<string, string>) },
 				stdoutFile,
@@ -48,7 +55,7 @@ describe("spawnHeadlessAgent", () => {
 			expect(proc.stdin).toBeDefined();
 
 			// Wait for process to finish, then check file content
-			const exitProc = Bun.spawn(["sh", "-c", "true"], { stdout: "pipe" });
+			const exitProc = Bun.spawn([sh, "-c", "true"], { stdout: "pipe" });
 			await exitProc.exited;
 			// Give echo a moment to flush
 			await Bun.sleep(100);
@@ -60,7 +67,7 @@ describe("spawnHeadlessAgent", () => {
 		it("redirects stderr to file when stderrFile is provided", async () => {
 			const stderrFile = join(tmpDir, "stderr.log");
 			// Write to stderr via sh -c
-			const proc = await spawnHeadlessAgent(["sh", "-c", "echo error output >&2"], {
+			const proc = await spawnHeadlessAgent([sh, "-c", "echo error output >&2"], {
 				cwd: process.cwd(),
 				env: { ...(process.env as Record<string, string>) },
 				stderrFile,
@@ -85,7 +92,7 @@ describe("spawnHeadlessAgent", () => {
 		});
 
 		it("stdout remains a ReadableStream when no stdoutFile provided (default mode)", async () => {
-			const proc = await spawnHeadlessAgent(["echo", "piped"], {
+			const proc = await spawnHeadlessAgent([sh, "-c", "echo piped"], {
 				cwd: process.cwd(),
 				env: { ...(process.env as Record<string, string>) },
 			});

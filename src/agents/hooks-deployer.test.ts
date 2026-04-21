@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
-import { cleanupTempDir } from "../test-helpers.ts";
+import { cleanupTempDir, posixShExecutable } from "../test-helpers.ts";
 import {
 	buildBashFileGuardScript,
 	buildBashPathBoundaryScript,
@@ -425,12 +425,13 @@ describe("deployHooks", () => {
 	});
 
 	test("write failure throws AgentError", async () => {
-		// Use a path that will fail to write (read-only parent)
-		const invalidPath = "/dev/null/impossible-path";
+		// Using a file as the worktree path makes mkdir(.claude) fail with ENOTDIR on
+		// every OS. A Unix-only trick like /dev/null/... succeeds on Windows as a normal path.
+		const notADirectory = join(tempDir, "not-a-directory");
+		await Bun.write(notADirectory, "");
 
 		try {
-			await deployHooks(invalidPath, "fail-agent");
-			// Should not reach here
+			await deployHooks(notADirectory, "fail-agent");
 			expect(true).toBe(false);
 		} catch (err) {
 			expect(err).toBeInstanceOf(AgentError);
@@ -2404,6 +2405,12 @@ describe("PATH prefix in deployed hooks", () => {
 });
 
 describe("buildTrackerCloseGuardScript", () => {
+	let sh: string;
+
+	beforeAll(() => {
+		sh = posixShExecutable();
+	});
+
 	test("returns a string containing key patterns", () => {
 		const script = buildTrackerCloseGuardScript();
 		expect(typeof script).toBe("string");
@@ -2427,7 +2434,7 @@ describe("buildTrackerCloseGuardScript", () => {
 	test("blocks sd close with wrong ID", async () => {
 		const script = buildTrackerCloseGuardScript();
 		const input = JSON.stringify({ command: "sd close other-task" });
-		const proc = Bun.spawn(["sh", "-c", script], {
+		const proc = Bun.spawn([sh, "-c", script], {
 			stdin: new TextEncoder().encode(input),
 			stdout: "pipe",
 			stderr: "pipe",
@@ -2444,7 +2451,7 @@ describe("buildTrackerCloseGuardScript", () => {
 	test("allows sd close with matching ID", async () => {
 		const script = buildTrackerCloseGuardScript();
 		const input = JSON.stringify({ command: "sd close my-task" });
-		const proc = Bun.spawn(["sh", "-c", script], {
+		const proc = Bun.spawn([sh, "-c", script], {
 			stdin: new TextEncoder().encode(input),
 			stdout: "pipe",
 			stderr: "pipe",
@@ -2458,7 +2465,7 @@ describe("buildTrackerCloseGuardScript", () => {
 	test("blocks bd close with wrong ID", async () => {
 		const script = buildTrackerCloseGuardScript();
 		const input = JSON.stringify({ command: "bd close other-task" });
-		const proc = Bun.spawn(["sh", "-c", script], {
+		const proc = Bun.spawn([sh, "-c", script], {
 			stdin: new TextEncoder().encode(input),
 			stdout: "pipe",
 			stderr: "pipe",
@@ -2474,7 +2481,7 @@ describe("buildTrackerCloseGuardScript", () => {
 	test("blocks sd update --status with wrong ID", async () => {
 		const script = buildTrackerCloseGuardScript();
 		const input = JSON.stringify({ command: "sd update other-task --status in_progress" });
-		const proc = Bun.spawn(["sh", "-c", script], {
+		const proc = Bun.spawn([sh, "-c", script], {
 			stdin: new TextEncoder().encode(input),
 			stdout: "pipe",
 			stderr: "pipe",
@@ -2490,7 +2497,7 @@ describe("buildTrackerCloseGuardScript", () => {
 	test("exits early when OVERSTORY_TASK_ID is empty (coordinator/monitor)", async () => {
 		const script = buildTrackerCloseGuardScript();
 		const input = JSON.stringify({ command: "sd close coordinator-task" });
-		const proc = Bun.spawn(["sh", "-c", script], {
+		const proc = Bun.spawn([sh, "-c", script], {
 			stdin: new TextEncoder().encode(input),
 			stdout: "pipe",
 			stderr: "pipe",
@@ -2583,6 +2590,12 @@ describe("deployHooks tracker close guard integration", () => {
 });
 
 describe("escapeForSingleQuotedShell", () => {
+	let sh: string;
+
+	beforeAll(() => {
+		sh = posixShExecutable();
+	});
+
 	test("no single quotes: string passes through unchanged", () => {
 		expect(escapeForSingleQuotedShell("hello world")).toBe("hello world");
 	});
@@ -2605,7 +2618,7 @@ describe("escapeForSingleQuotedShell", () => {
 		expect(taskGuard).toBeDefined();
 		const cmd = taskGuard?.hooks[0]?.command ?? "";
 		const echoCmd = cmd.replace('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0; ', "");
-		const proc = Bun.spawn(["sh", "-c", echoCmd], {
+		const proc = Bun.spawn([sh, "-c", echoCmd], {
 			stdout: "pipe",
 			stderr: "pipe",
 			env: { ...process.env, OVERSTORY_AGENT_NAME: "test-agent" },
