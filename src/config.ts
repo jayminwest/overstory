@@ -1039,3 +1039,50 @@ export async function loadConfig(projectRoot: string): Promise<OverstoryConfig> 
 
 	return merged;
 }
+
+/**
+ * Read only project.defaultProfile from config files without full config validation.
+ *
+ * Used by commands that only need the workflow/profile default and should not
+ * require the entire config graph to be valid.
+ */
+export async function loadProjectDefaultProfile(projectRoot: string): Promise<string | undefined> {
+	const resolvedRoot = await resolveProjectRoot(projectRoot);
+	let defaultProfile = DEFAULT_CONFIG.project.defaultProfile;
+
+	for (const filename of [CONFIG_FILENAME, CONFIG_LOCAL_FILENAME]) {
+		const path = join(resolvedRoot, OVERSTORY_DIR, filename);
+		const file = Bun.file(path);
+		if (!(await file.exists())) continue;
+
+		let text: string;
+		try {
+			text = await file.text();
+		} catch (err) {
+			throw new ConfigError(`Failed to read config file: ${path}`, {
+				configPath: path,
+				cause: err instanceof Error ? err : undefined,
+			});
+		}
+
+		let parsed: Record<string, unknown>;
+		try {
+			parsed = parseYaml(text);
+		} catch (err) {
+			throw new ConfigError(`Failed to parse YAML in config file: ${path}`, {
+				configPath: path,
+				cause: err instanceof Error ? err : undefined,
+			});
+		}
+
+		const project = parsed.project;
+		if (project && typeof project === "object") {
+			const candidate = (project as Record<string, unknown>).defaultProfile;
+			if (typeof candidate === "string" && candidate.trim().length > 0) {
+				defaultProfile = candidate;
+			}
+		}
+	}
+
+	return defaultProfile;
+}

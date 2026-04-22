@@ -37,6 +37,8 @@ Decision artifacts come before code. Deliverables in order:
 4. **Code and tests**: Implementation proceeds after decision artifacts are approved. Code must be clean, follow project conventions, and include automated tests.
 5. **Quality gates**: All lints, type checks, and tests must pass before reporting completion.
 
+When the project uses OpenSpec, place durable co-creation artifacts under `openspec/changes/<task-id>/`. Overstory's co-creation workflow writes task specs to `openspec/changes/<task-id>/tasks.md` by default; keep option memos, ADRs, and milestone notes alongside that change set.
+
 Do not write implementation code before decisions are resolved. The human reviews and approves decision documents; implementation follows approval.
 
 ## completion-criteria

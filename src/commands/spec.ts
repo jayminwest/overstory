@@ -9,14 +9,30 @@
  */
 
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname } from "node:path";
+import { loadProjectDefaultProfile, resolveProjectRoot } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
+import { resolveSpecPathForWorkflow } from "../workflow.ts";
+
+export function collectValues(value: string, previous: string[] = []): string[] {
+	previous.push(value);
+	return previous;
+}
 
 export interface SpecWriteOptions {
 	body?: string;
+	title?: string;
 	agent?: string;
+	seed?: string;
+	reference?: string[];
+	constraint?: string[];
+	acceptance?: string[];
+	workflow?: string;
+	trellis?: boolean;
+	openspec?: boolean;
+	force?: boolean;
 	json?: boolean;
 }
 
@@ -42,26 +58,126 @@ export async function writeSpec(
 	taskId: string,
 	body: string,
 	agent?: string,
+	opts: {
+		title?: string;
+		seed?: string;
+		reference?: string[];
+		constraint?: string[];
+		acceptance?: string[];
+		workflow?: string;
+		trellis?: boolean;
+		openspec?: boolean;
+		force?: boolean;
+	} = {},
 ): Promise<string> {
-	const specsDir = join(projectRoot, ".overstory", "specs");
-	await mkdir(specsDir, { recursive: true });
-
-	// Build the spec content with optional attribution header
-	let content = "";
-	if (agent) {
-		content += `<!-- written-by: ${agent} -->\n`;
+	const specPath = resolveSpecPathForWorkflow(
+		projectRoot,
+		taskId,
+		opts.workflow,
+		opts.trellis ?? opts.openspec,
+	);
+	await mkdir(dirname(specPath), { recursive: true });
+	if (specPath.endsWith(".yaml") && !opts.force && (await Bun.file(specPath).exists())) {
+		throw new ValidationError(
+			`Trellis spec already exists for '${taskId}'. Pass --force to replace it.`,
+			{ field: "taskId", value: taskId },
+		);
 	}
-	content += body;
 
-	// Ensure trailing newline
-	if (!content.endsWith("\n")) {
-		content += "\n";
-	}
+	const content = specPath.endsWith(".yaml")
+		? buildTrellisSpec(taskId, body, agent, opts)
+		: buildMarkdownSpec(body, agent);
 
-	const specPath = join(specsDir, `${taskId}.md`);
 	await Bun.write(specPath, content);
 
 	return specPath;
+}
+
+function buildMarkdownSpec(body: string, agent?: string): string {
+	let content = "";
+	if (agent) content += `<!-- written-by: ${agent} -->\n`;
+	content += body;
+	if (!content.endsWith("\n")) content += "\n";
+	return content;
+}
+
+function buildTrellisSpec(
+	taskId: string,
+	body: string,
+	agent?: string,
+	opts: {
+		title?: string;
+		seed?: string;
+		reference?: string[];
+		constraint?: string[];
+		acceptance?: string[];
+	} = {},
+): string {
+	const timestamp = new Date().toISOString();
+	const objective = body.trimEnd();
+	const title = (opts.title?.trim() || deriveTrellisTitle(taskId, objective)).trim();
+	const lines: string[] = [];
+	if (agent) {
+		lines.push(`# written-by: ${agent}`);
+	}
+	lines.push(`id: ${quoteYamlScalar(taskId)}`);
+	lines.push(`title: ${quoteYamlScalar(title)}`);
+	if (opts.seed?.trim()) {
+		lines.push(`seed: ${quoteYamlScalar(opts.seed.trim())}`);
+	}
+	lines.push("status: draft");
+	lines.push(`createdAt: ${quoteYamlScalar(timestamp)}`);
+	lines.push(`updatedAt: ${quoteYamlScalar(timestamp)}`);
+	lines.push("objective: |");
+	for (const line of objective.split("\n")) {
+		lines.push(`  ${line}`);
+	}
+	if (objective.length === 0) lines.push("  ");
+	if ((opts.constraint ?? []).length > 0) {
+		lines.push("constraints:");
+		for (const constraint of opts.constraint ?? []) {
+			lines.push(`  - ${quoteYamlScalar(constraint)}`);
+		}
+	}
+	if ((opts.acceptance ?? []).length > 0) {
+		lines.push("acceptance:");
+		for (const item of opts.acceptance ?? []) {
+			lines.push(`  - ${quoteYamlScalar(item)}`);
+		}
+	}
+	if ((opts.reference ?? []).length > 0) {
+		lines.push("references:");
+		for (const reference of opts.reference ?? []) {
+			lines.push(`  - ${quoteYamlScalar(reference)}`);
+		}
+	}
+	return `${lines.join("\n")}\n`;
+}
+
+function deriveTrellisTitle(taskId: string, body: string): string {
+	for (const rawLine of body.split("\n")) {
+		const line = rawLine.trim();
+		if (!line || line.startsWith("<!--")) continue;
+		if (line.startsWith("#")) {
+			const heading = line.replace(/^#+\s*/, "").trim();
+			return shortenTrellisTitle(heading || taskId);
+		}
+		return shortenTrellisTitle(line);
+	}
+	return taskId;
+}
+
+function shortenTrellisTitle(input: string, maxLength = 72): string {
+	const collapsed = input.replace(/\s+/g, " ").trim();
+	if (collapsed.length <= maxLength) return collapsed;
+	return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function quoteYamlScalar(value: string): string {
+	if (value === "" || /[:#[\]{}]/.test(value) || value.includes("\n") || value.startsWith(" ")) {
+		return JSON.stringify(value);
+	}
+	return value;
 }
 
 /**
@@ -93,10 +209,20 @@ export async function specWriteCommand(taskId: string, opts: SpecWriteOptions): 
 		});
 	}
 
-	const { resolveProjectRoot } = await import("../config.ts");
 	const projectRoot = await resolveProjectRoot(process.cwd());
+	const defaultProfile = await loadProjectDefaultProfile(projectRoot);
+	const workflow = opts.workflow ?? process.env.OVERSTORY_PROFILE ?? defaultProfile;
 
-	const specPath = await writeSpec(projectRoot, taskId, body, opts.agent);
+	const specPath = await writeSpec(projectRoot, taskId, body, opts.agent, {
+		title: opts.title,
+		seed: opts.seed,
+		reference: opts.reference,
+		constraint: opts.constraint,
+		acceptance: opts.acceptance,
+		workflow,
+		trellis: opts.trellis ?? opts.openspec ?? false,
+		force: opts.force ?? false,
+	});
 	if (opts.json) {
 		jsonOutput("spec-write", { taskId, path: specPath });
 	} else {
