@@ -340,6 +340,84 @@ export function getTrackerCloseGuards(): HookEntry[] {
 }
 
 /**
+ * Build a PreToolUse guard script that enforces the merge_ready gate on lead
+ * agents (overstory-3899): a lead may not run `sd/bd close $OVERSTORY_TASK_ID`
+ * unless it has sent at least one `merge_ready` mail AND has sent at least
+ * one `merge_ready` per `worker_done` it has received.
+ *
+ * Counts are derived by querying `ov mail list --json` and grep-counting
+ * `"id":"` occurrences in the JSON response (no jq dependency). The gate
+ * is a no-op for non-lead agents because it is only deployed to leads via
+ * `getLeadCloseGateGuards()`, but it still self-protects: the script
+ * exits early when OVERSTORY_AGENT_NAME or OVERSTORY_TASK_ID is unset.
+ *
+ * Foreign-task closes are caught earlier by `buildTrackerCloseGuardScript`,
+ * so this gate only fires when the issue ID matches OVERSTORY_TASK_ID.
+ */
+export function buildLeadCloseGateScript(): string {
+	const blockNoMergeReady = JSON.stringify({
+		decision: "block",
+		reason:
+			'merge_ready gate: cannot close your task — you have not sent a merge_ready mail to coordinator. Required: ov mail send --to coordinator --subject "merge_ready: <task>" --body "<branch + files>" --type merge_ready --from $OVERSTORY_AGENT_NAME. Then retry the close.',
+	});
+	const blockUnderCount = JSON.stringify({
+		decision: "block",
+		reason:
+			"merge_ready gate: cannot close your task — merge_ready count is less than worker_done received. Send one merge_ready per worker_done before closing.",
+	});
+
+	const script = [
+		// Only enforce for overstory agent sessions
+		ENV_GUARD,
+		// Skip if task ID is not set (coordinator/monitor have no task)
+		'[ -z "$OVERSTORY_TASK_ID" ] && exit 0;',
+		"read -r INPUT;",
+		// Extract command value from JSON
+		'CMD=$(echo "$INPUT" | sed \'s/.*"command": *"\\([^"]*\\)".*/\\1/\');',
+		// Only inspect sd/bd close commands
+		"if ! echo \"$CMD\" | grep -qE '^\\s*(sd|bd)\\s+close\\s'; then exit 0; fi;",
+		// Extract the issue ID being closed
+		"ISSUE_ID=$(echo \"$CMD\" | sed -E 's/^[[:space:]]*(sd|bd)[[:space:]]+close[[:space:]]+([^ ]+).*/\\2/');",
+		// Only gate when the lead is closing its own task. Foreign closes are blocked by buildTrackerCloseGuardScript.
+		'[ "$ISSUE_ID" != "$OVERSTORY_TASK_ID" ] && exit 0;',
+		// Count merge_ready mails sent by this agent
+		'MR=$(ov mail list --json --from "$OVERSTORY_AGENT_NAME" --type merge_ready 2>/dev/null | grep -o \'"id":"\' | wc -l | tr -d \' \');',
+		// Count worker_done mails received by this agent
+		'WD=$(ov mail list --json --to "$OVERSTORY_AGENT_NAME" --type worker_done 2>/dev/null | grep -o \'"id":"\' | wc -l | tr -d \' \');',
+		// Default to 0 if the count failed for any reason.
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion, not a JS template
+		"MR=${MR:-0}; WD=${WD:-0};",
+		// Block if no merge_ready was ever sent
+		'if [ "$MR" -eq 0 ]; then',
+		`  echo '${escapeForSingleQuotedShell(blockNoMergeReady)}';`,
+		"  exit 0;",
+		"fi;",
+		// Block if not enough merge_ready for the worker_done count
+		'if [ "$MR" -lt "$WD" ]; then',
+		`  echo '${escapeForSingleQuotedShell(blockUnderCount)}';`,
+		"  exit 0;",
+		"fi;",
+	].join(" ");
+	return script;
+}
+
+/**
+ * Generate the lead-only PreToolUse guard that gates `sd/bd close <own-task>`
+ * on merge_ready emission. Wraps `buildLeadCloseGateScript` with the standard
+ * PATH_PREFIX so `ov` resolves under Claude Code's minimal hook PATH.
+ *
+ * Only deployed to lead agents (see getCapabilityGuards).
+ */
+export function getLeadCloseGateGuards(): HookEntry[] {
+	return [
+		{
+			matcher: "Bash",
+			hooks: [{ type: "command", command: `${PATH_PREFIX} ${buildLeadCloseGateScript()}` }],
+		},
+	];
+}
+
+/**
  * Capabilities that are allowed to modify files via Bash commands.
  * These get the Bash path boundary guard instead of a blanket file-modification block.
  */
@@ -505,6 +583,13 @@ export function getCapabilityGuards(capability: string, qualityGates?: QualityGa
 	// (non-implementation agents already block all file-modifying Bash commands)
 	if (IMPLEMENTATION_CAPABILITIES.has(capability)) {
 		guards.push(...getBashPathBoundaryGuards());
+	}
+
+	// Lead agents get the merge_ready gate on sd/bd close (overstory-3899).
+	// Blocks closing the lead's own task unless at least one merge_ready mail
+	// has been sent and the count covers all worker_done received.
+	if (capability === "lead") {
+		guards.push(...getLeadCloseGateGuards());
 	}
 
 	return guards;

@@ -437,6 +437,88 @@ describe("createMailStore", () => {
 			expect(filtered).toHaveLength(1);
 			expect(filtered[0]?.subject).toBe("msg1");
 		});
+
+		test("filters by type", () => {
+			store.insert({
+				id: "",
+				from: "lead-a",
+				to: "coordinator",
+				subject: "merge_ready: t1",
+				body: "ready",
+				type: "merge_ready",
+				priority: "normal",
+				threadId: null,
+			});
+			store.insert({
+				id: "",
+				from: "builder-a",
+				to: "lead-a",
+				subject: "Worker done",
+				body: "done",
+				type: "worker_done",
+				priority: "normal",
+				threadId: null,
+			});
+			store.insert({
+				id: "",
+				from: "lead-a",
+				to: "coordinator",
+				subject: "status",
+				body: "still going",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+			});
+
+			const mr = store.getAll({ type: "merge_ready" });
+			expect(mr).toHaveLength(1);
+			expect(mr[0]?.subject).toBe("merge_ready: t1");
+
+			const wd = store.getAll({ type: "worker_done" });
+			expect(wd).toHaveLength(1);
+			expect(wd[0]?.subject).toBe("Worker done");
+		});
+
+		test("combines type with from filter", () => {
+			store.insert({
+				id: "",
+				from: "lead-a",
+				to: "coordinator",
+				subject: "merge_ready: t1",
+				body: "ready",
+				type: "merge_ready",
+				priority: "normal",
+				threadId: null,
+			});
+			store.insert({
+				id: "",
+				from: "lead-b",
+				to: "coordinator",
+				subject: "merge_ready: t2",
+				body: "ready",
+				type: "merge_ready",
+				priority: "normal",
+				threadId: null,
+			});
+
+			const mine = store.getAll({ from: "lead-a", type: "merge_ready" });
+			expect(mine).toHaveLength(1);
+			expect(mine[0]?.from).toBe("lead-a");
+		});
+
+		test("returns empty array when no rows match the type filter", () => {
+			store.insert({
+				id: "",
+				from: "agent-a",
+				to: "orchestrator",
+				subject: "msg",
+				body: "body",
+				type: "status",
+				priority: "normal",
+				threadId: null,
+			});
+			expect(store.getAll({ type: "merge_ready" })).toHaveLength(0);
+		});
 	});
 
 	describe("getByThread", () => {

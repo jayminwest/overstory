@@ -118,6 +118,54 @@ describe("mailCommand", () => {
 			expect(output).toContain("Explore API");
 			expect(output).toContain("Total: 2 messages");
 		});
+
+		test("--type filters by message type", async () => {
+			// Add a typed message to the seeded inbox
+			const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+			const client = createMailClient(store);
+			client.send({
+				from: "lead-x",
+				to: "coordinator",
+				subject: "merge_ready: t1",
+				body: "ready to merge",
+				type: "merge_ready",
+			});
+			client.close();
+
+			await mailCommand(["list", "--type", "merge_ready"]);
+			expect(output).toContain("merge_ready: t1");
+			expect(output).not.toContain("Build task");
+			expect(output).not.toContain("Explore API");
+			expect(output).toContain("Total: 1 message");
+		});
+
+		test("--type combined with --from filters by both", async () => {
+			const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+			const client = createMailClient(store);
+			client.send({
+				from: "lead-x",
+				to: "coordinator",
+				subject: "merge_ready: t1",
+				body: "ready",
+				type: "merge_ready",
+			});
+			client.send({
+				from: "lead-y",
+				to: "coordinator",
+				subject: "merge_ready: t2",
+				body: "ready",
+				type: "merge_ready",
+			});
+			client.close();
+
+			await mailCommand(["list", "--from", "lead-x", "--type", "merge_ready"]);
+			expect(output).toContain("merge_ready: t1");
+			expect(output).not.toContain("merge_ready: t2");
+		});
+
+		test("--type rejects invalid type with ValidationError", async () => {
+			await expect(mailCommand(["list", "--type", "bogus"])).rejects.toThrow(/Invalid --type/);
+		});
 	});
 
 	describe("reply", () => {

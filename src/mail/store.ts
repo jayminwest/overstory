@@ -8,7 +8,7 @@
 
 import { Database } from "bun:sqlite";
 import { MailError } from "../errors.ts";
-import type { MailMessage } from "../types.ts";
+import type { MailMessage, MailMessageType } from "../types.ts";
 import { MAIL_MESSAGE_TYPES } from "../types.ts";
 
 export interface MailStore {
@@ -16,7 +16,13 @@ export interface MailStore {
 		message: Omit<MailMessage, "read" | "createdAt" | "payload"> & { payload?: string | null },
 	): MailMessage;
 	getUnread(agentName: string): MailMessage[];
-	getAll(filters?: { from?: string; to?: string; unread?: boolean; limit?: number }): MailMessage[];
+	getAll(filters?: {
+		from?: string;
+		to?: string;
+		unread?: boolean;
+		type?: MailMessageType;
+		limit?: number;
+	}): MailMessage[];
 	getById(id: string): MailMessage | null;
 	getByThread(threadId: string): MailMessage[];
 	markRead(id: string): void;
@@ -237,6 +243,7 @@ export function createMailStore(dbPath: string): MailStore {
 		from?: string;
 		to?: string;
 		unread?: boolean;
+		type?: MailMessageType;
 		limit?: number;
 	}): MailMessage[] {
 		const conditions: string[] = [];
@@ -253,6 +260,10 @@ export function createMailStore(dbPath: string): MailStore {
 		if (filters?.unread !== undefined) {
 			conditions.push("read = $read");
 			params.$read = filters.unread ? 0 : 1;
+		}
+		if (filters?.type !== undefined) {
+			conditions.push("type = $type");
+			params.$type = filters.type;
 		}
 
 		const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -315,6 +326,7 @@ export function createMailStore(dbPath: string): MailStore {
 			from?: string;
 			to?: string;
 			unread?: boolean;
+			type?: MailMessageType;
 			limit?: number;
 		}): MailMessage[] {
 			return buildFilterQuery(filters);

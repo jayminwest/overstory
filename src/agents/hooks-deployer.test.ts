@@ -3,10 +3,13 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
+import { createMailClient } from "../mail/client.ts";
+import { createMailStore } from "../mail/store.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
 import {
 	buildBashFileGuardScript,
 	buildBashPathBoundaryScript,
+	buildLeadCloseGateScript,
 	buildPathBoundaryGuardScript,
 	buildTrackerCloseGuardScript,
 	deployHooks,
@@ -15,6 +18,7 @@ import {
 	getBashPathBoundaryGuards,
 	getCapabilityGuards,
 	getDangerGuards,
+	getLeadCloseGateGuards,
 	getPathBoundaryGuards,
 	getTrackerCloseGuards,
 	isOverstoryHookEntry,
@@ -514,9 +518,15 @@ describe("deployHooks", () => {
 		expect(guardMatchers).toContain("NotebookEdit");
 		expect(guardMatchers).toContain("Bash");
 
-		// Should have 4 Bash guards: danger guard + file guard + tracker close guard + universal push guard
+		// Should have 5 Bash guards: danger guard + file guard + tracker close guard + universal push guard + lead close-gate
 		const bashGuards = preToolUse.filter((h: { matcher: string }) => h.matcher === "Bash");
-		expect(bashGuards.length).toBe(4);
+		expect(bashGuards.length).toBe(5);
+
+		// One Bash guard is the lead close-gate (overstory-3899)
+		const closeGate = bashGuards.find((h: { hooks: Array<{ command: string }> }) =>
+			h.hooks[0]?.command?.includes("merge_ready gate"),
+		);
+		expect(closeGate).toBeDefined();
 	});
 
 	test("builder capability gets path boundary + Bash danger + Bash path boundary guards + native team tool blocks", async () => {
@@ -963,9 +973,9 @@ describe("getCapabilityGuards", () => {
 		expect(guards.length).toBe(NATIVE_TEAM_TOOL_COUNT + INTERACTIVE_TOOL_COUNT + 4);
 	});
 
-	test("returns 17 guards for lead (10 team + 3 interactive + 3 tool blocks + 1 bash file guard)", () => {
+	test("returns 18 guards for lead (10 team + 3 interactive + 3 tool blocks + 1 bash file guard + 1 close-gate)", () => {
 		const guards = getCapabilityGuards("lead");
-		expect(guards.length).toBe(NATIVE_TEAM_TOOL_COUNT + INTERACTIVE_TOOL_COUNT + 4);
+		expect(guards.length).toBe(NATIVE_TEAM_TOOL_COUNT + INTERACTIVE_TOOL_COUNT + 5);
 	});
 
 	test("returns 14 guards for builder (10 team + 3 interactive + 1 bash path boundary)", () => {
@@ -1531,7 +1541,7 @@ describe("structural enforcement integration", () => {
 		expect(scoutMatchers).toEqual(reviewerMatchers);
 	});
 
-	test("lead has same guard structure as scout/reviewer", async () => {
+	test("lead has scout/reviewer guards plus the merge_ready close-gate", async () => {
 		const leadPath = join(tempDir, "lead-wt");
 		const scoutPath = join(tempDir, "scout-wt");
 
@@ -1544,13 +1554,15 @@ describe("structural enforcement integration", () => {
 		const leadPreToolUse = JSON.parse(leadContent).hooks.PreToolUse;
 		const scoutPreToolUse = JSON.parse(scoutContent).hooks.PreToolUse;
 
-		// Same number of guards
-		expect(leadPreToolUse.length).toBe(scoutPreToolUse.length);
+		// Lead has exactly one extra guard: the merge_ready close-gate (overstory-3899)
+		expect(leadPreToolUse.length).toBe(scoutPreToolUse.length + 1);
 
-		// Same matchers
-		const leadMatchers = leadPreToolUse.map((h: { matcher: string }) => h.matcher);
-		const scoutMatchers = scoutPreToolUse.map((h: { matcher: string }) => h.matcher);
-		expect(leadMatchers).toEqual(scoutMatchers);
+		// The extra guard is a Bash matcher referencing the close-gate
+		const closeGate = leadPreToolUse.find(
+			(h: { matcher: string; hooks: Array<{ command: string }> }) =>
+				h.matcher === "Bash" && h.hooks[0]?.command?.includes("merge_ready gate"),
+		);
+		expect(closeGate).toBeDefined();
 	});
 
 	test("builder and merger have identical guard structures", async () => {
@@ -2578,6 +2590,283 @@ describe("deployHooks tracker close guard integration", () => {
 					h.matcher === "Bash" && h.hooks[0]?.command?.includes("OVERSTORY_TASK_ID"),
 			);
 			expect(trackerGuard).toBeDefined();
+		}
+	});
+});
+
+describe("buildLeadCloseGateScript (overstory-3899)", () => {
+	test("returns a string containing key patterns", () => {
+		const script = buildLeadCloseGateScript();
+		expect(typeof script).toBe("string");
+		expect(script.length).toBeGreaterThan(0);
+		expect(script).toContain("merge_ready");
+		expect(script).toContain("worker_done");
+		expect(script).toContain("OVERSTORY_TASK_ID");
+		expect(script).toContain("OVERSTORY_AGENT_NAME");
+		expect(script).toContain("(sd|bd)");
+		expect(script).toContain("close");
+	});
+
+	test("contains ENV_GUARD prefix", () => {
+		const script = buildLeadCloseGateScript();
+		expect(script).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+	});
+
+	test("contains OVERSTORY_TASK_ID early-exit check", () => {
+		const script = buildLeadCloseGateScript();
+		expect(script).toContain('[ -z "$OVERSTORY_TASK_ID" ] && exit 0;');
+	});
+});
+
+describe("getLeadCloseGateGuards", () => {
+	test("returns exactly 1 Bash guard entry", () => {
+		const guards = getLeadCloseGateGuards();
+		expect(guards).toHaveLength(1);
+		expect(guards[0]?.matcher).toBe("Bash");
+	});
+
+	test("guard hook type is command", () => {
+		const guards = getLeadCloseGateGuards();
+		expect(guards[0]?.hooks[0]?.type).toBe("command");
+	});
+
+	test("guard command includes PATH_PREFIX (so ov resolves)", () => {
+		const guards = getLeadCloseGateGuards();
+		const command = guards[0]?.hooks[0]?.command ?? "";
+		expect(command).toContain("$HOME/.bun/bin");
+	});
+
+	test("guard command references merge_ready and worker_done", () => {
+		const guards = getLeadCloseGateGuards();
+		const command = guards[0]?.hooks[0]?.command ?? "";
+		expect(command).toContain("merge_ready");
+		expect(command).toContain("worker_done");
+	});
+});
+
+describe("lead close-gate behavioral tests", () => {
+	let tempDir: string;
+	let dbPath: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-lead-gate-test-"));
+		const { mkdir } = await import("node:fs/promises");
+		await mkdir(join(tempDir, ".overstory"), { recursive: true });
+		dbPath = join(tempDir, ".overstory", "mail.db");
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tempDir);
+	});
+
+	function seedMail(messages: Array<{ from: string; to: string; type: string }>): void {
+		const store = createMailStore(dbPath);
+		const client = createMailClient(store);
+		try {
+			for (const m of messages) {
+				client.send({
+					from: m.from,
+					to: m.to,
+					subject: `${m.type}: test`,
+					body: "test",
+					type: m.type as Parameters<typeof client.send>[0]["type"],
+				});
+			}
+		} finally {
+			client.close();
+		}
+	}
+
+	async function runGate(opts: {
+		command: string;
+		agentName?: string | null;
+		taskId?: string | null;
+	}): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+		const guards = getLeadCloseGateGuards();
+		const script = guards[0]?.hooks[0]?.command ?? "";
+		const input = JSON.stringify({ command: opts.command });
+		const env = { ...process.env } as Record<string, string>;
+		if (opts.agentName === null) {
+			delete env.OVERSTORY_AGENT_NAME;
+		} else if (opts.agentName !== undefined) {
+			env.OVERSTORY_AGENT_NAME = opts.agentName;
+		}
+		if (opts.taskId === null) {
+			delete env.OVERSTORY_TASK_ID;
+		} else if (opts.taskId !== undefined) {
+			env.OVERSTORY_TASK_ID = opts.taskId;
+		}
+		const proc = Bun.spawn(["sh", "-c", script], {
+			cwd: tempDir,
+			stdin: new TextEncoder().encode(input),
+			stdout: "pipe",
+			stderr: "pipe",
+			env,
+		});
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		const exitCode = await proc.exited;
+		return { stdout, stderr, exitCode };
+	}
+
+	test("exits silently when OVERSTORY_AGENT_NAME is unset", async () => {
+		const r = await runGate({
+			command: "sd close my-task",
+			agentName: null,
+			taskId: "my-task",
+		});
+		expect(r.stdout.trim()).toBe("");
+	});
+
+	test("exits silently when OVERSTORY_TASK_ID is unset (coordinator/monitor)", async () => {
+		const r = await runGate({
+			command: "sd close my-task",
+			agentName: "coordinator",
+			taskId: null,
+		});
+		expect(r.stdout.trim()).toBe("");
+	});
+
+	test("exits silently for non-close commands", async () => {
+		const r = await runGate({
+			command: "git status",
+			agentName: "lead-x",
+			taskId: "my-task",
+		});
+		expect(r.stdout.trim()).toBe("");
+	});
+
+	test("exits silently when closing a foreign task (handled by tracker-close guard)", async () => {
+		const r = await runGate({
+			command: "sd close some-other-task",
+			agentName: "lead-x",
+			taskId: "my-task",
+		});
+		expect(r.stdout.trim()).toBe("");
+	});
+
+	test("blocks sd close of own task when zero merge_ready sent", async () => {
+		const r = await runGate({
+			command: "sd close my-task",
+			agentName: "lead-x",
+			taskId: "my-task",
+		});
+		const parsed = JSON.parse(r.stdout.trim());
+		expect(parsed.decision).toBe("block");
+		expect(parsed.reason).toContain("merge_ready");
+		expect(parsed.reason).toContain("not sent");
+	});
+
+	test("blocks bd close of own task when zero merge_ready sent (beads tracker)", async () => {
+		const r = await runGate({
+			command: "bd close my-task",
+			agentName: "lead-x",
+			taskId: "my-task",
+		});
+		const parsed = JSON.parse(r.stdout.trim());
+		expect(parsed.decision).toBe("block");
+		expect(parsed.reason).toContain("merge_ready");
+	});
+
+	test("allows sd close when one merge_ready sent and zero worker_done received", async () => {
+		seedMail([{ from: "lead-x", to: "coordinator", type: "merge_ready" }]);
+		const r = await runGate({
+			command: "sd close my-task",
+			agentName: "lead-x",
+			taskId: "my-task",
+		});
+		expect(r.stdout.trim()).toBe("");
+	});
+
+	test("blocks sd close when merge_ready count < worker_done count", async () => {
+		seedMail([
+			{ from: "lead-x", to: "coordinator", type: "merge_ready" },
+			{ from: "builder-a", to: "lead-x", type: "worker_done" },
+			{ from: "builder-b", to: "lead-x", type: "worker_done" },
+		]);
+		const r = await runGate({
+			command: "sd close my-task",
+			agentName: "lead-x",
+			taskId: "my-task",
+		});
+		const parsed = JSON.parse(r.stdout.trim());
+		expect(parsed.decision).toBe("block");
+		expect(parsed.reason).toContain("less than worker_done");
+	});
+
+	test("allows sd close when merge_ready count equals worker_done count", async () => {
+		seedMail([
+			{ from: "lead-x", to: "coordinator", type: "merge_ready" },
+			{ from: "lead-x", to: "coordinator", type: "merge_ready" },
+			{ from: "builder-a", to: "lead-x", type: "worker_done" },
+			{ from: "builder-b", to: "lead-x", type: "worker_done" },
+		]);
+		const r = await runGate({
+			command: "sd close my-task",
+			agentName: "lead-x",
+			taskId: "my-task",
+		});
+		expect(r.stdout.trim()).toBe("");
+	});
+
+	test("only counts merge_ready sent BY this agent, not by other leads", async () => {
+		seedMail([
+			{ from: "lead-y", to: "coordinator", type: "merge_ready" },
+			{ from: "lead-z", to: "coordinator", type: "merge_ready" },
+		]);
+		const r = await runGate({
+			command: "sd close my-task",
+			agentName: "lead-x",
+			taskId: "my-task",
+		});
+		const parsed = JSON.parse(r.stdout.trim());
+		expect(parsed.decision).toBe("block");
+		expect(parsed.reason).toContain("not sent");
+	});
+});
+
+describe("deployHooks lead close-gate integration", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(join(tmpdir(), "overstory-lead-gate-deploy-"));
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tempDir);
+	});
+
+	test("lead capability gets the close-gate guard in PreToolUse", async () => {
+		const worktreePath = join(tempDir, "lead-wt");
+		await deployHooks(worktreePath, "lead-agent", "lead");
+
+		const content = await Bun.file(join(worktreePath, ".claude", "settings.local.json")).text();
+		const parsed = JSON.parse(content);
+		const preToolUse = parsed.hooks.PreToolUse;
+
+		const closeGate = preToolUse.find(
+			(h: { matcher: string; hooks: Array<{ command: string }> }) =>
+				h.matcher === "Bash" && h.hooks[0]?.command?.includes("merge_ready gate"),
+		);
+		expect(closeGate).toBeDefined();
+	});
+
+	test("non-lead capabilities do NOT get the close-gate guard", async () => {
+		const capabilities = ["builder", "scout", "reviewer", "merger", "coordinator", "orchestrator"];
+
+		for (const cap of capabilities) {
+			const wt = join(tempDir, `${cap}-wt`);
+			await deployHooks(wt, `${cap}-agent`, cap);
+
+			const content = await Bun.file(join(wt, ".claude", "settings.local.json")).text();
+			const parsed = JSON.parse(content);
+			const preToolUse = parsed.hooks.PreToolUse;
+
+			const closeGate = preToolUse.find(
+				(h: { matcher: string; hooks: Array<{ command: string }> }) =>
+					h.matcher === "Bash" && h.hooks[0]?.command?.includes("merge_ready gate"),
+			);
+			expect(closeGate).toBeUndefined();
 		}
 	});
 });

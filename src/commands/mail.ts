@@ -253,6 +253,7 @@ interface ListOpts {
 	to?: string;
 	agent?: string;
 	unread?: boolean;
+	type?: string;
 	json?: boolean;
 }
 
@@ -603,9 +604,20 @@ function handleList(opts: ListOpts, cwd: string): void {
 	const unread = opts.unread ? true : undefined;
 	const json = opts.json ?? false;
 
+	let type: MailMessageType | undefined;
+	if (opts.type !== undefined) {
+		if (!MAIL_MESSAGE_TYPES.includes(opts.type as MailMessageType)) {
+			throw new ValidationError(
+				`Invalid --type "${opts.type}". Must be one of: ${MAIL_MESSAGE_TYPES.join(", ")}`,
+				{ field: "type", value: opts.type },
+			);
+		}
+		type = opts.type as MailMessageType;
+	}
+
 	const client = openClient(cwd);
 	try {
-		const messages = client.list({ from, to, unread });
+		const messages = client.list({ from, to, unread, type });
 
 		if (json) {
 			jsonOutput("mail list", { messages });
@@ -749,6 +761,7 @@ export async function mailCommand(args: string[]): Promise<void> {
 		.option("--to <name>", "Filter by recipient")
 		.option("--agent <name>", "Alias for --to (filter by recipient)")
 		.option("--unread", "Show only unread messages")
+		.option("--type <type>", "Filter by message type")
 		.option("--json", "Output as JSON")
 		.exitOverride()
 		.action((opts: ListOpts) => {
