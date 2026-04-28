@@ -967,8 +967,25 @@
 			"overstory-5804",
 			"overstory-329a"
 		],
-		"status": "active",
+		"status": "completed",
 		"createdAt": "2026-04-07T21:11:43.098Z",
+		"completedAt": "2026-04-07T21:31:02.663Z"
+	},
+	{
+		"id": "group-80c27629",
+		"name": "phase1-ui-shell",
+		"memberIssueIds": [
+			"overstory-0820",
+			"overstory-ba9c",
+			"overstory-9e8b",
+			"overstory-22ac",
+			"overstory-9884",
+			"overstory-6c4f",
+			"overstory-fc04",
+			"overstory-0ddb"
+		],
+		"status": "active",
+		"createdAt": "2026-04-28T04:10:58.855Z",
 		"completedAt": null
 	}
 ]
