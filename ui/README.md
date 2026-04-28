@@ -9,8 +9,8 @@ bun install
 bun run dev
 ```
 
-Starts Vite dev server on port 5173. Proxies `/api` and `/ws` to
-`OVERSTORY_SERVE_URL` (default: `http://localhost:8080`).
+Starts Bun's native dev server (with HMR) on port 3000. Tailwind v4 is
+processed via `bun-plugin-tailwind` (configured in `bunfig.toml`).
 
 ## Build
 
@@ -18,4 +18,4 @@ Starts Vite dev server on port 5173. Proxies `/api` and `/ws` to
 bun run build
 ```
 
-Outputs to `ui/dist/`. The `ov serve` command serves this bundle.
+Outputs a static bundle to `ui/dist/`. The `ov serve` command serves this bundle.
