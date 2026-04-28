@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1099,6 +1099,186 @@ describe("ClaudeRuntime.parseEvents onSessionId hook", () => {
 		expect(order[0]).toBe("callback:sess-sync");
 		expect(order[1]).toBe("event:status");
 		expect(order[2]).toBe("event:assistant_message");
+	});
+});
+
+// ─── parseEvents batching tests ─────────────────────────────────────────────
+
+function controllableStream(): {
+	stream: ReadableStream<Uint8Array>;
+	enqueue: (data: string) => void;
+	close: () => void;
+} {
+	let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+	const enc = new TextEncoder();
+	const stream = new ReadableStream<Uint8Array>({
+		start(c) {
+			ctrl = c;
+		},
+	});
+	return {
+		stream,
+		enqueue: (data: string) => ctrl.enqueue(enc.encode(data)),
+		close: () => ctrl.close(),
+	};
+}
+
+async function collectWithOpts(
+	stream: ReadableStream<Uint8Array>,
+	opts: { flushIntervalMs?: number; flushSizeBytes?: number },
+): Promise<AgentEvent[]> {
+	const rt = new ClaudeRuntime();
+	const events: AgentEvent[] = [];
+	for await (const ev of rt.parseEvents(stream, opts)) {
+		events.push(ev);
+	}
+	return events;
+}
+
+describe("ClaudeRuntime.parseEvents batching", () => {
+	function assistantText(text: string, model?: string, usage?: Record<string, number>): string {
+		const message: Record<string, unknown> = { content: [{ type: "text", text }] };
+		if (model !== undefined) message.model = model;
+		if (usage !== undefined) message.usage = usage;
+		return JSON.stringify({ type: "assistant", message });
+	}
+
+	function assistantMixed(blocks: unknown[]): string {
+		return JSON.stringify({ type: "assistant", message: { content: blocks } });
+	}
+
+	function systemLine(sessionId: string): string {
+		return JSON.stringify({ type: "system", subtype: "init", session_id: sessionId });
+	}
+
+	function resultLine(sessionId: string): string {
+		return JSON.stringify({
+			type: "result",
+			session_id: sessionId,
+			result: "done",
+			is_error: false,
+			duration_ms: 0,
+			num_turns: 1,
+		});
+	}
+
+	test("1: multiple text fragments within window batch into one event", async () => {
+		const fragments = ["hello", " ", "world", "!", " bye"];
+		const lines = `${fragments.map((t) => assistantText(t)).join("\n")}\n`;
+		const events = await collectWithOpts(toStream(lines), { flushIntervalMs: 500 });
+		expect(events).toHaveLength(1);
+		expect(events[0]?.type).toBe("assistant_message");
+		expect(events[0]?.text).toBe("hello world! bye");
+		expect(typeof events[0]?.timestamp).toBe("string");
+	});
+
+	test("2: timer flush: first batch emitted after flushIntervalMs when stream is idle", async () => {
+		const { stream, enqueue, close } = controllableStream();
+		const collectPromise = collectWithOpts(stream, { flushIntervalMs: 50 });
+		enqueue(`${assistantText("first")}\n`);
+		await new Promise<void>((r) => setTimeout(r, 200));
+		enqueue(`${assistantText("second")}\n`);
+		close();
+		const events = await collectPromise;
+		expect(events).toHaveLength(2);
+		expect(events[0]?.text).toBe("first");
+		expect(events[1]?.text).toBe("second");
+	});
+
+	test("3: tool_use mid-stream flushes pending text first", async () => {
+		const line = assistantMixed([
+			{ type: "text", text: "before tool" },
+			{ type: "tool_use", id: "c1", name: "Read", input: {} },
+		]);
+		const events = await collectWithOpts(toStream(`${line}\n`), { flushIntervalMs: 500 });
+		expect(events).toHaveLength(2);
+		expect(events[0]?.type).toBe("assistant_message");
+		expect(events[0]?.text).toBe("before tool");
+		expect(events[1]?.type).toBe("tool_use");
+		expect(events[1]?.name).toBe("Read");
+	});
+
+	test("4: multi-block [text, tool_use, text] preserves in-order delivery", async () => {
+		const line = assistantMixed([
+			{ type: "text", text: "first" },
+			{ type: "tool_use", id: "c1", name: "Bash", input: {} },
+			{ type: "text", text: "second" },
+		]);
+		const events = await collectWithOpts(toStream(`${line}\n`), { flushIntervalMs: 500 });
+		expect(events).toHaveLength(3);
+		expect(events[0]?.type).toBe("assistant_message");
+		expect(events[0]?.text).toBe("first");
+		expect(events[1]?.type).toBe("tool_use");
+		expect(events[1]?.name).toBe("Bash");
+		expect(events[2]?.type).toBe("assistant_message");
+		expect(events[2]?.text).toBe("second");
+	});
+
+	test("5: stream-end flushes pending text when no other flush trigger fires", async () => {
+		const line = assistantText("only text");
+		const events = await collectWithOpts(toStream(`${line}\n`), { flushIntervalMs: 500 });
+		expect(events).toHaveLength(1);
+		expect(events[0]?.type).toBe("assistant_message");
+		expect(events[0]?.text).toBe("only text");
+	});
+
+	test("6: size cap flush: fragments summing beyond cap produce multiple batched events", async () => {
+		const textA = "a".repeat(60);
+		const textB = "b".repeat(60);
+		const lines = `${assistantText(textA)}\n${assistantText(textB)}\n`;
+		const events = await collectWithOpts(toStream(lines), {
+			flushIntervalMs: 500,
+			flushSizeBytes: 100,
+		});
+		expect(events.length).toBeGreaterThanOrEqual(2);
+		const allText = events.map((e) => e.text as string).join("");
+		expect(allText).toBe(textA + textB);
+	});
+
+	test("7: single fragment exceeding size cap is emitted as its own batch", async () => {
+		const bigText = "x".repeat(200); // 200 bytes > cap of 100
+		const line = assistantText(bigText);
+		const events = await collectWithOpts(toStream(`${line}\n`), {
+			flushIntervalMs: 500,
+			flushSizeBytes: 100,
+		});
+		expect(events).toHaveLength(1);
+		expect(events[0]?.text).toBe(bigText);
+	});
+
+	test("8: non-text events between text batches reset the batch", async () => {
+		const lines = `${[
+			assistantText("alpha"),
+			systemLine("s1"),
+			assistantText("beta"),
+			resultLine("s1"),
+		].join("\n")}\n`;
+		const events = await collectWithOpts(toStream(lines), { flushIntervalMs: 500 });
+		expect(events).toHaveLength(4);
+		expect(events[0]?.type).toBe("assistant_message");
+		expect(events[0]?.text).toBe("alpha");
+		expect(events[1]?.type).toBe("status");
+		expect(events[2]?.type).toBe("assistant_message");
+		expect(events[2]?.text).toBe("beta");
+		expect(events[3]?.type).toBe("result");
+	});
+
+	test("9: batched event model/usage use the latest contributing message (latest wins)", async () => {
+		const msg1 = assistantText("hello ", "model-A", { input_tokens: 10, output_tokens: 5 });
+		const msg2 = assistantText("world", "model-B", { input_tokens: 20, output_tokens: 10 });
+		const lines = `${msg1}\n${msg2}\n`;
+		const events = await collectWithOpts(toStream(lines), { flushIntervalMs: 500 });
+		expect(events).toHaveLength(1);
+		expect(events[0]?.model).toBe("model-B");
+		expect((events[0]?.usage as Record<string, number>)?.input_tokens).toBe(20);
+	});
+
+	test("10: model/usage are omitted on batched event when no contributing message provided them", async () => {
+		const msg = assistantText("no model here");
+		const events = await collectWithOpts(toStream(`${msg}\n`), { flushIntervalMs: 500 });
+		expect(events).toHaveLength(1);
+		expect(Object.hasOwn(events[0] ?? {}, "model")).toBe(false);
+		expect(Object.hasOwn(events[0] ?? {}, "usage")).toBe(false);
 	});
 });
 
