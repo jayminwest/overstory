@@ -42,6 +42,29 @@ Orchestrator (your Claude Code session)
 
 Depth limit is configurable (default 2). Prevents runaway spawning.
 
+### Runtime Modes: tmux vs headless (Claude Code)
+
+Claude Code agents can run in two modes:
+
+| Mode | Spawn path | I/O | Visibility | When to use |
+|------|------------|-----|------------|-------------|
+| **tmux** (default) | `src/worktree/tmux.ts` -> `tmux new-session` | Pane content (capture-pane) | `tmux attach` from operator shell | Default. Operator wants to attach and watch / steer mid-session. Hooks fire normally. |
+| **headless** | `src/worktree/process.ts` -> `Bun.spawn` | NDJSON stream-json on stdout, redirected to log file | `ov logs --agent <name>` and `ov feed` | UI-driven swarms (`ov serve`), CI environments, containers without tmux/DBus, when structured per-tool-call event fidelity is needed. |
+
+Selection is per-spawn:
+
+- `ov sling --headless <task-id>` — force headless for this spawn.
+- `ov sling --no-headless <task-id>` — force tmux (overrides the config knob).
+- Otherwise, the project default applies: `runtime.claudeHeadlessByDefault: true` in
+  `.overstory/config.yaml` flips the default to headless. When unset, the default is tmux.
+
+The flag is a no-op for runtimes that statically declare `headless: true` (e.g. Sapling).
+Passing `--headless` with a runtime that has no `buildDirectSpawn` (Codex, Pi, Cursor) is
+rejected with a `ValidationError`.
+
+Both modes write to the same `EventStore` and `SessionStore`, so `ov status`,
+`ov dashboard`, `ov inspect`, and `ov feed` work identically across both.
+
 ### Messaging: Custom SQLite Mail
 
 Purpose-built messaging via `bun:sqlite` in `.overstory/mail.db`. WAL mode for concurrent access from multiple agents. ~1-5ms per query. Independent of beads (which is too slow for high-frequency polling).

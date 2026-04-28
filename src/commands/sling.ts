@@ -38,7 +38,7 @@ import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
 import type { TrackerIssue } from "../tracker/factory.ts";
 import { createTrackerClient, resolveBackend, trackerCliName } from "../tracker/factory.ts";
-import type { AgentSession, OverlayConfig } from "../types.ts";
+import type { AgentSession, OverlayConfig, OverstoryConfig } from "../types.ts";
 import { createWorktree, rollbackWorktree } from "../worktree/manager.ts";
 import { spawnHeadlessAgent } from "../worktree/process.ts";
 import {
@@ -156,6 +156,7 @@ export interface SlingOptions {
 	noScoutCheck?: boolean;
 	baseBranch?: string;
 	profile?: string;
+	headless?: boolean;
 }
 
 export interface AutoDispatchOptions {
@@ -463,6 +464,44 @@ export async function getCurrentBranch(repoRoot: string): Promise<string | null>
 	// "HEAD" is returned when in detached HEAD state
 	if (branch === "HEAD" || branch === "") return null;
 	return branch;
+}
+
+/**
+ * Resolve whether to use the headless spawn path for a given runtime + flags + config.
+ *
+ * Precedence (highest first):
+ *   1. runtime.headless === true (statically headless runtimes always use headless)
+ *   2. Explicit --headless / --no-headless flag (boolean | undefined from commander)
+ *   3. config.runtime.claudeHeadlessByDefault (only applies when runtime.id === "claude")
+ *   4. Default: false (tmux)
+ *
+ * Throws ValidationError when --headless is explicitly true but the runtime has no
+ * buildDirectSpawn implementation.
+ */
+export function resolveUseHeadless(
+	runtime: { id: string; headless?: boolean; buildDirectSpawn?: unknown },
+	flag: boolean | undefined,
+	config: OverstoryConfig,
+): boolean {
+	if (runtime.headless === true) return true;
+
+	if (flag === true) {
+		if (typeof runtime.buildDirectSpawn !== "function") {
+			throw new ValidationError(
+				`--headless requires a runtime with headless support. Runtime "${runtime.id}" does not implement buildDirectSpawn.`,
+				{ field: "headless", value: true },
+			);
+		}
+		return true;
+	}
+	if (flag === false) return false;
+
+	if (runtime.id === "claude" && config.runtime?.claudeHeadlessByDefault === true) {
+		if (typeof runtime.buildDirectSpawn !== "function") return false;
+		return true;
+	}
+
+	return false;
 }
 
 /**
@@ -919,7 +958,8 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 
 			// 11c. Spawn: headless runtimes bypass tmux entirely; tmux path is unchanged.
-			if (runtime.headless === true && runtime.buildDirectSpawn) {
+			const useHeadless = resolveUseHeadless(runtime, opts.headless, config);
+			if (useHeadless && runtime.buildDirectSpawn) {
 				const directEnv = {
 					...runtime.buildEnv(resolvedModel),
 					OVERSTORY_AGENT_NAME: name,

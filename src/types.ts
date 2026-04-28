@@ -141,6 +141,13 @@ export interface OverstoryConfig {
 		 * Default: 0 (no delay).
 		 */
 		shellInitDelayMs?: number;
+		/**
+		 * Project-level default for spawning Claude Code agents in headless mode
+		 * (Bun.spawn + stream-json) instead of the tmux interactive runtime.
+		 * Per-spawn `--headless` / `--no-headless` flags on `ov sling` override this.
+		 * Default: false (tmux).
+		 */
+		claudeHeadlessByDefault?: boolean;
 	};
 }
 

@@ -4,7 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveModel, resolveProviderEnv } from "../agents/manifest.ts";
-import { HierarchyError } from "../errors.ts";
+import { HierarchyError, ValidationError } from "../errors.ts";
 import { ClaudeRuntime } from "../runtimes/claude.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
@@ -26,6 +26,7 @@ import {
 	inferDomainsFromFiles,
 	isRunningAsRoot,
 	parentHasScouts,
+	resolveUseHeadless,
 	shouldShowScoutWarning,
 	validateHierarchy,
 } from "./sling.ts";
@@ -1403,5 +1404,56 @@ describe("getCurrentBranch", () => {
 		} finally {
 			await cleanupTempDir(tmpDir);
 		}
+	});
+});
+
+describe("resolveUseHeadless", () => {
+	const claudeLike = { id: "claude", buildDirectSpawn: () => [] as string[] };
+	const claudeNoSpawn = { id: "claude" };
+	const saplingLike = {
+		id: "sapling",
+		headless: true as const,
+		buildDirectSpawn: () => [] as string[],
+	};
+	const codexLike = { id: "codex" };
+	const baseConfig = {} as OverstoryConfig;
+	const headlessByDefaultConfig = {
+		runtime: { default: "claude", claudeHeadlessByDefault: true },
+	} as unknown as OverstoryConfig;
+
+	test("statically headless runtime returns true regardless of flag", () => {
+		expect(resolveUseHeadless(saplingLike, undefined, baseConfig)).toBe(true);
+	});
+
+	test("claude + no flag + base config returns false (default tmux)", () => {
+		expect(resolveUseHeadless(claudeLike, undefined, baseConfig)).toBe(false);
+	});
+
+	test("claude + no flag + claudeHeadlessByDefault:true returns true", () => {
+		expect(resolveUseHeadless(claudeLike, undefined, headlessByDefaultConfig)).toBe(true);
+	});
+
+	test("claude + flag:true + base config returns true", () => {
+		expect(resolveUseHeadless(claudeLike, true, baseConfig)).toBe(true);
+	});
+
+	test("claude + flag:false + claudeHeadlessByDefault:true returns false (flag wins)", () => {
+		expect(resolveUseHeadless(claudeLike, false, headlessByDefaultConfig)).toBe(false);
+	});
+
+	test("claude without buildDirectSpawn + flag:true throws ValidationError", () => {
+		expect(() => resolveUseHeadless(claudeNoSpawn, true, baseConfig)).toThrow(ValidationError);
+	});
+
+	test("codex + claudeHeadlessByDefault:true returns false (config knob is Claude-only)", () => {
+		expect(resolveUseHeadless(codexLike, undefined, headlessByDefaultConfig)).toBe(false);
+	});
+
+	test("codex + flag:true throws ValidationError (no buildDirectSpawn)", () => {
+		expect(() => resolveUseHeadless(codexLike, true, baseConfig)).toThrow(ValidationError);
+	});
+
+	test("sapling + flag:false returns true (statically headless wins over flag)", () => {
+		expect(resolveUseHeadless(saplingLike, false, baseConfig)).toBe(true);
 	});
 });
