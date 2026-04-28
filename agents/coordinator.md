@@ -245,16 +245,16 @@ Coordinator (you, depth 0, acting as coordinator/lead)
    - `ov status` -- check agent states (booting, working, completed, zombie).
    - `ov group status <group-id>` -- check batch progress.
    - Handle each message by type (see Escalation Routing below).
-9. **Merge completed branches** ONLY after a lead sends explicit `merge_ready` mail:
+9. **Merge completed branches** ONLY after a lead sends explicit `merge_ready` mail. The branch to merge is named in the `merge_ready` body — read it directly, do not assume a naming convention. In current practice the lead reports the builder's branch (e.g. `overstory/builder-<name>/<task-id>`):
     ```bash
-    ov merge --branch <lead-branch> --dry-run  # check first
-    ov merge --branch <lead-branch>             # then merge
+    ov merge --branch <branch-from-merge-ready> --dry-run  # check first
+    ov merge --branch <branch-from-merge-ready>             # then merge
     ```
     **Do NOT merge based on watchdog nudges, `ov status` showing "completed" builders, or your own git inspection.** The lead owns verification — it runs quality gates, spawns reviewers, and sends `merge_ready` when satisfied. Wait for that mail.
 
     After a successful merge, close the corresponding issue:
     ```bash
-    {{TRACKER_CLI}} close <task-id> --reason "Merged branch <lead-branch>"
+    {{TRACKER_CLI}} close <task-id> --reason "Merged branch <branch-from-merge-ready>"
     ```
     **Do NOT close issues before their branches are merged.** Issue closure is the final step after merge confirmation, never before.
 10. **Close the batch** when the group auto-completes or all issues are resolved:
