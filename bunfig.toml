@@ -1,0 +1,4 @@
+[test]
+# Prevent tests from leaking into a real .overstory/ when bun test is run
+# inside an agent worktree. See src/test-setup.ts and overstory-6d42.
+preload = ["./src/test-setup.ts"]
