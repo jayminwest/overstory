@@ -16,6 +16,7 @@ import { loadConfig } from "../config.ts";
 import { MergeError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { accent, printHint } from "../logging/color.ts";
+import { acquireMergeLock } from "../merge/lock.ts";
 import { createMergeQueue } from "../merge/queue.ts";
 import { createMergeResolver } from "../merge/resolver.ts";
 import { createMulchClient } from "../mulch/client.ts";
@@ -168,10 +169,22 @@ export async function mergeCommand(opts: MergeOptions): Promise<void> {
 		mulchClient,
 	});
 
-	if (branchName) {
-		await handleBranch(branchName, queue, resolver, config, targetBranch, dryRun, json);
-	} else {
-		await handleAll(queue, resolver, config, targetBranch, dryRun, json);
+	// Dry-run is read-only with respect to git state — no lock needed. The
+	// real merge path acquires a lock on the target branch so a parallel
+	// `ov merge` can't observe in-progress conflict markers and report a
+	// false failure (seeds: overstory-9610).
+	const lock = dryRun
+		? null
+		: acquireMergeLock(join(config.project.root, ".overstory"), targetBranch);
+
+	try {
+		if (branchName) {
+			await handleBranch(branchName, queue, resolver, config, targetBranch, dryRun, json);
+		} else {
+			await handleAll(queue, resolver, config, targetBranch, dryRun, json);
+		}
+	} finally {
+		lock?.release();
 	}
 }
 

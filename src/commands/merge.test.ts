@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { ValidationError } from "../errors.ts";
+import { MergeError, ValidationError } from "../errors.ts";
+import { mergeLockPath } from "../merge/lock.ts";
 import { createMergeQueue } from "../merge/queue.ts";
 import {
 	cleanupTempDir,
@@ -594,6 +596,115 @@ merge:
 			// Verify merge went to explicit-target, not session-branch-target
 			const currentBranch = await runGitInDir(repoDir, ["symbolic-ref", "--short", "HEAD"]);
 			expect(currentBranch.trim()).toBe("explicit-target");
+		});
+	});
+
+	describe("concurrent-merge lock", () => {
+		test("refuses to start when another live ov merge holds the lock for the same target", async () => {
+			await setupProject(repoDir, defaultBranch);
+			const branchName = "overstory/builder/bead-lock-1";
+			await createCleanFeatureBranch(repoDir, branchName);
+
+			// Simulate another live ov merge by writing a lock file with this
+			// process's own PID — it is guaranteed alive, so the lock-holder check
+			// must treat it as an in-flight merge.
+			const lockPath = mergeLockPath(join(repoDir, ".overstory"), defaultBranch);
+			writeFileSync(
+				lockPath,
+				JSON.stringify({
+					pid: process.pid,
+					acquiredAt: new Date().toISOString(),
+					targetBranch: defaultBranch,
+				}),
+			);
+
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (): boolean => true;
+
+			try {
+				await mergeCommand({ branch: branchName });
+				expect(true).toBe(false); // should not reach here
+			} catch (err: unknown) {
+				expect(err).toBeInstanceOf(MergeError);
+				const msg = (err as MergeError).message;
+				expect(msg).toContain("Another ov merge is already running");
+				expect(msg).toContain(defaultBranch);
+			} finally {
+				process.stdout.write = originalWrite;
+			}
+		});
+
+		test("releases the lock after a successful merge so a second run can proceed", async () => {
+			await setupProject(repoDir, defaultBranch);
+			const branchName = "overstory/builder/bead-lock-2";
+			await createCleanFeatureBranch(repoDir, branchName);
+
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (): boolean => true;
+
+			try {
+				await mergeCommand({ branch: branchName, json: true });
+			} finally {
+				process.stdout.write = originalWrite;
+			}
+
+			// After release, a fresh `ov merge --dry-run` for an unrelated branch
+			// (which doesn't take a lock) should still see no leftover lock file.
+			const lockPath = mergeLockPath(join(repoDir, ".overstory"), defaultBranch);
+			expect(await Bun.file(lockPath).exists()).toBe(false);
+		});
+
+		test("--dry-run does not acquire the lock", async () => {
+			await setupProject(repoDir, defaultBranch);
+			const branchName = "overstory/builder/bead-lock-dry";
+			await createCleanFeatureBranch(repoDir, branchName);
+
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (): boolean => true;
+
+			try {
+				await mergeCommand({ branch: branchName, dryRun: true, json: true });
+			} finally {
+				process.stdout.write = originalWrite;
+			}
+
+			const lockPath = mergeLockPath(join(repoDir, ".overstory"), defaultBranch);
+			expect(await Bun.file(lockPath).exists()).toBe(false);
+		});
+
+		test("steals a stale lock (dead PID) and proceeds", async () => {
+			await setupProject(repoDir, defaultBranch);
+			const branchName = "overstory/builder/bead-lock-stale";
+			await createCleanFeatureBranch(repoDir, branchName);
+
+			// PID 2147483647 (INT_MAX) is virtually never assigned — treat as dead.
+			const lockPath = mergeLockPath(join(repoDir, ".overstory"), defaultBranch);
+			writeFileSync(
+				lockPath,
+				JSON.stringify({
+					pid: 2147483647,
+					acquiredAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+					targetBranch: defaultBranch,
+				}),
+			);
+
+			let output = "";
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (chunk: unknown): boolean => {
+				output += String(chunk);
+				return true;
+			};
+
+			try {
+				await mergeCommand({ branch: branchName, json: true });
+			} finally {
+				process.stdout.write = originalWrite;
+			}
+
+			const parsed = JSON.parse(output);
+			expect(parsed.success).toBe(true);
+			// Lock should be released after success.
+			expect(await Bun.file(lockPath).exists()).toBe(false);
 		});
 	});
 
