@@ -987,5 +987,19 @@
 		"status": "active",
 		"createdAt": "2026-04-28T04:10:58.855Z",
 		"completedAt": null
+	},
+	{
+		"id": "group-34cb3102",
+		"name": "phase2-headless-claude",
+		"memberIssueIds": [
+			"overstory-f001",
+			"overstory-46ad",
+			"overstory-2916",
+			"overstory-d854",
+			"overstory-268b"
+		],
+		"status": "active",
+		"createdAt": "2026-04-28T16:09:38.851Z",
+		"completedAt": null
 	}
 ]
