@@ -1076,7 +1076,10 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				);
 				if (!tuiReady) {
 					const alive = await isSessionAlive(tmuxSessionName);
-					store.updateState(name, "completed");
+					// Mark as zombie (not completed) so the watchdog detects this failed
+					// startup. 'completed' is a terminal success state that the watchdog
+					// skips entirely (overstory-c40e).
+					store.updateState(name, "zombie");
 
 					if (alive) {
 						await killSession(tmuxSessionName);
