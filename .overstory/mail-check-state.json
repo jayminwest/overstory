@@ -2,10 +2,10 @@
 	"stream-json-builder": 1777393445601,
 	"phase2-stream-json-lead": 1777394477238,
 	"review-stream-json": 1777394034987,
-	"coordinator": 1777395485625,
+	"coordinator": 1777398832441,
 	"phase2-session-pin-lead": 1777395305072,
-	"phase2-text-batch-lead": 1777395484942,
-	"phase2-headless-flag-lead": 1777395473800,
+	"phase2-text-batch-lead": 1777396294134,
+	"phase2-headless-flag-lead": 1777395903662,
 	"text-batch-builder": 1777395133917,
 	"session-pin-builder": 1777394913178,
 	"headless-flag-builder": 1777395186464
