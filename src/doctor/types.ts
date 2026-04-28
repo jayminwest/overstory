@@ -15,7 +15,8 @@ export type DoctorCategory =
 	| "version"
 	| "ecosystem"
 	| "providers"
-	| "watchdog";
+	| "watchdog"
+	| "serve";
 
 /** Result of a single doctor health check. */
 export interface DoctorCheck {

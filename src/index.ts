@@ -38,6 +38,7 @@ import { createReplayCommand } from "./commands/replay.ts";
 import { createRunCommand } from "./commands/run.ts";
 import { slingCommand } from "./commands/sling.ts";
 import { specWriteCommand } from "./commands/spec.ts";
+import { createServeCommand } from "./commands/serve.ts";
 import { createStatusCommand } from "./commands/status.ts";
 import { stopCommand } from "./commands/stop.ts";
 import { createSupervisorCommand } from "./commands/supervisor.ts";
@@ -103,6 +104,7 @@ const COMMANDS = [
 	"run",
 	"costs",
 	"metrics",
+	"serve",
 	"update",
 	"upgrade",
 	"completions",
@@ -246,6 +248,7 @@ program.addCommand(createWorktreeCommand());
 program.addCommand(createLogCommand());
 program.addCommand(createWatchCommand());
 program.addCommand(createGroupCommand());
+program.addCommand(createServeCommand());
 program.addCommand(createCompletionsCommand());
 
 // Unmigrated commands — passthrough pattern
