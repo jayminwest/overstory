@@ -6,10 +6,7 @@ import type { DoctorCheck, DoctorCheckFn } from "./types.ts";
  * ov serve subsystem health checks.
  * Validates ui/dist build output and port reachability.
  */
-export const checkServe: DoctorCheckFn = async (
-	config,
-	_overstoryDir,
-): Promise<DoctorCheck[]> => {
+export const checkServe: DoctorCheckFn = async (config, _overstoryDir): Promise<DoctorCheck[]> => {
 	const checks: DoctorCheck[] = [];
 
 	// Check 1: ui/dist directory exists (only relevant if a UI has been built)

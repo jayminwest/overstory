@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { _resetHandlers, createServeServer, registerApiHandler, registerWsHandler } from "./serve.ts";
+import {
+	_resetHandlers,
+	createServeServer,
+	registerApiHandler,
+	registerWsHandler,
+} from "./serve.ts";
 
 /**
  * Tests use createServeServer() directly to avoid binding to process SIGINT/SIGTERM.
@@ -34,10 +39,9 @@ describe("createServeServer", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	async function startServer(opts: { port?: number; host?: string } = {}): Promise<ReturnType<typeof Bun.serve>> {
-		const cwd = process.cwd();
-		// Override cwd resolution by providing loadConfig that uses tempDir
-		const { loadConfig } = await import("../config.ts");
+	async function startServer(
+		opts: { port?: number; host?: string } = {},
+	): Promise<ReturnType<typeof Bun.serve>> {
 		const origCwd = process.cwd;
 		// Swap cwd so loadConfig resolves to tempDir
 		process.cwd = () => tempDir;
@@ -54,7 +58,7 @@ describe("createServeServer", () => {
 		const server = await startServer();
 		const res = await fetch(`http://127.0.0.1:${server.port}/healthz`);
 		expect(res.status).toBe(200);
-		const body = await res.json() as Record<string, unknown>;
+		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.success).toBe(true);
 		expect(body.status).toBe("ok");
 	});
@@ -69,7 +73,7 @@ describe("createServeServer", () => {
 		const server = await startServer();
 		const res = await fetch(`http://127.0.0.1:${server.port}/api/foo`);
 		expect(res.status).toBe(404);
-		const body = await res.json() as Record<string, unknown>;
+		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.success).toBe(false);
 	});
 
@@ -87,7 +91,7 @@ describe("createServeServer", () => {
 		const server = await startServer();
 		const res = await fetch(`http://127.0.0.1:${server.port}/api/ping`);
 		expect(res.status).toBe(200);
-		const body = await res.json() as Record<string, unknown>;
+		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.pong).toBe(true);
 	});
 

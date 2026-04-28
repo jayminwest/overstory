@@ -102,13 +102,10 @@ export async function createServeServer(
 
 			// /healthz — always handled here
 			if (path === "/healthz") {
-				return new Response(
-					JSON.stringify({ success: true, command: "serve", status: "ok" }),
-					{
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					},
-				);
+				return new Response(JSON.stringify({ success: true, command: "serve", status: "ok" }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
 			}
 
 			// /ws — WebSocket upgrade
