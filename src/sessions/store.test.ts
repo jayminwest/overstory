@@ -155,6 +155,46 @@ describe("upsert", () => {
 	});
 });
 
+// === claudeSessionId roundtrip via upsert ===
+
+describe("claudeSessionId upsert roundtrip", () => {
+	test("undefined claudeSessionId leaves column null and field absent on roundtrip", () => {
+		store.upsert(makeSession());
+		const result = store.getByName("test-agent");
+		expect(result).not.toBeNull();
+		expect(Object.hasOwn(result ?? {}, "claudeSessionId")).toBe(false);
+	});
+
+	test("claudeSessionId roundtrips correctly when set", () => {
+		store.upsert(makeSession({ claudeSessionId: "sess-roundtrip-xyz" }));
+		const result = store.getByName("test-agent");
+		expect(result?.claudeSessionId).toBe("sess-roundtrip-xyz");
+	});
+});
+
+// === updateClaudeSessionId ===
+
+describe("updateClaudeSessionId", () => {
+	test("sets claude_session_id for an existing session; getByName returns it", () => {
+		store.upsert(makeSession());
+		store.updateClaudeSessionId("test-agent", "sess-pin-001");
+		const result = store.getByName("test-agent");
+		expect(result?.claudeSessionId).toBe("sess-pin-001");
+	});
+
+	test("calling twice with the same value is idempotent", () => {
+		store.upsert(makeSession());
+		store.updateClaudeSessionId("test-agent", "sess-idempotent");
+		store.updateClaudeSessionId("test-agent", "sess-idempotent");
+		const result = store.getByName("test-agent");
+		expect(result?.claudeSessionId).toBe("sess-idempotent");
+	});
+
+	test("calling for an unknown agent is a no-op (does not throw)", () => {
+		expect(() => store.updateClaudeSessionId("nonexistent", "sess-noop")).not.toThrow();
+	});
+});
+
 // === updateTranscriptPath ===
 
 describe("updateTranscriptPath", () => {

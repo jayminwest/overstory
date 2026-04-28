@@ -269,12 +269,19 @@ export class ClaudeRuntime implements AgentRuntime {
 	 * - result             → { type: "result", sessionId, result, isError, durationMs, numTurns }
 	 *
 	 * @param stream - ReadableStream<Uint8Array> from Bun.spawn stdout
+	 * @param opts - Optional hooks: `onSessionId` is invoked once, synchronously, on the first
+	 *   event that carries a non-empty `sessionId`. Consumer errors are swallowed so they cannot
+	 *   crash the parser.
 	 * @yields Parsed AgentEvent objects in emission order
 	 */
-	async *parseEvents(stream: ReadableStream<Uint8Array>): AsyncIterable<AgentEvent> {
+	async *parseEvents(
+		stream: ReadableStream<Uint8Array>,
+		opts?: { onSessionId?: (sessionId: string) => void },
+	): AsyncIterable<AgentEvent> {
 		const reader = stream.getReader();
 		const decoder = new TextDecoder();
 		let buffer = "";
+		let sessionIdPinned = false;
 
 		const emitLine = (line: string): AgentEvent[] => {
 			const trimmed = line.trim();
@@ -356,6 +363,18 @@ export class ClaudeRuntime implements AgentRuntime {
 			return events;
 		};
 
+		const maybePinSession = (event: AgentEvent): void => {
+			if (sessionIdPinned || !opts?.onSessionId) return;
+			const sid = event.sessionId;
+			if (typeof sid !== "string" || sid.length === 0) return;
+			sessionIdPinned = true;
+			try {
+				opts.onSessionId(sid);
+			} catch {
+				// Consumer errors must not crash the parser.
+			}
+		};
+
 		try {
 			while (true) {
 				const chunk = await reader.read();
@@ -368,6 +387,7 @@ export class ClaudeRuntime implements AgentRuntime {
 
 				for (const line of lines) {
 					for (const event of emitLine(line)) {
+						maybePinSession(event);
 						yield event;
 					}
 				}
@@ -376,6 +396,7 @@ export class ClaudeRuntime implements AgentRuntime {
 			// Flush remaining buffer on clean stream end (no trailing newline).
 			if (buffer.trim()) {
 				for (const event of emitLine(buffer)) {
+					maybePinSession(event);
 					yield event;
 				}
 			}

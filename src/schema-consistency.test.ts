@@ -55,6 +55,7 @@ describe("SQL schema consistency", () => {
 				"agent_name",
 				"branch_name",
 				"capability",
+				"claude_session_id",
 				"depth",
 				"escalation_level",
 				"id",

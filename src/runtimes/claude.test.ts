@@ -1009,6 +1009,99 @@ describe("ClaudeRuntime.parseEvents unit", () => {
 	});
 });
 
+// ─── parseEvents onSessionId hook ────────────────────────────────────────────
+
+describe("ClaudeRuntime.parseEvents onSessionId hook", () => {
+	test("fires onSessionId once on first system event", async () => {
+		const rt = new ClaudeRuntime();
+		const called: string[] = [];
+		const line = JSON.stringify({ type: "system", subtype: "init", session_id: "sess-abc" });
+		for await (const _ of rt.parseEvents(toStream(`${line}\n`), {
+			onSessionId: (sid) => called.push(sid),
+		})) {
+			// consume
+		}
+		expect(called).toHaveLength(1);
+		expect(called[0]).toBe("sess-abc");
+	});
+
+	test("does not fire when stream ends before any session_id event", async () => {
+		const rt = new ClaudeRuntime();
+		const called: string[] = [];
+		const line = JSON.stringify({
+			type: "assistant",
+			message: { content: [{ type: "text", text: "hello" }] },
+		});
+		for await (const _ of rt.parseEvents(toStream(`${line}\n`), {
+			onSessionId: (sid) => called.push(sid),
+		})) {
+			// consume
+		}
+		expect(called).toHaveLength(0);
+	});
+
+	test("does not fire on subsequent events with same/different session_id", async () => {
+		const rt = new ClaudeRuntime();
+		const called: string[] = [];
+		const l1 = JSON.stringify({ type: "system", subtype: "init", session_id: "sess-abc" });
+		const l2 = JSON.stringify({
+			type: "result",
+			session_id: "sess-abc",
+			result: "ok",
+			is_error: false,
+			duration_ms: 1,
+			num_turns: 1,
+		});
+		for await (const _ of rt.parseEvents(toStream(`${l1}\n${l2}\n`), {
+			onSessionId: (sid) => called.push(sid),
+		})) {
+			// consume
+		}
+		expect(called).toHaveLength(1);
+		expect(called[0]).toBe("sess-abc");
+	});
+
+	test("callback errors do not crash the parser", async () => {
+		const rt = new ClaudeRuntime();
+		const sysLine = JSON.stringify({ type: "system", subtype: "init", session_id: "sess-err" });
+		const textLine = JSON.stringify({
+			type: "assistant",
+			message: { content: [{ type: "text", text: "after error" }] },
+		});
+		const events: AgentEvent[] = [];
+		for await (const ev of rt.parseEvents(toStream(`${sysLine}\n${textLine}\n`), {
+			onSessionId: () => {
+				throw new Error("intentional consumer error");
+			},
+		})) {
+			events.push(ev);
+		}
+		// Both events should still be yielded despite the callback throwing
+		expect(events).toHaveLength(2);
+		expect(events[0]?.type).toBe("status");
+		expect(events[1]?.type).toBe("assistant_message");
+	});
+
+	test("callback runs synchronously before next yield", async () => {
+		const rt = new ClaudeRuntime();
+		const order: string[] = [];
+		const sysLine = JSON.stringify({ type: "system", subtype: "init", session_id: "sess-sync" });
+		const textLine = JSON.stringify({
+			type: "assistant",
+			message: { content: [{ type: "text", text: "second" }] },
+		});
+		for await (const ev of rt.parseEvents(toStream(`${sysLine}\n${textLine}\n`), {
+			onSessionId: (sid) => order.push(`callback:${sid}`),
+		})) {
+			order.push(`event:${ev.type}`);
+		}
+		// callback must appear before the second event (synchronous inline)
+		expect(order[0]).toBe("callback:sess-sync");
+		expect(order[1]).toBe("event:status");
+		expect(order[2]).toBe("event:assistant_message");
+	});
+});
+
 // ─── parseEvents + EventStore integration test ───────────────────────────────
 
 describe("ClaudeRuntime integration: parseEvents + EventStore", () => {

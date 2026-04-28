@@ -200,6 +200,7 @@ export interface AgentSession {
 	stalledSince: string | null; // ISO timestamp when agent first entered stalled state
 	transcriptPath: string | null; // Runtime-provided transcript JSONL path (decoupled from ~/.claude/)
 	promptVersion?: string | null; // Canopy prompt version used at sling time (e.g. "builder@17")
+	claudeSessionId?: string | null; // Runtime-provided session_id (Claude stream-json), eagerly pinned on first event
 }
 
 // === Agent Identity ===

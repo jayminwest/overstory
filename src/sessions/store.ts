@@ -30,6 +30,8 @@ export interface SessionStore {
 	updateEscalation(agentName: string, level: number, stalledSince: string | null): void;
 	/** Update the transcript path for a session. */
 	updateTranscriptPath(agentName: string, path: string): void;
+	/** Update the runtime-provided session_id (e.g. Claude stream-json session_id). */
+	updateClaudeSessionId(agentName: string, sessionId: string): void;
 	/** Remove a session by agent name. */
 	remove(agentName: string): void;
 	/** Purge sessions matching criteria. Returns count of deleted rows. */
@@ -58,6 +60,7 @@ interface SessionRow {
 	stalled_since: string | null;
 	transcript_path: string | null;
 	prompt_version: string | null;
+	claude_session_id: string | null;
 }
 
 /** Row shape for runs table as stored in SQLite (snake_case columns). */
@@ -91,7 +94,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   escalation_level INTEGER NOT NULL DEFAULT 0,
   stalled_since TEXT,
   transcript_path TEXT,
-  prompt_version TEXT
+  prompt_version TEXT,
+  claude_session_id TEXT
 )`;
 
 const CREATE_INDEXES = `
@@ -135,6 +139,7 @@ function rowToSession(row: SessionRow): AgentSession {
 		stalledSince: row.stalled_since,
 		transcriptPath: row.transcript_path,
 		...(row.prompt_version !== null ? { promptVersion: row.prompt_version } : {}),
+		...(row.claude_session_id !== null ? { claudeSessionId: row.claude_session_id } : {}),
 	};
 }
 
@@ -176,6 +181,18 @@ function migrateAddPromptVersion(db: Database): void {
 }
 
 /**
+ * Migrate an existing sessions table to add the claude_session_id column.
+ * Safe to call multiple times — only adds the column if it does not exist.
+ */
+function migrateAddClaudeSessionId(db: Database): void {
+	const rows = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+	const existingColumns = new Set(rows.map((r) => r.name));
+	if (!existingColumns.has("claude_session_id")) {
+		db.exec("ALTER TABLE sessions ADD COLUMN claude_session_id TEXT");
+	}
+}
+
+/**
  * Migrate an existing sessions table from bead_id to task_id column.
  * Safe to call multiple times — only renames if bead_id exists and task_id does not.
  */
@@ -209,6 +226,7 @@ export function createSessionStore(dbPath: string): SessionStore {
 	migrateBeadIdToTaskId(db);
 	migrateAddTranscriptPath(db);
 	migrateAddPromptVersion(db);
+	migrateAddClaudeSessionId(db);
 	migrateAddCoordinatorName(db);
 
 	// Now safe to create indexes (all columns exist).
@@ -237,18 +255,19 @@ export function createSessionStore(dbPath: string): SessionStore {
 			$stalled_since: string | null;
 			$transcript_path: string | null;
 			$prompt_version: string | null;
+			$claude_session_id: string | null;
 		}
 	>(`
 		INSERT INTO sessions
 			(id, agent_name, capability, worktree_path, branch_name, task_id,
 			 tmux_session, state, pid, parent_agent, depth, run_id,
 			 started_at, last_activity, escalation_level, stalled_since, transcript_path,
-			 prompt_version)
+			 prompt_version, claude_session_id)
 		VALUES
 			($id, $agent_name, $capability, $worktree_path, $branch_name, $task_id,
 			 $tmux_session, $state, $pid, $parent_agent, $depth, $run_id,
 			 $started_at, $last_activity, $escalation_level, $stalled_since, $transcript_path,
-			 $prompt_version)
+			 $prompt_version, $claude_session_id)
 		ON CONFLICT(agent_name) DO UPDATE SET
 			id = excluded.id,
 			capability = excluded.capability,
@@ -266,7 +285,8 @@ export function createSessionStore(dbPath: string): SessionStore {
 			escalation_level = excluded.escalation_level,
 			stalled_since = excluded.stalled_since,
 			transcript_path = excluded.transcript_path,
-			prompt_version = excluded.prompt_version
+			prompt_version = excluded.prompt_version,
+			claude_session_id = excluded.claude_session_id
 	`);
 
 	const getByNameStmt = db.prepare<SessionRow, { $agent_name: string }>(`
@@ -322,6 +342,13 @@ export function createSessionStore(dbPath: string): SessionStore {
 		UPDATE sessions SET transcript_path = $transcript_path WHERE agent_name = $agent_name
 	`);
 
+	const updateClaudeSessionIdStmt = db.prepare<
+		void,
+		{ $agent_name: string; $claude_session_id: string }
+	>(`
+		UPDATE sessions SET claude_session_id = $claude_session_id WHERE agent_name = $agent_name
+	`);
+
 	return {
 		upsert(session: AgentSession): void {
 			upsertStmt.run({
@@ -343,6 +370,7 @@ export function createSessionStore(dbPath: string): SessionStore {
 				$stalled_since: session.stalledSince,
 				$transcript_path: session.transcriptPath,
 				$prompt_version: session.promptVersion ?? null,
+				$claude_session_id: session.claudeSessionId ?? null,
 			});
 		},
 
@@ -392,6 +420,10 @@ export function createSessionStore(dbPath: string): SessionStore {
 
 		updateTranscriptPath(agentName: string, path: string): void {
 			updateTranscriptPathStmt.run({ $agent_name: agentName, $transcript_path: path });
+		},
+
+		updateClaudeSessionId(agentName: string, sessionId: string): void {
+			updateClaudeSessionIdStmt.run({ $agent_name: agentName, $claude_session_id: sessionId });
 		},
 
 		remove(agentName: string): void {
