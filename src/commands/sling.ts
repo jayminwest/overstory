@@ -40,6 +40,7 @@ import { createRunStore } from "../sessions/store.ts";
 import type { TrackerIssue } from "../tracker/factory.ts";
 import { createTrackerClient, resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession, OverlayConfig, OverstoryConfig } from "../types.ts";
+import { resolveOverstoryBin } from "../utils/bin.ts";
 import { createWorktree, rollbackWorktree } from "../worktree/manager.ts";
 import { spawnHeadlessAgent } from "../worktree/process.ts";
 import {
@@ -1062,6 +1063,39 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					runStore.incrementAgentCount(runId);
 				} finally {
 					runStore.close();
+				}
+
+				// 13b. Spawn a detached "exit watcher" subprocess that polls the agent
+				// PID and finalizes the session (state -> completed, session_end event,
+				// FIFO cleanup, lead auto-nudge) when the process dies. Headless mode
+				// deploys only PreToolUse security guards (overstory-e24b), so the
+				// per-turn `ov log session-end` Stop hook never fires; without this
+				// watcher, SessionStore stays at 'working' indefinitely after a clean
+				// exit (overstory-267e). Best-effort: failure here is non-fatal — the
+				// agent still runs, and `ov stop` or the watchdog can reap state later.
+				try {
+					const overstoryBin = await resolveOverstoryBin();
+					const watcher = Bun.spawn(
+						[
+							"bun",
+							"run",
+							overstoryBin,
+							"__watch-exit",
+							"--pid",
+							String(headlessProc.pid),
+							"--agent",
+							name,
+						],
+						{
+							cwd: config.project.root,
+							stdout: "ignore",
+							stderr: "ignore",
+							stdin: "ignore",
+						},
+					);
+					watcher.unref();
+				} catch {
+					// Non-fatal: see comment above
 				}
 
 				// 14. Output result (headless)
