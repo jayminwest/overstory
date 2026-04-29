@@ -47,3 +47,58 @@ export async function fetchAgents(): Promise<string[]> {
 	const names = json.data.map((a) => a.agentName);
 	return [...new Set(names)].sort();
 }
+
+export interface SendMailInput {
+	to: string;
+	from?: string;
+	subject: string;
+	body: string;
+	type?: string;
+	priority?: string;
+	payload?: string;
+}
+
+export async function sendMail(
+	input: SendMailInput,
+): Promise<{ messageId?: string; messageIds?: string[] }> {
+	const res = await fetch("/api/mail", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(input),
+	});
+	const json = (await res.json()) as {
+		success: boolean;
+		data: { messageId?: string; messageIds?: string[] };
+		error?: string;
+	};
+	if (!json.success) throw new Error(json.error ?? "send mail failed");
+	return json.data;
+}
+
+export interface ReplyMailInput {
+	from?: string;
+	body: string;
+	type?: string;
+	priority?: string;
+}
+
+export async function replyMail(id: string, input: ReplyMailInput): Promise<{ messageId: string }> {
+	const res = await fetch(`/api/mail/${encodeURIComponent(id)}/reply`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(input),
+	});
+	const json = (await res.json()) as {
+		success: boolean;
+		data: { messageId: string };
+		error?: string;
+	};
+	if (!json.success) throw new Error(json.error ?? "reply mail failed");
+	return json.data;
+}
+
+export async function deleteMail(id: string): Promise<void> {
+	const res = await fetch(`/api/mail/${encodeURIComponent(id)}`, { method: "DELETE" });
+	const json = (await res.json()) as { success: boolean; error?: string };
+	if (!json.success) throw new Error(json.error ?? "delete mail failed");
+}
