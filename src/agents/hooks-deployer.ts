@@ -653,9 +653,23 @@ export function isOverstoryHookEntry(entry: HookEntry): boolean {
  * Overstory hooks are placed before user hooks per event type so security
  * guards run first.
  *
+ * In `headlessOnly` mode, only PreToolUse hooks are deployed (overstory-e24b).
+ * Headless Claude Code (`-p --output-format stream-json`) DOES dispatch hooks
+ * from settings.local.json, so PreToolUse security guards (path boundary,
+ * capability blocks, bash danger patterns, tracker close, lead close gate)
+ * are required to keep parity with tmux mode. The other hook types are dropped
+ * because they have headless equivalents already wired up:
+ *  - SessionStart  → buildInitialHeadlessPrompt() in sling.ts
+ *  - UserPromptSubmit → mail injection loop owned by `ov serve`
+ *  - PostToolUse → stream-json parser captures tool_use/tool_result
+ *  - Stop → stream-json parser captures the `result` event
+ *  - PreCompact → deferred (tracked separately)
+ *
  * @param worktreePath - Absolute path to the agent's git worktree (or project root)
  * @param agentName - The unique name of the agent
  * @param capability - Agent capability (builder, scout, reviewer, lead, merger)
+ * @param qualityGates - Quality gates whose commands are whitelisted as safe Bash prefixes
+ * @param headlessOnly - When true, deploy only PreToolUse entries (overstory-e24b)
  * @throws {AgentError} If the template is not found or the write fails
  */
 export async function deployHooks(
@@ -663,6 +677,7 @@ export async function deployHooks(
 	agentName: string,
 	capability = "builder",
 	qualityGates?: QualityGate[],
+	headlessOnly = false,
 ): Promise<void> {
 	const templatePath = getTemplatePath();
 	const file = Bun.file(templatePath);
@@ -692,6 +707,15 @@ export async function deployHooks(
 
 	// Parse the base config from the template
 	const config = JSON.parse(content) as { hooks: Record<string, HookEntry[]> };
+
+	// Headless mode: drop all template-derived hook entries (overstory-e24b).
+	// The template's SessionStart/UserPromptSubmit/PostToolUse/Stop/PreCompact/PreToolUse
+	// commands are either redundant with the stream-json parser or have headless equivalents
+	// (initial stdin prompt, mail injection loop). The dynamic security guards added below
+	// are the only PreToolUse entries we keep.
+	if (headlessOnly) {
+		config.hooks = {};
+	}
 
 	// Extend PATH in all template hook commands.
 	// Claude Code invokes hooks with PATH=/usr/bin:/bin:/usr/sbin:/sbin — ~/.bun/bin

@@ -128,9 +128,22 @@ export class ClaudeRuntime implements AgentRuntime {
 			await Bun.write(claudeMdPath, overlay.content);
 		}
 
-		if (!hooks.isHeadless) {
-			await deployHooks(hooks.worktreePath, hooks.agentName, hooks.capability, hooks.qualityGates);
-		}
+		// Always deploy hooks — headless Claude Code DOES dispatch settings.local.json
+		// PreToolUse hooks (verified empirically against `claude -p --output-format stream-json`).
+		// The original design (overstory-1c32 / docs/headless-hooks-design.md Q6) wrongly assumed
+		// hooks don't fire in headless mode and skipped deployment, leaving headless agents with
+		// none of the destructive-command guards. overstory-e24b reverses that: in headless mode
+		// we deploy a settings.local.json containing only PreToolUse security guards (path boundary,
+		// capability blocks, bash danger patterns, tracker close, lead close gate). The other
+		// hook types are dropped because they have headless equivalents already wired up
+		// (initial stdin prompt, serve mail injection loop, stream-json event capture).
+		await deployHooks(
+			hooks.worktreePath,
+			hooks.agentName,
+			hooks.capability,
+			hooks.qualityGates,
+			hooks.isHeadless ?? false,
+		);
 	}
 
 	/**

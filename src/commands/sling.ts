@@ -890,8 +890,10 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			// resolveUseHeadless is also used at 11c for spawn routing — hoisted here to share the value.
 			const useHeadless = resolveUseHeadless(runtime, opts.headless, config);
 
-			// 9b. Deploy hooks config (capability-specific guards). Skipped for headless agents:
-			// settings.local.json hooks don't fire in headless mode; the overlay covers constraints.
+			// 9b. Deploy hooks config (capability-specific guards). In headless mode we deploy
+			// a PreToolUse-only subset (security guards) — overstory-e24b. Headless Claude Code
+			// dispatches settings.local.json hooks, so dropping them would leave destructive
+			// commands unblocked.
 			await runtime.deployConfig(worktreePath, undefined, {
 				agentName: name,
 				capability,

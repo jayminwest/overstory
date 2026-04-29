@@ -422,7 +422,11 @@ describe("ClaudeRuntime", () => {
 			expect(scoutSettings).not.toBe(builderSettings);
 		});
 
-		test("skips settings.local.json when isHeadless is true", async () => {
+		test("writes PreToolUse-only settings.local.json when isHeadless is true", async () => {
+			// overstory-e24b: headless Claude Code DOES dispatch settings.local.json hooks,
+			// so the security guards (PreToolUse) must be deployed even in headless mode.
+			// Non-PreToolUse events have headless equivalents (initial stdin prompt, mail
+			// injection loop, stream-json parser) and are stripped to avoid duplicate work.
 			const worktreePath = join(tempDir, "headless-wt");
 
 			await runtime.deployConfig(
@@ -436,15 +440,28 @@ describe("ClaudeRuntime", () => {
 				},
 			);
 
-			// Overlay should still be written
+			// Overlay still written
 			const overlayPath = join(worktreePath, ".claude", "CLAUDE.md");
-			const overlayExists = await Bun.file(overlayPath).exists();
-			expect(overlayExists).toBe(true);
+			expect(await Bun.file(overlayPath).exists()).toBe(true);
 
-			// But hooks file must NOT be created for headless agents
+			// Hooks file IS created in headless mode (reversal of overstory-1c32 design Q6)
 			const settingsPath = join(worktreePath, ".claude", "settings.local.json");
-			const settingsExists = await Bun.file(settingsPath).exists();
-			expect(settingsExists).toBe(false);
+			expect(await Bun.file(settingsPath).exists()).toBe(true);
+
+			const parsed = JSON.parse(await Bun.file(settingsPath).text()) as {
+				hooks: Record<string, unknown[]>;
+			};
+
+			// Only PreToolUse entries — SessionStart/UserPromptSubmit/PostToolUse/Stop/PreCompact stripped
+			expect(Object.keys(parsed.hooks)).toEqual(["PreToolUse"]);
+			expect(parsed.hooks.PreToolUse?.length ?? 0).toBeGreaterThan(0);
+
+			// Sanity: the deployed PreToolUse guards include the destructive-command blocks
+			// that were the operational concern in overstory-e24b.
+			const serialized = JSON.stringify(parsed.hooks.PreToolUse);
+			expect(serialized).toContain("git push is blocked");
+			expect(serialized).toContain("git reset --hard");
+			expect(serialized).toContain("Path boundary violation");
 		});
 
 		test("still writes settings.local.json when isHeadless is false", async () => {

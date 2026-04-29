@@ -246,6 +246,26 @@ belt-and-suspenders.
 
 ## Design Question 6: Guard rules in headless mode
 
+> **Update (overstory-e24b, 2026-04-29):** The original answer below — that
+> guards are advisory only in headless mode — was based on a wrong assumption.
+> Claude Code's headless mode (`-p --output-format stream-json --input-format
+> stream-json --permission-mode bypassPermissions`) **does** load and dispatch
+> `.claude/settings.local.json` PreToolUse hooks. Verified empirically against
+> Claude Code 2.1.123 by deploying a Bash PreToolUse block matcher and observing
+> a `decision:block` `tool_result` with `is_error:true` for a forbidden command.
+>
+> The current implementation deploys a PreToolUse-only subset of the template
+> for headless agents (`deployHooks(..., headlessOnly=true)` in
+> `src/agents/hooks-deployer.ts`). All five guard families (path boundary,
+> capability tool blocks, bash danger patterns, tracker close, lead close gate)
+> ship in both tmux and headless modes. Non-PreToolUse hook entries (SessionStart,
+> UserPromptSubmit, PostToolUse, Stop, PreCompact) remain headless-replaced as
+> documented in Q1–Q5; they are stripped from the deployed config to avoid
+> duplicating work the stream-json equivalents already perform.
+>
+> The "advisory only" framing is preserved below for historical context. It is
+> no longer the implementation.
+
 ### The problem
 
 Claude Code hooks enforce security guards (path boundary, capability rules, bash
@@ -302,17 +322,22 @@ without OS sandboxing.
 
 ### Implication for `deployConfig` in headless mode
 
-When spawning a headless Claude Code agent:
+> **Superseded by overstory-e24b.** The original guidance below ("skip hooks
+> file deployment") was the cause of the operational gap: headless agents
+> received no PreToolUse guards. The current implementation deploys hooks in
+> both modes; in headless mode it strips non-PreToolUse entries via the
+> `headlessOnly` argument to `deployHooks()`.
+
+When spawning a headless Claude Code agent (current behaviour):
 
 - **Deploy CLAUDE.md overlay**: yes (agents read this from cwd automatically).
-- **Deploy `.claude/settings.local.json` hooks**: **skip**. The hooks file is not
-  used by headless agents; deploying it wastes I/O and creates a misleading
-  artifact in the worktree.
+- **Deploy `.claude/settings.local.json` hooks**: yes, with `headlessOnly=true`.
+  Only PreToolUse entries land in the file; the other event types are dropped
+  because they have headless equivalents (initial stdin prompt, mail injection
+  loop, stream-json parser).
 
-The `ClaudeRuntime.deployConfig()` method must distinguish headless from tmux
-spawn when called from `sling.ts`. The cleanest mechanism: pass `isHeadless`
-in `HooksDef`, or call a separate `deployOverlayOnly()` path in sling.ts before
-the headless branch.
+The `ClaudeRuntime.deployConfig()` method always calls `deployHooks()` and
+forwards `hooks.isHeadless` so the deployer can pick the right subset.
 
 ---
 
@@ -523,7 +548,7 @@ protocol (stdin format, message batching) without the AI layer.
 | SessionStart → ov prime | Initial stdin prompt |
 | SessionStart → mail check | Initial stdin prompt |
 | UserPromptSubmit → mail check | Server-side injection loop (ov serve) |
-| PreToolUse guards (all) | Advisory only — documented trade-off |
+| PreToolUse guards (all) | **Deployed via headlessOnly mode (overstory-e24b)** |
 | PostToolUse → ov log | Skip — stream parser handles |
 | PostToolUse → mail check | Subsumed by injection loop |
 | Stop → ov log session-end | Skip — result event from parser |
