@@ -1055,5 +1055,20 @@
 		"status": "completed",
 		"createdAt": "2026-04-29T18:55:19.620Z",
 		"completedAt": "2026-04-29T20:20:29.054Z"
+	},
+	{
+		"id": "group-ca3b2814",
+		"name": "headless-resume-migration",
+		"memberIssueIds": [
+			"overstory-b835",
+			"overstory-7b8c",
+			"overstory-2cf9",
+			"overstory-2724",
+			"overstory-5337",
+			"overstory-84f4"
+		],
+		"status": "active",
+		"createdAt": "2026-04-29T20:56:38.318Z",
+		"completedAt": null
 	}
 ]

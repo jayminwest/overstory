@@ -11,6 +11,8 @@ domains:
   - docs
   - coordination
   - ui
+  - runtime
+  - events
 governance:
   max_entries: 100
   warn_entries: 150
