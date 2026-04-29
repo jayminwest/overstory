@@ -365,6 +365,125 @@ describe("installMailInjectors", () => {
 			checkStore.close();
 		}
 	}, 12000);
+
+	test("dispatches builder agents to runTurn when claudeSpawnPerTurn is enabled", async () => {
+		const { createSessionStore } = await import("../sessions/store.ts");
+		const sessionsDbPath = join(overstoryDir, "sessions.db");
+		const sessionStore = createSessionStore(sessionsDbPath);
+		sessionStore.upsert({
+			id: "session-build-1",
+			agentName: "build-agent",
+			capability: "builder",
+			worktreePath: "/tmp/wt",
+			branchName: "overstory/build-agent/task-1",
+			taskId: "task-1",
+			tmuxSession: "",
+			state: "working",
+			pid: 999,
+			parentAgent: "lead-1",
+			depth: 1,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+			transcriptPath: null,
+		});
+		sessionStore.close();
+
+		// Create the FIFO so the dispatcher discovers this agent during scan.
+		const fifoFd = createAgentFifo(overstoryDir, "build-agent");
+		fifoFds.push(fifoFd);
+		cleanupAgents.push("build-agent");
+
+		const store = createMailStore(mailDbPath);
+		const client = createMailClient(store);
+		client.send({
+			from: "lead",
+			to: "build-agent",
+			subject: "Dispatch",
+			body: "Begin work.",
+			type: "dispatch",
+			priority: "normal",
+		});
+		store.close();
+
+		let runTurnCalled = false;
+		let observedNdjson: string | undefined;
+
+		const dispatch = {
+			config: {
+				project: { name: "x", root: tempDir, canonicalBranch: "main" },
+				agents: {
+					baseDir: "agents",
+					manifestPath: ".overstory/agent-manifest.json",
+					maxConcurrent: 5,
+					maxSessionsPerRun: 0,
+					maxAgentsPerLead: 5,
+					maxDepth: 2,
+					staggerDelayMs: 0,
+					autoNudgeOnMail: false,
+				},
+				worktrees: { baseDir: ".overstory/worktrees" },
+				merge: { mode: "manual" },
+				mulch: { enabled: false, domains: {} },
+				canopy: { enabled: false },
+				taskTracker: { backend: "seeds", enabled: true },
+				watchdog: {
+					tier0Enabled: false,
+					tier0IntervalMs: 30_000,
+					tier1Enabled: false,
+					maxEscalationLevel: 3,
+				},
+				models: {},
+				logging: { verbose: false, redactSecrets: true },
+				runtime: { default: "claude", claudeSpawnPerTurn: true },
+				providers: {},
+				// biome-ignore lint/suspicious/noExplicitAny: minimal config shape for the test path
+			} as any,
+			manifest: {
+				version: "1",
+				agents: {
+					builder: {
+						file: "builder.md",
+						model: "claude-sonnet",
+						tools: [],
+						capabilities: ["build"],
+						canSpawn: false,
+						constraints: [],
+					},
+				},
+				capabilityIndex: { build: ["builder"] },
+			},
+			_runTurnFn: async (opts: import("../agents/turn-runner.ts").RunTurnOpts) => {
+				runTurnCalled = true;
+				observedNdjson = opts.userTurnNdjson;
+				return {
+					exitCode: 0,
+					cleanResult: true,
+					newSessionId: null,
+					resumeMismatch: false,
+					workerDoneObserved: false,
+					durationMs: 1,
+					initialState: "booting" as const,
+					finalState: "working" as const,
+				};
+			},
+		};
+
+		const stop = installMailInjectors(mailDbPath, overstoryDir, dispatch);
+		stoppers.push(stop);
+
+		// Allow several poll ticks so the dispatcher batches the unread mail
+		// and routes it through runTurn instead of the FIFO writer.
+		await new Promise((r) => setTimeout(r, 2400));
+
+		expect(runTurnCalled).toBe(true);
+		expect(observedNdjson).toBeDefined();
+		const parsed = JSON.parse(observedNdjson?.trimEnd() ?? "");
+		expect(parsed.type).toBe("user");
+		expect(parsed.message.content[0].text).toContain("Begin work.");
+	}, 8000);
 });
 
 describe("runServe auto-build + dev wiring", () => {

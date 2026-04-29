@@ -14,6 +14,10 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { encodeUserTurn } from "../agents/headless-prompt.ts";
 import { agentFifoPath, writeToAgentFifo } from "../agents/headless-stdin.ts";
+import { createManifestLoader } from "../agents/manifest.ts";
+import { type RunTurnOpts, runTurn, type TurnResult } from "../agents/turn-runner.ts";
+import { buildRunTurnOptsFactory, isSpawnPerTurnAgent } from "../agents/turn-runner-dispatch.ts";
+import { loadConfig } from "../config.ts";
 import { AgentError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
@@ -21,7 +25,7 @@ import { printSuccess } from "../logging/color.ts";
 import { getConnection } from "../runtimes/connections.ts";
 import { hasNudge } from "../runtimes/headless-connection.ts";
 import { openSessionStore } from "../sessions/compat.ts";
-import type { EventStore } from "../types.ts";
+import type { AgentSession, EventStore } from "../types.ts";
 import { isSessionAlive, sendKeys } from "../worktree/tmux.ts";
 
 const DEFAULT_MESSAGE = "Check your mail inbox for new messages.";
@@ -201,6 +205,156 @@ function recordNudgeEvent(
 	}
 }
 
+/** Test-only injection point for the spawn-per-turn dispatch path. */
+export interface NudgeAgentDeps {
+	_runTurnFn?: (opts: RunTurnOpts) => Promise<TurnResult>;
+	_loadConfig?: typeof loadConfig;
+}
+
+/**
+ * Look up the agent's session row. Returns null when missing or terminal.
+ * Terminal sessions are filtered here so the spawn-per-turn dispatch path
+ * never re-spawns a completed builder.
+ */
+function loadActiveSessionForNudge(projectRoot: string, agentName: string): AgentSession | null {
+	const overstoryDir = join(projectRoot, ".overstory");
+	try {
+		const { store } = openSessionStore(overstoryDir);
+		try {
+			const session = store.getByName(agentName);
+			if (!session) return null;
+			if (session.state === "completed" || session.state === "zombie") return null;
+			return session;
+		} finally {
+			store.close();
+		}
+	} catch {
+		return null;
+	}
+}
+
+/** Best-effort: insert a nudge event into events.db. Never throws. */
+function recordNudgeEventBestEffort(
+	overstoryDir: string,
+	agentName: string,
+	message: string,
+	delivered: boolean,
+): void {
+	try {
+		const eventsDbPath = join(overstoryDir, "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+		try {
+			void readCurrentRunId(overstoryDir).then((runId) => {
+				try {
+					recordNudgeEvent(eventStore, {
+						runId,
+						agentName,
+						from: "orchestrator",
+						message,
+						delivered,
+					});
+				} finally {
+					try {
+						eventStore.close();
+					} catch {
+						// already closed
+					}
+				}
+			});
+		} catch {
+			try {
+				eventStore.close();
+			} catch {
+				// already closed
+			}
+		}
+	} catch {
+		// non-fatal
+	}
+}
+
+interface TryNudgeViaTurnRunnerInput {
+	agentName: string;
+	message: string;
+	overstoryDir: string;
+	projectRoot: string;
+	statePath: string;
+	deps: NudgeAgentDeps;
+}
+
+/**
+ * If the target agent is a Phase 2 spawn-per-turn builder, deliver `message`
+ * as a single user turn through `runTurn` and return the delivery result.
+ *
+ * Returns `null` when the agent is not eligible (flag off, non-builder,
+ * terminal state, missing session, runtime cannot direct-spawn). The caller
+ * falls back to the legacy FIFO/connection/tmux paths.
+ *
+ * The runTurn call is awaited synchronously: that lets the in-process
+ * turn-lock serialize against the mail dispatcher running in `ov serve`.
+ * Failures throw — the caller treats them as a delivery error.
+ */
+async function tryNudgeViaTurnRunner(
+	input: TryNudgeViaTurnRunnerInput,
+): Promise<{ delivered: boolean; queued?: boolean; reason?: string } | null> {
+	const session = loadActiveSessionForNudge(input.projectRoot, input.agentName);
+	if (!session) return null;
+
+	const _load = input.deps._loadConfig ?? loadConfig;
+	let config: Awaited<ReturnType<typeof loadConfig>>;
+	try {
+		config = await _load(input.projectRoot);
+	} catch {
+		return null;
+	}
+	if (config.runtime?.claudeSpawnPerTurn !== true) return null;
+
+	const manifestLoader = createManifestLoader(
+		join(config.project.root, config.agents.manifestPath),
+		join(config.project.root, config.agents.baseDir),
+	);
+	let manifest: Awaited<ReturnType<typeof manifestLoader.load>>;
+	try {
+		manifest = await manifestLoader.load();
+	} catch {
+		return null;
+	}
+
+	let factory: ReturnType<typeof buildRunTurnOptsFactory>;
+	try {
+		factory = buildRunTurnOptsFactory({
+			session,
+			config,
+			manifest,
+			overstoryDir: input.overstoryDir,
+		});
+	} catch {
+		return null;
+	}
+
+	if (!isSpawnPerTurnAgent(session, config, factory.runtime)) return null;
+
+	const runTurnFn = input.deps._runTurnFn ?? runTurn;
+	const opts = factory.build(encodeUserTurn(input.message));
+
+	try {
+		const result = await runTurnFn(opts);
+		await recordNudge(input.statePath, input.agentName);
+		// Mirror the FIFO branch's queued semantics: the message has been
+		// consumed by claude inside this turn, but follow-up turns may still
+		// observe it as "queued" if the agent didn't act on it immediately.
+		return {
+			delivered: true,
+			queued: result.cleanResult !== true,
+		};
+	} catch (err) {
+		return {
+			delivered: false,
+			reason: `Spawn-per-turn dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+		};
+	}
+}
+
 /**
  * Core nudge function. Exported for use by mail send auto-nudge.
  *
@@ -210,6 +364,11 @@ function recordNudgeEvent(
  * Headless nudges return queued=true because Claude Code does not reliably poll
  * stdin while an API stream is in flight — the message sits in the pipe buffer
  * until the current turn completes.
+ *
+ * Phase 2 spawn-per-turn (`runtime.claudeSpawnPerTurn`): for builders, the
+ * nudge becomes a single user-turn delivered via `runTurn`. The call awaits
+ * the turn synchronously so the in-process turn-lock can serialize against
+ * concurrent mail dispatchers.
  *
  * @param projectRoot - Absolute path to the project root
  * @param agentName - Name of the agent to nudge
@@ -222,6 +381,7 @@ export async function nudgeAgent(
 	agentName: string,
 	message: string = DEFAULT_MESSAGE,
 	force = false,
+	deps: NudgeAgentDeps = {},
 ): Promise<{ delivered: boolean; queued?: boolean; reason?: string }> {
 	let result: { delivered: boolean; queued?: boolean; reason?: string };
 
@@ -236,6 +396,23 @@ export async function nudgeAgent(
 	}
 
 	const overstoryDir = join(projectRoot, ".overstory");
+
+	// Phase 2 spawn-per-turn dispatch (capability-gated to builder, flag-gated
+	// by `runtime.claudeSpawnPerTurn`). When the agent is eligible, deliver the
+	// nudge as a user turn through `runTurn`. The legacy FIFO/tmux paths below
+	// stay intact for everyone else (and remain the default when the flag is off).
+	const spawnPerTurnResult = await tryNudgeViaTurnRunner({
+		agentName,
+		message,
+		overstoryDir,
+		projectRoot,
+		statePath,
+		deps,
+	});
+	if (spawnPerTurnResult !== null) {
+		recordNudgeEventBestEffort(overstoryDir, agentName, message, spawnPerTurnResult.delivered);
+		return spawnPerTurnResult;
+	}
 
 	// Headless FIFO path: when a per-agent stdin FIFO exists on disk, route the
 	// nudge through it. This is the cross-process delivery mechanism — sling

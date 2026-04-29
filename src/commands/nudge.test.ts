@@ -455,3 +455,178 @@ describe("nudgeAgent FIFO path", () => {
 		expect(result.reason).toContain("not reading");
 	});
 });
+
+describe("nudgeAgent spawn-per-turn dispatch", () => {
+	async function importNudge() {
+		return await import("./nudge.ts");
+	}
+
+	function fakeLoadConfig(claudeSpawnPerTurn: boolean): typeof import("../config.ts").loadConfig {
+		return (async (root: string) => ({
+			project: { name: "test", root, canonicalBranch: "main" },
+			agents: {
+				baseDir: "agents",
+				manifestPath: ".overstory/agent-manifest.json",
+				maxConcurrent: 5,
+				maxSessionsPerRun: 0,
+				maxAgentsPerLead: 5,
+				maxDepth: 2,
+				staggerDelayMs: 0,
+				autoNudgeOnMail: false,
+			},
+			worktrees: { baseDir: ".overstory/worktrees" },
+			merge: { mode: "manual" },
+			mulch: { enabled: false, domains: {} },
+			canopy: { enabled: false },
+			taskTracker: { backend: "seeds", enabled: true },
+			watchdog: {
+				tier0Enabled: false,
+				tier0IntervalMs: 30_000,
+				tier1Enabled: false,
+				maxEscalationLevel: 3,
+			},
+			models: {},
+			logging: { verbose: false, redactSecrets: true },
+			runtime: { default: "claude", claudeSpawnPerTurn },
+			providers: {},
+		})) as unknown as typeof import("../config.ts").loadConfig;
+	}
+
+	async function writeManifest(projectRoot: string): Promise<void> {
+		mkdirSync(join(projectRoot, ".overstory"), { recursive: true });
+		mkdirSync(join(projectRoot, "agents"), { recursive: true });
+		await Bun.write(join(projectRoot, "agents", "builder.md"), "# Builder\n");
+		await Bun.write(
+			join(projectRoot, ".overstory", "agent-manifest.json"),
+			JSON.stringify(
+				{
+					version: "1",
+					agents: {
+						builder: {
+							file: "builder.md",
+							model: "claude-sonnet",
+							tools: [],
+							capabilities: ["build"],
+							canSpawn: false,
+							constraints: [],
+						},
+					},
+				},
+				null,
+				"\t",
+			),
+		);
+	}
+
+	test("routes builder nudge through runTurn when flag is on", async () => {
+		writeSessionsToStore(tempDir, [makeSession({ state: "working", capability: "builder" })]);
+		await writeManifest(tempDir);
+
+		const calls: Array<{ userTurnNdjson: string }> = [];
+		const stubRunTurn = async (opts: import("../agents/turn-runner.ts").RunTurnOpts) => {
+			calls.push({ userTurnNdjson: opts.userTurnNdjson });
+			return {
+				exitCode: 0,
+				cleanResult: true,
+				newSessionId: null,
+				resumeMismatch: false,
+				workerDoneObserved: false,
+				durationMs: 1,
+				initialState: "booting" as const,
+				finalState: "working" as const,
+			};
+		};
+
+		const { nudgeAgent } = await importNudge();
+		const result = await nudgeAgent(tempDir, "test-agent", "please pivot", true, {
+			_loadConfig: fakeLoadConfig(true),
+			_runTurnFn: stubRunTurn,
+		});
+
+		expect(result.delivered).toBe(true);
+		expect(calls.length).toBe(1);
+		const parsed = JSON.parse(calls[0]?.userTurnNdjson?.trimEnd() ?? "");
+		expect(parsed.type).toBe("user");
+		expect(parsed.message.content[0].text).toBe("please pivot");
+	});
+
+	test("falls back to legacy paths when flag is off", async () => {
+		writeSessionsToStore(tempDir, [makeSession({ state: "working", capability: "builder" })]);
+		await writeManifest(tempDir);
+
+		let runTurnCalled = false;
+		const stubRunTurn = async () => {
+			runTurnCalled = true;
+			return {
+				exitCode: 0,
+				cleanResult: true,
+				newSessionId: null,
+				resumeMismatch: false,
+				workerDoneObserved: false,
+				durationMs: 1,
+				initialState: "booting" as const,
+				finalState: "working" as const,
+			};
+		};
+
+		const { nudgeAgent } = await importNudge();
+		const result = await nudgeAgent(tempDir, "test-agent", "ping", true, {
+			_loadConfig: fakeLoadConfig(false),
+			_runTurnFn: stubRunTurn,
+		});
+
+		expect(runTurnCalled).toBe(false);
+		// Falls through to tmux path → "not alive" because no real tmux session
+		expect(result.delivered).toBe(false);
+		expect(result.reason).toContain("not alive");
+	});
+
+	test("non-builder capability is not routed to spawn-per-turn even with flag on", async () => {
+		writeSessionsToStore(tempDir, [
+			makeSession({ state: "working", capability: "scout", agentName: "scout-1" }),
+		]);
+		await writeManifest(tempDir);
+
+		let runTurnCalled = false;
+		const stubRunTurn = async () => {
+			runTurnCalled = true;
+			return {
+				exitCode: 0,
+				cleanResult: true,
+				newSessionId: null,
+				resumeMismatch: false,
+				workerDoneObserved: false,
+				durationMs: 1,
+				initialState: "booting" as const,
+				finalState: "working" as const,
+			};
+		};
+
+		const { nudgeAgent } = await importNudge();
+		await nudgeAgent(tempDir, "scout-1", "ping", true, {
+			_loadConfig: fakeLoadConfig(true),
+			_runTurnFn: stubRunTurn,
+		});
+
+		expect(runTurnCalled).toBe(false);
+	});
+
+	test("returns delivery error when runTurn throws", async () => {
+		writeSessionsToStore(tempDir, [makeSession({ state: "working", capability: "builder" })]);
+		await writeManifest(tempDir);
+
+		const stubRunTurn = async (): Promise<never> => {
+			throw new Error("simulated spawn failure");
+		};
+
+		const { nudgeAgent } = await importNudge();
+		const result = await nudgeAgent(tempDir, "test-agent", "ping", true, {
+			_loadConfig: fakeLoadConfig(true),
+			_runTurnFn: stubRunTurn,
+		});
+
+		expect(result.delivered).toBe(false);
+		expect(result.reason).toContain("Spawn-per-turn dispatch failed");
+		expect(result.reason).toContain("simulated spawn failure");
+	});
+});

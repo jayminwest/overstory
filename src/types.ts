@@ -148,6 +148,15 @@ export interface OverstoryConfig {
 		 * Default: false (tmux).
 		 */
 		claudeHeadlessByDefault?: boolean;
+		/**
+		 * Phase 2 spawn-per-turn engine for headless Claude Code builders.
+		 * When true, builders dispatch each user turn (initial spawn, mail, nudge)
+		 * through `runTurn` instead of writing to a long-lived FIFO. The agent
+		 * exits between turns and resumes via `--resume <session_id>` next turn.
+		 * Capability-gated: only `builder` is routed through the new path.
+		 * Default: false (FIFO + long-lived headless agent). Reversible.
+		 */
+		claudeSpawnPerTurn?: boolean;
 	};
 }
 

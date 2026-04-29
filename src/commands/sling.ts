@@ -507,6 +507,33 @@ export function resolveUseHeadless(
 }
 
 /**
+ * Resolve whether the spawn-per-turn engine should drive a builder spawn.
+ *
+ * Phase 2 opt-in. Returns true iff:
+ *   1. capability === "builder" (capability gate — only builders use this path)
+ *   2. config.runtime.claudeSpawnPerTurn === true (project-level enable)
+ *   3. resolved spawn mode is headless (`useHeadless` parameter or `runtime.headless === true`)
+ *   4. runtime.buildDirectSpawn is implemented (silent fallback when missing)
+ *
+ * No throws — Phase 2 is opt-in and reversible. When the flag is on but the
+ * runtime cannot satisfy the prerequisites, callers fall back to the existing
+ * long-lived FIFO path.
+ */
+export function resolveUseSpawnPerTurn(
+	capability: string,
+	runtime: { headless?: boolean; buildDirectSpawn?: unknown },
+	config: { runtime?: { claudeSpawnPerTurn?: boolean } },
+	useHeadless: boolean,
+): boolean {
+	if (capability !== "builder") return false;
+	if (config.runtime?.claudeSpawnPerTurn !== true) return false;
+	if (typeof runtime.buildDirectSpawn !== "function") return false;
+	const headlessActive = useHeadless || runtime.headless === true;
+	if (!headlessActive) return false;
+	return true;
+}
+
+/**
  * Entry point for `ov sling <task-id> [flags]`.
  *
  * @param taskId - The task ID to assign to the agent
@@ -977,11 +1004,17 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					OVERSTORY_TASK_ID: taskId,
 					OVERSTORY_PROJECT_ROOT: config.project.root,
 				};
+				// Phase 2 plumbing: thread the prior claude session id (if any) so the
+				// runtime can emit `--resume <id>`. For first-spawn agents the lookup
+				// returns null and the flag is omitted. The same id is mirrored onto the
+				// session row below so the spawn-per-turn engine reads a stable value.
+				const priorClaudeSessionId = store.getByName(name)?.claudeSessionId ?? null;
 				const argv = runtime.buildDirectSpawn({
 					cwd: worktreePath,
 					env: directEnv,
 					...(resolvedModel.isExplicitOverride ? { model: resolvedModel.model } : {}),
 					instructionPath: runtime.instructionPath,
+					resumeSessionId: priorClaudeSessionId,
 				});
 
 				// Create a timestamped log dir for this headless agent session.
@@ -1037,6 +1070,9 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				}
 
 				// 13. Record session with empty tmuxSession (no tmux pane for headless agents).
+				// Carry priorClaudeSessionId on the upsert so a respawn never clobbers an
+				// existing claude_session_id back to NULL (mulch mx-5c5ae6 — sessions.upsert
+				// ON CONFLICT writes every column, not just the changed ones).
 				const session: AgentSession = {
 					id: `session-${Date.now()}-${name}`,
 					agentName: name,
@@ -1055,6 +1091,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					escalationLevel: 0,
 					stalledSince: null,
 					transcriptPath: null,
+					...(priorClaudeSessionId !== null ? { claudeSessionId: priorClaudeSessionId } : {}),
 				};
 				store.upsert(session);
 

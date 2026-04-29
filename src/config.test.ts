@@ -1059,6 +1059,41 @@ project:
 		expect(capturedStderr).not.toContain("shellInitDelayMs");
 	});
 
+	test("parses claudeSpawnPerTurn: true", async () => {
+		await writeConfig("runtime:\n  claudeSpawnPerTurn: true\n");
+		const config = await loadConfig(tempDir);
+		expect(config.runtime?.claudeSpawnPerTurn).toBe(true);
+	});
+
+	test("parses claudeSpawnPerTurn: false", async () => {
+		await writeConfig("runtime:\n  claudeSpawnPerTurn: false\n");
+		const config = await loadConfig(tempDir);
+		expect(config.runtime?.claudeSpawnPerTurn).toBe(false);
+	});
+
+	test("defaults claudeSpawnPerTurn to false when omitted", async () => {
+		await writeConfig("project:\n  canonicalBranch: main\n");
+		const config = await loadConfig(tempDir);
+		expect(config.runtime?.claudeSpawnPerTurn).toBe(false);
+	});
+
+	test("ignores non-boolean claudeSpawnPerTurn with warning", async () => {
+		await writeConfig('runtime:\n  claudeSpawnPerTurn: "yes"\n');
+		const origWrite = process.stderr.write;
+		let capturedStderr = "";
+		process.stderr.write = ((s: string | Uint8Array) => {
+			if (typeof s === "string") capturedStderr += s;
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			const config = await loadConfig(tempDir);
+			expect(config.runtime?.claudeSpawnPerTurn).toBeUndefined();
+		} finally {
+			process.stderr.write = origWrite;
+		}
+		expect(capturedStderr).toContain("WARNING: runtime.claudeSpawnPerTurn must be a boolean");
+	});
+
 	test("rejects qualityGate with empty description", async () => {
 		await writeConfig(`
 project:

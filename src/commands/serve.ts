@@ -17,12 +17,19 @@ import { Command } from "commander";
 import {
 	type InjectionWriteResult,
 	startMailInjectionLoop,
+	startTurnRunnerMailLoop,
+	type TurnRunnerFn,
 } from "../agents/headless-mail-injector.ts";
 import { agentFifoPath, writeToAgentFifo } from "../agents/headless-stdin.ts";
+import { createManifestLoader } from "../agents/manifest.ts";
+import { runTurn } from "../agents/turn-runner.ts";
+import { buildRunTurnOptsFactory, isSpawnPerTurnAgent } from "../agents/turn-runner-dispatch.ts";
 import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { apiJson, jsonError, jsonOutput } from "../json.ts";
 import { printError, printSuccess } from "../logging/color.ts";
+import { openSessionStore } from "../sessions/compat.ts";
+import type { AgentManifest, OverstoryConfig } from "../types.ts";
 import { ensureUiBuild } from "./serve/build.ts";
 import { type DevServerHandle, startDevServer } from "./serve/dev.ts";
 import { type RestApiDeps, registerRestApi } from "./serve/rest.ts";
@@ -231,7 +238,58 @@ export async function createServeServer(
  * connection-registry design only worked when serve and sling shared a process,
  * which is never the case in production. See overstory-41eb.
  */
-export function installMailInjectors(mailDbPath: string, overstoryDir: string): () => void {
+/** Optional spawn-per-turn dispatch context for `installMailInjectors`. */
+export interface MailInjectorDispatchDeps {
+	config: OverstoryConfig;
+	manifest: AgentManifest;
+	/** Test injection: replaces `runTurn`. */
+	_runTurnFn?: TurnRunnerFn;
+}
+
+/**
+ * Attempt to start the spawn-per-turn dispatcher for one agent. Returns the
+ * stop function on success, or null when the agent is not eligible (capability
+ * gate, flag off, terminal state, missing session row, or runtime can't drive
+ * a direct spawn). On null, the caller falls back to the legacy FIFO loop.
+ */
+function tryInstallTurnRunnerLoop(
+	agentName: string,
+	mailDbPath: string,
+	overstoryDir: string,
+	dispatch: MailInjectorDispatchDeps,
+): (() => void) | null {
+	const { store } = openSessionStore(overstoryDir);
+	let session: ReturnType<typeof store.getByName>;
+	try {
+		session = store.getByName(agentName);
+	} finally {
+		store.close();
+	}
+	if (!session) return null;
+
+	let factory: ReturnType<typeof buildRunTurnOptsFactory>;
+	try {
+		factory = buildRunTurnOptsFactory({
+			session,
+			config: dispatch.config,
+			manifest: dispatch.manifest,
+			overstoryDir,
+		});
+	} catch {
+		return null;
+	}
+
+	if (!isSpawnPerTurnAgent(session, dispatch.config, factory.runtime)) return null;
+
+	const runTurnFn = dispatch._runTurnFn ?? runTurn;
+	return startTurnRunnerMailLoop(agentName, factory.build, runTurnFn, mailDbPath);
+}
+
+export function installMailInjectors(
+	mailDbPath: string,
+	overstoryDir: string,
+	dispatch?: MailInjectorDispatchDeps,
+): () => void {
 	const activeLoops = new Map<string, () => void>();
 	const agentsDir = join(overstoryDir, "agents");
 
@@ -242,6 +300,21 @@ export function installMailInjectors(mailDbPath: string, overstoryDir: string): 
 
 	const startLoopFor = (agentName: string): void => {
 		if (activeLoops.has(agentName)) return;
+
+		// Phase 2 dispatch: when config + manifest are supplied, peek at the
+		// agent's session row and choose the spawn-per-turn path for builders
+		// with the flag enabled. Otherwise fall back to the FIFO writer loop.
+		if (dispatch !== undefined) {
+			const turnLoop = tryInstallTurnRunnerLoop(agentName, mailDbPath, overstoryDir, dispatch);
+			if (turnLoop !== null) {
+				activeLoops.set(agentName, () => {
+					turnLoop();
+					activeLoops.delete(agentName);
+				});
+				return;
+			}
+		}
+
 		const stop = startMailInjectionLoop(agentName, writerFor(agentName), mailDbPath);
 		// Wrap stop so we always remove from the map on tear-down. The mail
 		// injector auto-stops on no-reader; this layer covers the explicit
@@ -339,8 +412,25 @@ export async function runServe(opts: ServeOptions, deps: ServeDeps = {}): Promis
 
 	// Install per-agent mail injection loops (UserPromptSubmit hook equivalent
 	// for headless Claude agents). Discovers agents by watching the per-agent
-	// stdin FIFOs created by `ov sling`.
-	const stopMailInjectors = installMailInjectors(mailDbPath, overstoryDir);
+	// stdin FIFOs created by `ov sling`. With `runtime.claudeSpawnPerTurn` on,
+	// builders use the spawn-per-turn dispatcher (`runTurn`) instead of FIFO.
+	const manifestLoader = createManifestLoader(
+		join(config.project.root, config.agents.manifestPath),
+		join(config.project.root, config.agents.baseDir),
+	);
+	let manifest: AgentManifest | undefined;
+	try {
+		manifest = await manifestLoader.load();
+	} catch {
+		// Non-fatal: missing manifest just means the spawn-per-turn dispatcher
+		// stays disabled and every agent uses the legacy FIFO loop.
+		manifest = undefined;
+	}
+	const stopMailInjectors = installMailInjectors(
+		mailDbPath,
+		overstoryDir,
+		manifest ? { config, manifest } : undefined,
+	);
 
 	const server = await createServeServer(opts, deps);
 

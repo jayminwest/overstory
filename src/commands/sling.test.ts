@@ -27,6 +27,7 @@ import {
 	isRunningAsRoot,
 	parentHasScouts,
 	resolveUseHeadless,
+	resolveUseSpawnPerTurn,
 	shouldShowScoutWarning,
 	validateHierarchy,
 } from "./sling.ts";
@@ -1455,5 +1456,45 @@ describe("resolveUseHeadless", () => {
 
 	test("sapling + flag:false returns true (statically headless wins over flag)", () => {
 		expect(resolveUseHeadless(saplingLike, false, baseConfig)).toBe(true);
+	});
+});
+
+describe("resolveUseSpawnPerTurn", () => {
+	const claudeLike: { headless?: boolean; buildDirectSpawn?: unknown } = {
+		buildDirectSpawn: () => [] as string[],
+	};
+	const claudeNoSpawn: { headless?: boolean; buildDirectSpawn?: unknown } = {};
+	const saplingLike: { headless?: boolean; buildDirectSpawn?: unknown } = {
+		headless: true,
+		buildDirectSpawn: () => [] as string[],
+	};
+	const flagOff: { runtime?: { claudeSpawnPerTurn?: boolean } } = {};
+	const flagOn: { runtime?: { claudeSpawnPerTurn?: boolean } } = {
+		runtime: { claudeSpawnPerTurn: true },
+	};
+
+	test("returns true for builder + headless + flag on + buildDirectSpawn", () => {
+		expect(resolveUseSpawnPerTurn("builder", claudeLike, flagOn, true)).toBe(true);
+	});
+
+	test("returns true via statically headless runtime when useHeadless is false", () => {
+		expect(resolveUseSpawnPerTurn("builder", saplingLike, flagOn, false)).toBe(true);
+	});
+
+	test("returns false when capability is not builder", () => {
+		expect(resolveUseSpawnPerTurn("scout", claudeLike, flagOn, true)).toBe(false);
+		expect(resolveUseSpawnPerTurn("lead", claudeLike, flagOn, true)).toBe(false);
+	});
+
+	test("returns false when claudeSpawnPerTurn flag is off", () => {
+		expect(resolveUseSpawnPerTurn("builder", claudeLike, flagOff, true)).toBe(false);
+	});
+
+	test("returns false when runtime has no buildDirectSpawn", () => {
+		expect(resolveUseSpawnPerTurn("builder", claudeNoSpawn, flagOn, true)).toBe(false);
+	});
+
+	test("returns false when neither useHeadless nor runtime.headless is set", () => {
+		expect(resolveUseSpawnPerTurn("builder", claudeLike, flagOn, false)).toBe(false);
 	});
 });

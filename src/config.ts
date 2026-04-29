@@ -106,6 +106,7 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 	runtime: {
 		default: "claude",
 		shellInitDelayMs: 0,
+		claudeSpawnPerTurn: false,
 		pi: {
 			provider: "anthropic",
 			modelMap: {
@@ -772,6 +773,30 @@ function validateConfig(config: OverstoryConfig): void {
 				`[overstory] WARNING: runtime.shellInitDelayMs is ${delay}ms (>${30}s). This adds delay before every agent spawn. Consider a lower value.\n`,
 			);
 		}
+	}
+
+	// runtime.claudeHeadlessByDefault: must be a boolean if present
+	if (
+		config.runtime?.claudeHeadlessByDefault !== undefined &&
+		typeof config.runtime.claudeHeadlessByDefault !== "boolean"
+	) {
+		process.stderr.write(
+			`[overstory] WARNING: runtime.claudeHeadlessByDefault must be a boolean. Got: ${typeof config
+				.runtime.claudeHeadlessByDefault}. Ignoring.\n`,
+		);
+		config.runtime.claudeHeadlessByDefault = undefined;
+	}
+
+	// runtime.claudeSpawnPerTurn: must be a boolean if present (Phase 2 opt-in flag)
+	if (
+		config.runtime?.claudeSpawnPerTurn !== undefined &&
+		typeof config.runtime.claudeSpawnPerTurn !== "boolean"
+	) {
+		process.stderr.write(
+			`[overstory] WARNING: runtime.claudeSpawnPerTurn must be a boolean. Got: ${typeof config
+				.runtime.claudeSpawnPerTurn}. Ignoring.\n`,
+		);
+		config.runtime.claudeSpawnPerTurn = undefined;
 	}
 
 	if (config.runtime?.capabilities) {
