@@ -1042,5 +1042,18 @@
 		"status": "completed",
 		"createdAt": "2026-04-29T15:32:27.543Z",
 		"completedAt": "2026-04-29T17:19:32.248Z"
+	},
+	{
+		"id": "group-2d13a018",
+		"name": "ui-coord-batch-2026-04-29",
+		"memberIssueIds": [
+			"overstory-55e6",
+			"overstory-08a3",
+			"overstory-0d64",
+			"overstory-e2f1"
+		],
+		"status": "active",
+		"createdAt": "2026-04-29T18:55:19.620Z",
+		"completedAt": null
 	}
 ]
