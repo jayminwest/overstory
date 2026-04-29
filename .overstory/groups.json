@@ -984,9 +984,9 @@
 			"overstory-fc04",
 			"overstory-0ddb"
 		],
-		"status": "active",
+		"status": "completed",
 		"createdAt": "2026-04-28T04:10:58.855Z",
-		"completedAt": null
+		"completedAt": "2026-04-29T01:05:23.326Z"
 	},
 	{
 		"id": "group-34cb3102",
@@ -1013,8 +1013,20 @@
 			"overstory-fc04",
 			"overstory-0ddb"
 		],
-		"status": "active",
+		"status": "completed",
 		"createdAt": "2026-04-28T20:56:04.355Z",
+		"completedAt": "2026-04-29T01:05:23.561Z"
+	},
+	{
+		"id": "group-b069979b",
+		"name": "phase3-wave1",
+		"memberIssueIds": [
+			"overstory-63d5",
+			"overstory-7dee",
+			"overstory-1c32"
+		],
+		"status": "active",
+		"createdAt": "2026-04-29T01:07:41.104Z",
 		"completedAt": null
 	}
 ]
