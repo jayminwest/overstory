@@ -14,6 +14,7 @@
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { createSessionStore, type SessionStore } from "../sessions/store.ts";
 import type { EventStore, EventType } from "../types.ts";
 import { createEventStore } from "./store.ts";
 
@@ -66,10 +67,26 @@ export interface TailerOptions {
 	runId: string | null;
 	/** Absolute path to events.db. The tailer opens its own connection. */
 	eventsDbPath: string;
+	/**
+	 * Absolute path to sessions.db. When present and not equal to ":memory:",
+	 * the tailer opens a dedicated SessionStore to persist the runtime-provided
+	 * session_id (e.g. Claude stream-json `session_id`). Omit (or set to
+	 * ":memory:") for tailers that should not write to SessionStore.
+	 */
+	sessionsDbPath?: string;
 	/** Poll interval in milliseconds (default: 500). */
 	pollIntervalMs?: number;
 	/** DI: injected EventStore for testing (overrides eventsDbPath). */
 	_eventStore?: EventStore;
+	/** DI: injected SessionStore for testing (overrides sessionsDbPath). */
+	_sessionStore?: SessionStore;
+	/**
+	 * DI: invoked exactly once per tailer when an observed session_id differs
+	 * from the prior claudeSessionId stored in SessionStore. Receives the agent
+	 * name, the prior (requested) id, and the newly observed id. Production
+	 * code logs a warning to stderr instead.
+	 */
+	_onResumeMismatch?: (agentName: string, requested: string, observed: string) => void;
 }
 
 /**
@@ -108,6 +125,28 @@ export function startEventTailer(opts: TailerOptions): TailerHandle {
 			};
 		}
 	}
+
+	// Open a dedicated SessionStore for this tailer's lifetime when a real
+	// sessionsDbPath is provided. Tailers that omit sessionsDbPath (or pass
+	// ":memory:") skip session_id persistence entirely — backward compat for
+	// callers that don't yet route through the watchdog wiring.
+	let sessionStore: SessionStore | null = opts._sessionStore ?? null;
+	let ownedSessionStore = false;
+	if (!sessionStore && opts.sessionsDbPath && opts.sessionsDbPath !== ":memory:") {
+		try {
+			sessionStore = createSessionStore(opts.sessionsDbPath);
+			ownedSessionStore = true;
+		} catch {
+			// SessionStore failure is non-fatal — events still flow.
+			sessionStore = null;
+		}
+	}
+
+	// Single-fire guard for session_id pinning. Mirrors claude.ts:312
+	// `sessionIdPinned` so that updateClaudeSessionId is called at most once
+	// per tailer lifetime, even if many system events stream by.
+	let sessionIdPinned = false;
+	const onResumeMismatch = opts._onResumeMismatch;
 
 	let stopped = false;
 	let byteOffset = 0;
@@ -153,6 +192,48 @@ export function startEventTailer(opts: TailerOptions): TailerHandle {
 					}
 
 					const toolDurationMs = typeof event.duration_ms === "number" ? event.duration_ms : null;
+
+					// Extract session_id from stream-json system events (e.g. Claude Code
+					// emits `{type:"system", subtype:"init", session_id:"sess-..."}` on
+					// every spawn — including --resume spawns, which assign a fresh id).
+					// The "result" event also carries session_id; treat both as authoritative.
+					// Single-fire per tailer lifetime so we don't churn writes.
+					if (!sessionIdPinned && sessionStore !== null) {
+						const sid =
+							typeof event.session_id === "string" && event.session_id.length > 0
+								? event.session_id
+								: null;
+						if (sid !== null && (type === "system" || type === "result")) {
+							sessionIdPinned = true;
+							let prior: string | null = null;
+							try {
+								prior = sessionStore.getByName(agentName)?.claudeSessionId ?? null;
+							} catch {
+								prior = null;
+							}
+							try {
+								sessionStore.updateClaudeSessionId(agentName, sid);
+							} catch {
+								// Non-fatal: SessionStore write failure must not break tailing.
+							}
+							// Resume mismatch: requested != observed. The observed id wins
+							// (claude assigns fresh ids on --resume), but operators need to
+							// know — log a warning, and call DI hook for tests.
+							if (prior !== null && prior !== sid) {
+								if (onResumeMismatch) {
+									try {
+										onResumeMismatch(agentName, prior, sid);
+									} catch {
+										// DI hook errors must not crash the tailer.
+									}
+								} else {
+									process.stderr.write(
+										`[tailer] resume mismatch for ${agentName}: requested=${prior} observed=${sid}\n`,
+									);
+								}
+							}
+						}
+					}
 
 					try {
 						eventStore?.insert({
@@ -200,6 +281,15 @@ export function startEventTailer(opts: TailerOptions): TailerHandle {
 					// Non-fatal.
 				}
 				eventStore = null;
+			}
+			// Close only the SessionStore this tailer owns.
+			if (ownedSessionStore && sessionStore) {
+				try {
+					sessionStore.close();
+				} catch {
+					// Non-fatal.
+				}
+				sessionStore = null;
 			}
 		},
 	};

@@ -13,8 +13,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createSessionStore, type SessionStore } from "../sessions/store.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
-import type { EventStore } from "../types.ts";
+import type { AgentSession, EventStore } from "../types.ts";
 import { createEventStore } from "./store.ts";
 import type { TailerHandle, TailerOptions } from "./tailer.ts";
 import { findLatestStdoutLog, startEventTailer } from "./tailer.ts";
@@ -482,5 +483,237 @@ describe("daemon tailer integration", () => {
 		expect(registry.has(agentName)).toBe(false);
 
 		await cleanupTempDir(tmpDir);
+	});
+});
+
+// === session_id capture (overstory-7b8c Phase 1) ===
+
+describe("startEventTailer session_id capture", () => {
+	let tmpDir: string;
+	let eventStore: EventStore;
+	let eventsDbPath: string;
+	let sessionStore: SessionStore;
+	let sessionsDbPath: string;
+
+	function makeSession(agentName: string): AgentSession {
+		const now = new Date().toISOString();
+		return {
+			id: `id-${agentName}`,
+			agentName,
+			capability: "builder",
+			worktreePath: "/tmp/wt",
+			branchName: "test-branch",
+			taskId: "task-1",
+			tmuxSession: "",
+			state: "working",
+			pid: 12345,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: now,
+			lastActivity: now,
+			escalationLevel: 0,
+			stalledSince: null,
+			transcriptPath: null,
+		};
+	}
+
+	beforeEach(async () => {
+		tmpDir = await createTempDir();
+		eventsDbPath = join(tmpDir, "events.db");
+		eventStore = createEventStore(eventsDbPath);
+		sessionsDbPath = join(tmpDir, "sessions.db");
+		sessionStore = createSessionStore(sessionsDbPath);
+	});
+
+	afterEach(async () => {
+		eventStore.close();
+		sessionStore.close();
+		await cleanupTempDir(tmpDir);
+	});
+
+	test("parses system event session_id and calls updateClaudeSessionId once", async () => {
+		const agentName = "agent-sid-1";
+		sessionStore.upsert(makeSession(agentName));
+		const logPath = await createAgentLogDir(tmpDir, agentName);
+
+		const sysLine = JSON.stringify({
+			type: "system",
+			subtype: "init",
+			session_id: "sess-first-pin",
+			timestamp: new Date().toISOString(),
+		});
+		await writeFile(logPath, `${sysLine}\n`);
+
+		const handle = startEventTailer({
+			stdoutLogPath: logPath,
+			agentName,
+			runId: null,
+			eventsDbPath,
+			pollIntervalMs: 50,
+			_eventStore: eventStore,
+			_sessionStore: sessionStore,
+		});
+
+		try {
+			await waitFor(() => sessionStore.getByName(agentName)?.claudeSessionId === "sess-first-pin");
+			expect(sessionStore.getByName(agentName)?.claudeSessionId).toBe("sess-first-pin");
+		} finally {
+			handle.stop();
+		}
+	});
+
+	test("ignores subsequent system events with the same session_id (single-fire)", async () => {
+		const agentName = "agent-sid-2";
+		sessionStore.upsert(makeSession(agentName));
+		const logPath = await createAgentLogDir(tmpDir, agentName);
+
+		// Three system events all carrying the same session_id.
+		const lines = [
+			JSON.stringify({
+				type: "system",
+				subtype: "init",
+				session_id: "sess-stable",
+				timestamp: new Date().toISOString(),
+			}),
+			JSON.stringify({
+				type: "system",
+				subtype: "ping",
+				session_id: "sess-stable",
+				timestamp: new Date().toISOString(),
+			}),
+			JSON.stringify({
+				type: "system",
+				subtype: "ping",
+				session_id: "sess-stable",
+				timestamp: new Date().toISOString(),
+			}),
+		].join("\n");
+		await writeFile(logPath, `${lines}\n`);
+
+		// Wrap the SessionStore so we can count update calls without altering behaviour.
+		let updateCalls = 0;
+		const proxy: SessionStore = {
+			...sessionStore,
+			upsert: (s) => sessionStore.upsert(s),
+			getByName: (n) => sessionStore.getByName(n),
+			getActive: () => sessionStore.getActive(),
+			getAll: () => sessionStore.getAll(),
+			count: () => sessionStore.count(),
+			getByRun: (r) => sessionStore.getByRun(r),
+			updateState: (n, s) => sessionStore.updateState(n, s),
+			updateLastActivity: (n) => sessionStore.updateLastActivity(n),
+			updateEscalation: (n, l, s) => sessionStore.updateEscalation(n, l, s),
+			updateTranscriptPath: (n, p) => sessionStore.updateTranscriptPath(n, p),
+			updateClaudeSessionId: (n, s) => {
+				updateCalls++;
+				sessionStore.updateClaudeSessionId(n, s);
+			},
+			remove: (n) => sessionStore.remove(n),
+			purge: (o) => sessionStore.purge(o),
+			close: () => {
+				/* owned by outer test */
+			},
+		};
+
+		const handle = startEventTailer({
+			stdoutLogPath: logPath,
+			agentName,
+			runId: null,
+			eventsDbPath,
+			pollIntervalMs: 50,
+			_eventStore: eventStore,
+			_sessionStore: proxy,
+		});
+
+		try {
+			// Wait until events.db has all three lines processed.
+			await waitFor(() => eventStore.getByAgent(agentName).length >= 3);
+			// Allow extra poll cycles to confirm no late updates sneak in.
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			expect(updateCalls).toBe(1);
+			expect(sessionStore.getByName(agentName)?.claudeSessionId).toBe("sess-stable");
+		} finally {
+			handle.stop();
+		}
+	});
+
+	test("detects resume mismatch and invokes _onResumeMismatch DI hook (observed wins)", async () => {
+		const agentName = "agent-sid-3";
+		const session = makeSession(agentName);
+		session.claudeSessionId = "sess-requested-OLD";
+		sessionStore.upsert(session);
+		const logPath = await createAgentLogDir(tmpDir, agentName);
+
+		const sysLine = JSON.stringify({
+			type: "system",
+			subtype: "init",
+			session_id: "sess-observed-NEW",
+			timestamp: new Date().toISOString(),
+		});
+		await writeFile(logPath, `${sysLine}\n`);
+
+		const mismatches: Array<{ agent: string; requested: string; observed: string }> = [];
+		const handle = startEventTailer({
+			stdoutLogPath: logPath,
+			agentName,
+			runId: null,
+			eventsDbPath,
+			pollIntervalMs: 50,
+			_eventStore: eventStore,
+			_sessionStore: sessionStore,
+			_onResumeMismatch: (agent, requested, observed) =>
+				mismatches.push({ agent, requested, observed }),
+		});
+
+		try {
+			await waitFor(
+				() => sessionStore.getByName(agentName)?.claudeSessionId === "sess-observed-NEW",
+			);
+			expect(mismatches).toHaveLength(1);
+			expect(mismatches[0]).toEqual({
+				agent: agentName,
+				requested: "sess-requested-OLD",
+				observed: "sess-observed-NEW",
+			});
+			// observed wins — SessionStore is overwritten with the new id.
+			expect(sessionStore.getByName(agentName)?.claudeSessionId).toBe("sess-observed-NEW");
+		} finally {
+			handle.stop();
+		}
+	});
+
+	test("backward compat: tailer with no sessionsDbPath performs no SessionStore writes", async () => {
+		const agentName = "agent-sid-4";
+		sessionStore.upsert(makeSession(agentName));
+		const logPath = await createAgentLogDir(tmpDir, agentName);
+
+		const sysLine = JSON.stringify({
+			type: "system",
+			subtype: "init",
+			session_id: "sess-should-not-pin",
+			timestamp: new Date().toISOString(),
+		});
+		await writeFile(logPath, `${sysLine}\n`);
+
+		// No sessionsDbPath, no _sessionStore — tailer must still process events.
+		const handle = startEventTailer({
+			stdoutLogPath: logPath,
+			agentName,
+			runId: null,
+			eventsDbPath,
+			pollIntervalMs: 50,
+			_eventStore: eventStore,
+		});
+
+		try {
+			await waitFor(() => eventStore.getByAgent(agentName).length >= 1);
+			// Give the tailer extra time to confirm no late writes occur.
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			// SessionStore must remain untouched.
+			expect(sessionStore.getByName(agentName)?.claudeSessionId ?? null).toBeNull();
+		} finally {
+			handle.stop();
+		}
 	});
 });

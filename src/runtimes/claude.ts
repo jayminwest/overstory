@@ -265,6 +265,12 @@ export class ClaudeRuntime implements AgentRuntime {
 		if (opts.model !== undefined) {
 			argv.push("--model", opts.model);
 		}
+		// Phase 1 (overstory-b835): emit --resume on follow-up spawns. Mirrors
+		// multica/server/pkg/agent/claude.go:434 (positional). Empty string and
+		// null are treated as "no resume" — only non-empty strings activate it.
+		if (typeof opts.resumeSessionId === "string" && opts.resumeSessionId.length > 0) {
+			argv.push("--resume", opts.resumeSessionId);
+		}
 		return argv;
 	}
 
