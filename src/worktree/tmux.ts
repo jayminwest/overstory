@@ -409,8 +409,13 @@ export async function killSession(name: string): Promise<void> {
 	const { exitCode, stderr } = await runCommand(tmuxCmd("kill-session", "-t", name));
 
 	if (exitCode !== 0) {
-		// If the session is already gone (e.g., died during process cleanup), that's fine
-		if (stderr.includes("session not found") || stderr.includes("can't find session")) {
+		// If the session is already gone (e.g., died during process cleanup,
+		// or the whole tmux server exited), that's fine — the goal state is reached.
+		if (
+			stderr.includes("session not found") ||
+			stderr.includes("can't find session") ||
+			stderr.includes("no server running")
+		) {
 			return;
 		}
 		throw new AgentError(`Failed to kill tmux session "${name}": ${stderr.trim()}`, {

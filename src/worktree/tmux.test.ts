@@ -790,6 +790,24 @@ describe("killSession", () => {
 		await killSession("overstory-auth");
 	});
 
+	test("succeeds silently when tmux server is not running", async () => {
+		spawnSpy.mockImplementation((...args: unknown[]) => {
+			const cmd = args[0] as string[];
+			if (cmd[0] === "tmux" && cmd[3] === "display-message") {
+				// getPanePid → no server running
+				return mockSpawnResult("", "no server running on /tmp/tmux-501/overstory", 1);
+			}
+			if (cmd[0] === "tmux" && cmd[3] === "kill-session") {
+				// kill-session also reports no server
+				return mockSpawnResult("", "no server running on /tmp/tmux-501/overstory", 1);
+			}
+			return mockSpawnResult("", "", 0);
+		});
+
+		// Should not throw — no server means the session is trivially gone
+		await killSession("overstory-auth");
+	});
+
 	test("throws AgentError on unexpected tmux kill-session failure", async () => {
 		spawnSpy.mockImplementation((...args: unknown[]) => {
 			const cmd = args[0] as string[];
