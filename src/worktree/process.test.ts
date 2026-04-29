@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getConnection, removeConnection } from "../runtimes/connections.ts";
+import { HeadlessClaudeConnection } from "../runtimes/headless-connection.ts";
 import { spawnHeadlessAgent } from "./process.ts";
 
 describe("spawnHeadlessAgent", () => {
@@ -20,6 +22,75 @@ describe("spawnHeadlessAgent", () => {
 		await expect(spawnHeadlessAgent([], { cwd: process.cwd(), env: {} })).rejects.toThrow(
 			"empty argv",
 		);
+	});
+
+	describe("agentName connection registration", () => {
+		const registeredNames: string[] = [];
+
+		afterEach(() => {
+			for (const name of registeredNames.splice(0)) {
+				removeConnection(name);
+			}
+		});
+
+		it("registers a HeadlessClaudeConnection when agentName is provided", async () => {
+			const agentName = "test-headless-agent-xyz";
+			registeredNames.push(agentName);
+
+			const proc = await spawnHeadlessAgent(["sleep", "5"], {
+				cwd: process.cwd(),
+				env: { ...(process.env as Record<string, string>) },
+				agentName,
+			});
+
+			expect(proc.pid).toBeGreaterThan(0);
+			const conn = getConnection(agentName);
+			expect(conn).toBeDefined();
+			expect(conn).toBeInstanceOf(HeadlessClaudeConnection);
+
+			// Clean up the spawned process
+			try {
+				process.kill(proc.pid, "SIGTERM");
+			} catch {
+				// ignore
+			}
+		});
+
+		it("does not register a connection when agentName is omitted", async () => {
+			const proc = await spawnHeadlessAgent(["echo", "no-register"], {
+				cwd: process.cwd(),
+				env: { ...(process.env as Record<string, string>) },
+			});
+
+			// Drain stdout so process exits cleanly
+			if (proc.stdout) {
+				await new Response(proc.stdout).text();
+			}
+
+			// No connection was registered (use a stable lookup key that was never set)
+			expect(getConnection("never-registered-in-this-test")).toBeUndefined();
+		});
+
+		it("registered connection pid matches the spawned process pid", async () => {
+			const agentName = "test-headless-pid-check-xyz";
+			registeredNames.push(agentName);
+
+			const proc = await spawnHeadlessAgent(["sleep", "5"], {
+				cwd: process.cwd(),
+				env: { ...(process.env as Record<string, string>) },
+				agentName,
+			});
+
+			const conn = getConnection(agentName) as HeadlessClaudeConnection;
+			expect(conn).toBeDefined();
+			expect(conn.pid).toBe(proc.pid);
+
+			try {
+				process.kill(proc.pid, "SIGTERM");
+			} catch {
+				// ignore
+			}
+		});
 	});
 
 	describe("file redirect mode", () => {

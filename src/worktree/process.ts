@@ -10,6 +10,7 @@
  */
 
 import { AgentError } from "../errors.ts";
+import { registerHeadlessConnection } from "../runtimes/connections.ts";
 
 /**
  * Handle to a spawned headless agent subprocess.
@@ -57,6 +58,12 @@ export interface SpawnHeadlessOptions {
 	 * When set, redirect subprocess stderr to this file path instead of a pipe.
 	 */
 	stderrFile?: string;
+	/**
+	 * When set, create and register a RuntimeConnection in the connection registry
+	 * for this agent after spawn. Enables follow-up delivery, state polling, and
+	 * abort without tmux. Same namespace as AgentSession.agentName.
+	 */
+	agentName?: string;
 }
 
 /**
@@ -103,9 +110,15 @@ export async function spawnHeadlessAgent(
 		stdin: "pipe",
 	});
 
-	return {
+	const result: HeadlessProcess = {
 		pid: proc.pid,
 		stdin: proc.stdin,
 		stdout: opts.stdoutFile ? null : (proc.stdout as ReadableStream<Uint8Array>),
 	};
+
+	if (opts.agentName) {
+		registerHeadlessConnection(opts.agentName, result);
+	}
+
+	return result;
 }
