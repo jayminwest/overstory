@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { createAgentFifo, removeAgentFifo } from "../agents/headless-stdin.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
+import type { DevServerHandle } from "./serve/dev.ts";
 import {
 	_resetHandlers,
 	createServeServer,
 	installMailInjectors,
 	registerApiHandler,
 	registerWsHandler,
+	runServe,
 } from "./serve.ts";
 
 /**
@@ -363,4 +365,115 @@ describe("installMailInjectors", () => {
 			checkStore.close();
 		}
 	}, 12000);
+});
+
+describe("runServe auto-build + dev wiring", () => {
+	let tempDir: string;
+	let origCwd: typeof process.cwd;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), "overstory-runserve-test-"));
+		_resetHandlers();
+		mkdirSync(join(tempDir, ".overstory"), { recursive: true });
+		writeFileSync(
+			join(tempDir, ".overstory", "config.yaml"),
+			`project:\n  name: test\n  root: ${tempDir}\n  canonicalBranch: main\n`,
+		);
+		origCwd = process.cwd;
+		process.cwd = () => tempDir;
+	});
+
+	afterEach(() => {
+		process.cwd = origCwd;
+		_resetHandlers();
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	test("opts.dev=false invokes _ensureUiBuild and skips _startDevServer", async () => {
+		const ensureCalls: Array<{ uiDir: string }> = [];
+		const ensureStub = async (o: { uiDir: string }): Promise<void> => {
+			ensureCalls.push({ uiDir: o.uiDir });
+			throw new Error("__halt__");
+		};
+		const devCalls: unknown[] = [];
+		const devStub = async (): Promise<DevServerHandle> => {
+			devCalls.push(true);
+			return { port: 0, stop: async () => {} };
+		};
+
+		await expect(
+			runServe(
+				{ port: 0, host: "127.0.0.1", dev: false },
+				{ _ensureUiBuild: ensureStub, _startDevServer: devStub, _restDeps: false },
+			),
+		).rejects.toThrow("__halt__");
+
+		expect(ensureCalls.length).toBe(1);
+		expect(ensureCalls[0]?.uiDir).toBe(join(tempDir, "ui"));
+		expect(devCalls.length).toBe(0);
+	});
+
+	test("opts.dev=true does NOT call _ensureUiBuild", async () => {
+		const ensureStub = async (): Promise<void> => {
+			throw new Error("ensureUiBuild should not be called in dev mode");
+		};
+		const devStub = async (): Promise<DevServerHandle> => {
+			throw new Error("__halt__");
+		};
+
+		await expect(
+			runServe(
+				{ port: 0, host: "127.0.0.1", dev: true, devPort: 4567 },
+				{ _ensureUiBuild: ensureStub, _startDevServer: devStub, _restDeps: false },
+			),
+		).rejects.toThrow("__halt__");
+	});
+
+	test("opts.devPort is forwarded to _startDevServer", async () => {
+		const devCalls: Array<{ uiDir: string; port: number; apiPort?: number }> = [];
+		const devStub = async (o: {
+			uiDir: string;
+			port: number;
+			apiPort?: number;
+		}): Promise<DevServerHandle> => {
+			devCalls.push({ uiDir: o.uiDir, port: o.port, apiPort: o.apiPort });
+			throw new Error("__halt__");
+		};
+
+		await expect(
+			runServe(
+				{ port: 0, host: "127.0.0.1", dev: true, devPort: 4567 },
+				{ _startDevServer: devStub, _skipAutoBuild: true, _restDeps: false },
+			),
+		).rejects.toThrow("__halt__");
+
+		expect(devCalls.length).toBe(1);
+		expect(devCalls[0]?.port).toBe(4567);
+		expect(devCalls[0]?.uiDir).toBe(join(tempDir, "ui"));
+		// apiPort is the actual bound server port (port 0 => OS-assigned non-zero).
+		expect(typeof devCalls[0]?.apiPort).toBe("number");
+		expect(devCalls[0]?.apiPort).toBeGreaterThan(0);
+	});
+
+	test("_skipAutoBuild bypasses _ensureUiBuild even when dev is false", async () => {
+		const ensureStub = async (): Promise<void> => {
+			throw new Error("should not be called when _skipAutoBuild is true");
+		};
+		const devStub = async (): Promise<DevServerHandle> => {
+			throw new Error("__halt__");
+		};
+
+		// dev=true to ensure runServe halts via devStub regardless.
+		await expect(
+			runServe(
+				{ port: 0, host: "127.0.0.1", dev: true, devPort: 3000 },
+				{
+					_ensureUiBuild: ensureStub,
+					_startDevServer: devStub,
+					_skipAutoBuild: true,
+					_restDeps: false,
+				},
+			),
+		).rejects.toThrow("__halt__");
+	});
 });

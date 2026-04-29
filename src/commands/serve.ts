@@ -23,6 +23,8 @@ import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { apiJson, jsonError, jsonOutput } from "../json.ts";
 import { printError, printSuccess } from "../logging/color.ts";
+import { ensureUiBuild } from "./serve/build.ts";
+import { type DevServerHandle, startDevServer } from "./serve/dev.ts";
 import { type RestApiDeps, registerRestApi } from "./serve/rest.ts";
 import { serveStatic } from "./serve/static.ts";
 import { installBroadcaster } from "./serve/ws.ts";
@@ -77,6 +79,10 @@ export interface ServeOptions {
 	port?: number;
 	host?: string;
 	json?: boolean;
+	/** When true, also start the Vite-style dev UI server (HMR, /api+/ws proxy). */
+	dev?: boolean;
+	/** Dev UI port. Ignored unless dev is true. Default 3000. */
+	devPort?: number;
 }
 
 /** Dependencies injectable for testing. */
@@ -86,6 +92,10 @@ export interface ServeDeps {
 	_readFile?: (path: string) => Promise<Uint8Array>;
 	/** REST store deps. Pass false to skip REST registration (test isolation). */
 	_restDeps?: RestApiDeps | false;
+	_ensureUiBuild?: typeof ensureUiBuild;
+	_startDevServer?: typeof startDevServer;
+	/** Skip the auto-build step entirely (test isolation). */
+	_skipAutoBuild?: boolean;
 }
 
 /** Read the package version once at module load to avoid circular imports with index.ts. */
@@ -311,6 +321,15 @@ export async function runServe(opts: ServeOptions, deps: ServeDeps = {}): Promis
 
 	const overstoryDir = join(config.project.root, ".overstory");
 	const mailDbPath = join(overstoryDir, "mail.db");
+	const uiDir = join(config.project.root, "ui");
+
+	// Production mode: ensure ui/dist is current before binding the port.
+	// In dev mode, skip the prebuilt assets entirely — the dev server owns
+	// the UI surface and reads ui/src directly.
+	const _ensureUi = deps._ensureUiBuild ?? ensureUiBuild;
+	if (!opts.dev && deps._skipAutoBuild !== true) {
+		await _ensureUi({ uiDir });
+	}
 
 	// Install broadcaster before Bun.serve so handler is ready for the first request
 	const stopBroadcaster = installBroadcaster({
@@ -325,16 +344,32 @@ export async function runServe(opts: ServeOptions, deps: ServeDeps = {}): Promis
 
 	const server = await createServeServer(opts, deps);
 
+	let dev: DevServerHandle | undefined;
+	if (opts.dev) {
+		const _startDev = deps._startDevServer ?? startDevServer;
+		dev = await _startDev({
+			uiDir,
+			port: opts.devPort ?? 3000,
+			apiPort: server.port,
+			apiHost: server.hostname,
+		});
+	}
+
 	const useJson = opts.json ?? false;
+	const apiUrl = `http://${server.hostname}:${server.port}`;
 	if (useJson) {
 		jsonOutput("serve", {
 			status: "started",
 			port: server.port,
 			hostname: server.hostname,
-			url: `http://${server.hostname}:${server.port}`,
+			url: apiUrl,
+			...(dev ? { devUrl: `http://127.0.0.1:${dev.port}` } : {}),
 		});
 	} else {
-		printSuccess(`ov serve listening on http://${server.hostname}:${server.port}`);
+		printSuccess(`ov serve listening on ${apiUrl}`);
+		if (dev) {
+			printSuccess(`ov serve dev UI on http://127.0.0.1:${dev.port}`);
+		}
 	}
 
 	// Graceful shutdown handler
@@ -342,10 +377,19 @@ export async function runServe(opts: ServeOptions, deps: ServeDeps = {}): Promis
 		if (!useJson) {
 			process.stdout.write("\nShutting down...\n");
 		}
-		stopMailInjectors();
-		stopBroadcaster();
-		server.stop(true);
-		process.exit(0);
+		// Stop the dev server first so the upstream WebSocket pump drains
+		// before we tear down the broadcaster + main server.
+		const stopDev = dev ? dev.stop() : Promise.resolve();
+		stopDev
+			.catch(() => {
+				// Best-effort stop — surface nothing on failure.
+			})
+			.finally(() => {
+				stopMailInjectors();
+				stopBroadcaster();
+				server.stop(true);
+				process.exit(0);
+			});
 	};
 
 	process.on("SIGINT", shutdown);
@@ -363,25 +407,48 @@ export function createServeCommand(): Command {
 		.description("Start the HTTP server (static UI + /healthz + /api/* + /ws)")
 		.option("--port <n>", "TCP port to listen on", "8080")
 		.option("--host <addr>", "Host/address to bind", "127.0.0.1")
+		.option("--dev", "Also start the dev UI server with HMR + API/WS proxy")
+		.option("--dev-port <n>", "Dev UI port (only with --dev)", "3000")
 		.option("--json", "Output startup info as JSON")
-		.action(async (opts: { port?: string; host?: string; json?: boolean }) => {
-			const port = opts.port !== undefined ? Number.parseInt(opts.port, 10) : 8080;
-			try {
-				if (Number.isNaN(port) || port < 1 || port > 65535) {
-					throw new ValidationError(`Invalid port: ${opts.port ?? "undefined"}`, {
-						field: "port",
-						value: opts.port,
+		.action(
+			async (opts: {
+				port?: string;
+				host?: string;
+				dev?: boolean;
+				devPort?: string;
+				json?: boolean;
+			}) => {
+				const port = opts.port !== undefined ? Number.parseInt(opts.port, 10) : 8080;
+				const devPort = opts.devPort !== undefined ? Number.parseInt(opts.devPort, 10) : 3000;
+				try {
+					if (Number.isNaN(port) || port < 1 || port > 65535) {
+						throw new ValidationError(`Invalid port: ${opts.port ?? "undefined"}`, {
+							field: "port",
+							value: opts.port,
+						});
+					}
+					if (Number.isNaN(devPort) || devPort < 1 || devPort > 65535) {
+						throw new ValidationError(`Invalid dev port: ${opts.devPort ?? "undefined"}`, {
+							field: "devPort",
+							value: opts.devPort,
+						});
+					}
+					await runServe({
+						port,
+						host: opts.host ?? "127.0.0.1",
+						json: opts.json,
+						dev: opts.dev ?? false,
+						devPort,
 					});
+				} catch (err: unknown) {
+					const msg = err instanceof Error ? err.message : String(err);
+					if (opts.json) {
+						jsonError("serve", msg);
+					} else {
+						printError(`ov serve failed: ${msg}`);
+					}
+					process.exitCode = 1;
 				}
-				await runServe({ port, host: opts.host ?? "127.0.0.1", json: opts.json });
-			} catch (err: unknown) {
-				const msg = err instanceof Error ? err.message : String(err);
-				if (opts.json) {
-					jsonError("serve", msg);
-				} else {
-					printError(`ov serve failed: ${msg}`);
-				}
-				process.exitCode = 1;
-			}
-		});
+			},
+		);
 }

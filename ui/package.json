@@ -4,7 +4,7 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "bun --hot ./index.html",
+		"dev": "bun --hot ./dev-server.ts",
 		"build": "tsc -b && bun run build.ts",
 		"preview": "bun ./dist/index.html",
 		"lint": "biome check .",
