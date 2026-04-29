@@ -7,7 +7,8 @@
 		"dev": "bun --hot ./index.html",
 		"build": "tsc -b && bun run build.ts",
 		"preview": "bun ./dist/index.html",
-		"typecheck": "tsc -b --noEmit"
+		"typecheck": "tsc -b --noEmit",
+		"lint": "biome check ."
 	},
 	"dependencies": {
 		"@radix-ui/react-scroll-area": "^1.2.0",
@@ -23,6 +24,7 @@
 		"tailwind-merge": "^2.5.2"
 	},
 	"devDependencies": {
+		"@biomejs/biome": "^2.3.15",
 		"@types/react": "^19.0.0",
 		"@types/react-dom": "^19.0.0",
 		"bun-plugin-tailwind": "^0.1.2",
