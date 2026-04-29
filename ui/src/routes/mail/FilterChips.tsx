@@ -17,7 +17,7 @@ export function FilterChips({ filters, onChange }: FilterChipsProps) {
 	const { data: agents = [] } = useQuery({ queryKey: ["agents-list"], queryFn: fetchAgents });
 
 	return (
-		<div className="flex items-center gap-2 px-3 py-2 border-b">
+		<div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/30 shrink-0">
 			<Button
 				variant={filters.unread ? "default" : "outline"}
 				size="sm"
@@ -26,7 +26,7 @@ export function FilterChips({ filters, onChange }: FilterChipsProps) {
 				Unread
 			</Button>
 			<select
-				className="rounded-md border bg-background text-sm px-2 py-1"
+				className="rounded-md border border-border bg-background text-sm px-2.5 py-1.5 hover:bg-accent/40 transition-colors focus:outline-none focus:ring-2 focus:ring-ring"
 				value={filters.from}
 				onChange={(e) => onChange({ ...filters, from: e.target.value })}
 			>
@@ -38,7 +38,7 @@ export function FilterChips({ filters, onChange }: FilterChipsProps) {
 				))}
 			</select>
 			<select
-				className="rounded-md border bg-background text-sm px-2 py-1"
+				className="rounded-md border border-border bg-background text-sm px-2.5 py-1.5 hover:bg-accent/40 transition-colors focus:outline-none focus:ring-2 focus:ring-ring"
 				value={filters.to}
 				onChange={(e) => onChange({ ...filters, to: e.target.value })}
 			>

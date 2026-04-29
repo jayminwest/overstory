@@ -33,11 +33,11 @@ export function ThreadList({ items, selectedId, onSelect, onDelete }: ThreadList
 
 	if (items.length === 0) {
 		return (
-			<div className="flex-1 flex flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground text-center">
+			<div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-sm text-muted-foreground text-center">
 				<p>No messages.</p>
-				<p>
+				<p className="leading-relaxed max-w-md">
 					Send one with{" "}
-					<code className="font-mono">
+					<code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
 						{`ov mail send --to coordinator --subject "..." --body "..." --type status`}
 					</code>
 					.
@@ -55,13 +55,13 @@ export function ThreadList({ items, selectedId, onSelect, onDelete }: ThreadList
 							type="button"
 							onClick={() => onSelect(msg.id)}
 							className={[
-								"w-full flex flex-col gap-1 px-3 py-2 text-left border-b hover:bg-accent/50 transition-colors",
+								"w-full flex flex-col gap-1.5 px-4 py-3 text-left border-b border-border hover:bg-accent/40 transition-colors",
 								selectedId === msg.id ? "bg-accent text-accent-foreground" : "",
 							].join(" ")}
 						>
-							<div className="flex items-center justify-between gap-2 pr-6">
+							<div className="flex items-center justify-between gap-2 pr-7">
 								<span className="text-sm font-medium truncate flex-1">{msg.subject}</span>
-								<div className="flex items-center gap-1 shrink-0">
+								<div className="flex items-center gap-1.5 shrink-0">
 									<Badge variant={typeVariant(msg.type)}>{msg.type}</Badge>
 									{!msg.read && <div className="size-2 rounded-full bg-primary" />}
 								</div>
@@ -78,7 +78,7 @@ export function ThreadList({ items, selectedId, onSelect, onDelete }: ThreadList
 									e.stopPropagation();
 									onDelete(msg.id);
 								}}
-								className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity rounded p-1 text-muted-foreground hover:text-destructive hover:bg-accent"
+								className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity rounded-md p-1.5 text-muted-foreground hover:text-destructive hover:bg-accent"
 							>
 								<Trash2 className="size-3.5" />
 							</button>

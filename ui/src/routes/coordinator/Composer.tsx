@@ -151,28 +151,28 @@ export function Composer({
 		: 'Type a message. "/" for commands. Cmd+Enter to send.';
 
 	return (
-		<div ref={containerRef} className="border-t bg-background shrink-0">
+		<div ref={containerRef} className="border-t border-border bg-background shrink-0">
 			{askArmed !== null && (
-				<div className="px-4 pt-2 text-xs text-muted-foreground flex items-center gap-2">
+				<div className="px-6 pt-3 text-xs text-muted-foreground flex items-center gap-2">
 					<span>Ask mode armed:</span>
 					<span className="font-medium text-foreground">{askArmed.subject}</span>
 					<button
 						type="button"
-						className="ml-auto hover:text-foreground"
+						className="ml-auto hover:text-foreground transition-colors"
 						onClick={() => setAskArmed(null)}
 					>
 						cancel
 					</button>
 				</div>
 			)}
-			<div className="relative px-4 py-3 flex items-end gap-2">
+			<div className="relative px-6 py-4 flex items-end gap-3 max-w-4xl mx-auto w-full">
 				{showSlashMenu && slashEntries.length > 0 && (
-					<div className="absolute left-4 right-4 bottom-full mb-1 border rounded-md bg-popover shadow-md text-sm z-10">
+					<div className="absolute left-6 right-6 bottom-full mb-2 border border-border rounded-lg bg-popover shadow-md text-sm z-10 overflow-hidden">
 						{slashEntries.map((e) => (
 							<button
 								key={e.cmd}
 								type="button"
-								className="w-full text-left px-3 py-2 hover:bg-accent flex items-baseline gap-3 first:rounded-t-md last:rounded-b-md"
+								className="w-full text-left px-4 py-2.5 hover:bg-accent flex items-baseline gap-3 transition-colors"
 								onMouseDown={(ev) => ev.preventDefault()}
 								onClick={() => handleSelectSlash(e)}
 							>
@@ -193,7 +193,7 @@ export function Composer({
 					onBlur={() => setDismissed(true)}
 					placeholder={placeholder}
 					rows={2}
-					className="flex-1 resize-none border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+					className="flex-1 resize-none border border-border rounded-lg px-3 py-2.5 text-sm leading-relaxed bg-background placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-shadow"
 				/>
 				<Button
 					type="button"

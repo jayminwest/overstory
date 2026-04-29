@@ -179,6 +179,9 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 	const isReply = replyTo !== undefined;
 	const toInputId = `${datalistId}-to`;
 
+	const inputClass =
+		"rounded-md border border-border text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-shadow placeholder:text-muted-foreground/70";
+
 	return (
 		<div
 			className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -189,20 +192,22 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 			<button
 				type="button"
 				aria-label="Close composer"
-				className="absolute inset-0 bg-black/50 cursor-default"
+				className="absolute inset-0 bg-foreground/40 backdrop-blur-sm cursor-default"
 				onClick={onClose}
 			/>
-			<Card className="relative w-full max-w-xl max-h-[90vh] overflow-auto">
-				<CardContent className="flex flex-col gap-3">
+			<Card className="relative w-full max-w-xl max-h-[90vh] overflow-auto py-5 gap-0">
+				<CardContent className="flex flex-col gap-4 px-6">
 					<div className="flex items-center justify-between">
-						<h2 className="text-base font-semibold">{isReply ? "Reply" : "New message"}</h2>
+						<h2 className="text-lg font-semibold tracking-tight">
+							{isReply ? "Reply" : "New message"}
+						</h2>
 						<Button type="button" variant="ghost" size="sm" onClick={onClose}>
 							Close
 						</Button>
 					</div>
 
-					<div className="flex flex-col gap-1 text-sm">
-						<label htmlFor={toInputId} className="text-muted-foreground">
+					<div className="flex flex-col gap-1.5 text-sm">
+						<label htmlFor={toInputId} className="text-muted-foreground text-xs font-medium">
 							To
 						</label>
 						<input
@@ -212,7 +217,7 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 							}}
 							type="text"
 							list={isReply ? undefined : datalistId}
-							className={`rounded-md border text-sm px-2 py-1 ${isReply ? "bg-muted" : "bg-background"}`}
+							className={`${inputClass} ${isReply ? "bg-muted" : "bg-background"}`}
 							value={to}
 							onChange={(e) => setTo(e.target.value)}
 							placeholder="agent or @group"
@@ -226,11 +231,11 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 						</datalist>
 					</div>
 
-					<label className="flex flex-col gap-1 text-sm">
-						<span className="text-muted-foreground">Subject</span>
+					<label className="flex flex-col gap-1.5 text-sm">
+						<span className="text-muted-foreground text-xs font-medium">Subject</span>
 						<input
 							type="text"
-							className={`rounded-md border text-sm px-2 py-1 ${isReply ? "bg-muted" : "bg-background"}`}
+							className={`${inputClass} ${isReply ? "bg-muted" : "bg-background"}`}
 							value={subject}
 							onChange={(e) => setSubject(e.target.value)}
 							readOnly={isReply}
@@ -238,13 +243,13 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 						/>
 					</label>
 
-					<label className="flex flex-col gap-1 text-sm">
-						<span className="text-muted-foreground">Body</span>
+					<label className="flex flex-col gap-1.5 text-sm">
+						<span className="text-muted-foreground text-xs font-medium">Body</span>
 						<textarea
 							ref={(el) => {
 								if (isReply) firstFieldRef.current = el;
 							}}
-							className="rounded-md border bg-background text-sm px-2 py-1 font-mono"
+							className={`${inputClass} bg-background font-mono leading-relaxed`}
 							rows={6}
 							value={body}
 							onChange={(e) => setBody(e.target.value)}
@@ -254,20 +259,20 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 						/>
 					</label>
 
-					<div className="grid grid-cols-3 gap-2 text-sm">
-						<label className="flex flex-col gap-1">
-							<span className="text-muted-foreground">From</span>
+					<div className="grid grid-cols-3 gap-3 text-sm">
+						<label className="flex flex-col gap-1.5">
+							<span className="text-muted-foreground text-xs font-medium">From</span>
 							<input
 								type="text"
-								className="rounded-md border bg-background text-sm px-2 py-1"
+								className={`${inputClass} bg-background`}
 								value={from}
 								onChange={(e) => setFrom(e.target.value)}
 							/>
 						</label>
-						<label className="flex flex-col gap-1">
-							<span className="text-muted-foreground">Type</span>
+						<label className="flex flex-col gap-1.5">
+							<span className="text-muted-foreground text-xs font-medium">Type</span>
 							<select
-								className="rounded-md border bg-background text-sm px-2 py-1"
+								className={`${inputClass} bg-background`}
 								value={type}
 								onChange={(e) => setType(e.target.value as SemanticType)}
 							>
@@ -278,10 +283,10 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 								))}
 							</select>
 						</label>
-						<label className="flex flex-col gap-1">
-							<span className="text-muted-foreground">Priority</span>
+						<label className="flex flex-col gap-1.5">
+							<span className="text-muted-foreground text-xs font-medium">Priority</span>
 							<select
-								className="rounded-md border bg-background text-sm px-2 py-1"
+								className={`${inputClass} bg-background`}
 								value={priority}
 								onChange={(e) => setPriority(e.target.value as Priority)}
 							>
@@ -295,19 +300,19 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 					</div>
 
 					{!isReply && (
-						<div className="flex flex-col gap-1 text-sm">
+						<div className="flex flex-col gap-2 text-sm">
 							<button
 								type="button"
-								className="text-xs text-muted-foreground self-start hover:underline"
+								className="text-xs text-muted-foreground self-start hover:text-foreground transition-colors"
 								onClick={() => setShowAdvanced((v) => !v)}
 							>
 								{showAdvanced ? "Hide advanced" : "Show advanced"}
 							</button>
 							{showAdvanced && (
-								<label className="flex flex-col gap-1">
-									<span className="text-muted-foreground">Payload (JSON)</span>
+								<label className="flex flex-col gap-1.5">
+									<span className="text-muted-foreground text-xs font-medium">Payload (JSON)</span>
 									<textarea
-										className="rounded-md border bg-background text-sm px-2 py-1 font-mono"
+										className={`${inputClass} bg-background font-mono leading-relaxed`}
 										rows={4}
 										value={payload}
 										onChange={(e) => setPayload(e.target.value)}
@@ -318,7 +323,11 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 						</div>
 					)}
 
-					{error !== null && <p className="text-sm text-destructive">{error}</p>}
+					{error !== null && (
+						<div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+							{error}
+						</div>
+					)}
 
 					<div className="flex items-center justify-end gap-2 pt-1">
 						<Button type="button" variant="outline" onClick={onClose} disabled={submitting}>

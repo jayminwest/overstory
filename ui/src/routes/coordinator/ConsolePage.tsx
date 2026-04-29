@@ -525,8 +525,8 @@ export function ConsolePage() {
 
 	return (
 		<div className="flex flex-col h-full">
-			<div className="flex items-center gap-3 px-6 py-4 border-b shrink-0">
-				<h1 className="text-lg font-semibold">Coordinator</h1>
+			<div className="flex items-center gap-3 px-6 py-4 border-b border-border shrink-0">
+				<h1 className="text-xl font-semibold tracking-tight">Coordinator</h1>
 				<div className="ml-auto">
 					<StatusPill lastCheck={lastCheck} />
 				</div>
@@ -545,7 +545,7 @@ export function ConsolePage() {
 			)}
 
 			{!showEmpty && stateQuery.data?.running === false && (
-				<div className="px-4 py-3 border-t flex items-center gap-3 shrink-0 bg-muted/30">
+				<div className="px-6 py-3 border-t border-border flex items-center gap-3 shrink-0 bg-muted/40">
 					<span className="text-sm text-muted-foreground">Coordinator is stopped.</span>
 					<Button type="button" size="sm" className="ml-auto" onClick={() => setNewRunOpen(true)}>
 						Start new run

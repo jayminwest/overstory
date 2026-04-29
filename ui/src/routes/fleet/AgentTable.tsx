@@ -30,46 +30,54 @@ export function AgentTable({ agents }: AgentTableProps) {
 
 	if (agents.length === 0) {
 		return (
-			<p className="text-sm text-muted-foreground py-4">
+			<p className="text-sm text-muted-foreground py-4 leading-relaxed">
 				No agents in this run yet — spawn one with{" "}
-				<code className="font-mono">{"ov sling <task-id> --capability builder --name <name>"}</code>
+				<code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+					{"ov sling <task-id> --capability builder --name <name>"}
+				</code>
 				.
 			</p>
 		);
 	}
 
 	return (
-		<Table>
-			<TableHeader>
-				<TableRow>
-					<TableHead>Name</TableHead>
-					<TableHead>Capability</TableHead>
-					<TableHead>State</TableHead>
-					<TableHead>Parent</TableHead>
-					<TableHead>Started</TableHead>
-					<TableHead>Last Event</TableHead>
-				</TableRow>
-			</TableHeader>
-			<TableBody>
-				{agents.map((agent) => (
-					<TableRow
-						key={agent.id}
-						className="cursor-pointer"
-						onClick={() => navigate(`/agents/${encodeURIComponent(agent.agentName)}`)}
-					>
-						<TableCell className="font-mono text-xs">{agent.agentName}</TableCell>
-						<TableCell>{agent.capability}</TableCell>
-						<TableCell>
-							<Badge variant={STATE_VARIANT[agent.state]}>{agent.state}</Badge>
-						</TableCell>
-						<TableCell className="text-muted-foreground text-xs">
-							{agent.parentAgent ?? "—"}
-						</TableCell>
-						<TableCell className="text-xs">{formatRelativeTime(agent.startedAt)}</TableCell>
-						<TableCell className="text-xs">{formatRelativeTime(agent.lastActivity)}</TableCell>
+		<div className="rounded-xl border border-border overflow-hidden bg-card">
+			<Table>
+				<TableHeader>
+					<TableRow className="bg-muted/40 hover:bg-muted/40">
+						<TableHead className="px-4 h-11">Name</TableHead>
+						<TableHead className="px-4 h-11">Capability</TableHead>
+						<TableHead className="px-4 h-11">State</TableHead>
+						<TableHead className="px-4 h-11">Parent</TableHead>
+						<TableHead className="px-4 h-11">Started</TableHead>
+						<TableHead className="px-4 h-11">Last Event</TableHead>
 					</TableRow>
-				))}
-			</TableBody>
-		</Table>
+				</TableHeader>
+				<TableBody>
+					{agents.map((agent) => (
+						<TableRow
+							key={agent.id}
+							className="cursor-pointer"
+							onClick={() => navigate(`/agents/${encodeURIComponent(agent.agentName)}`)}
+						>
+							<TableCell className="font-mono text-xs px-4 py-3">{agent.agentName}</TableCell>
+							<TableCell className="px-4 py-3 text-sm">{agent.capability}</TableCell>
+							<TableCell className="px-4 py-3">
+								<Badge variant={STATE_VARIANT[agent.state]}>{agent.state}</Badge>
+							</TableCell>
+							<TableCell className="text-muted-foreground text-xs px-4 py-3">
+								{agent.parentAgent ?? "—"}
+							</TableCell>
+							<TableCell className="text-xs px-4 py-3">
+								{formatRelativeTime(agent.startedAt)}
+							</TableCell>
+							<TableCell className="text-xs px-4 py-3">
+								{formatRelativeTime(agent.lastActivity)}
+							</TableCell>
+						</TableRow>
+					))}
+				</TableBody>
+			</Table>
+		</div>
 	);
 }

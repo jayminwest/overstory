@@ -20,7 +20,7 @@ export function RunPicker({ runs, selectedRunId, onSelect }: RunPickerProps) {
 			</label>
 			<select
 				id="run-picker"
-				className="border rounded px-2 py-1 text-sm bg-background text-foreground"
+				className="border border-border rounded-md px-2.5 py-1.5 text-sm bg-background text-foreground hover:bg-accent/40 transition-colors focus:outline-none focus:ring-2 focus:ring-ring"
 				value={value}
 				onChange={(e) => onSelect(e.target.value)}
 			>

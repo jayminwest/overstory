@@ -9,28 +9,34 @@ interface SummaryCardsProps {
 export function SummaryCards({ activeCount, completedCount, errorCount }: SummaryCardsProps) {
 	return (
 		<div className="grid grid-cols-3 gap-4">
-			<Card>
+			<Card className="gap-3 py-5">
 				<CardHeader>
-					<CardTitle className="text-sm font-medium text-muted-foreground">Active</CardTitle>
+					<CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+						Active
+					</CardTitle>
 				</CardHeader>
 				<CardContent>
-					<p className="text-2xl font-bold">{activeCount}</p>
+					<p className="text-3xl font-semibold tabular-nums">{activeCount}</p>
 				</CardContent>
 			</Card>
-			<Card>
+			<Card className="gap-3 py-5">
 				<CardHeader>
-					<CardTitle className="text-sm font-medium text-muted-foreground">Completed</CardTitle>
+					<CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+						Completed
+					</CardTitle>
 				</CardHeader>
 				<CardContent>
-					<p className="text-2xl font-bold">{completedCount}</p>
+					<p className="text-3xl font-semibold tabular-nums">{completedCount}</p>
 				</CardContent>
 			</Card>
-			<Card>
+			<Card className="gap-3 py-5">
 				<CardHeader>
-					<CardTitle className="text-sm font-medium text-muted-foreground">Errors</CardTitle>
+					<CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+						Errors
+					</CardTitle>
 				</CardHeader>
 				<CardContent>
-					<p className="text-2xl font-bold text-destructive">{errorCount}</p>
+					<p className="text-3xl font-semibold tabular-nums text-destructive">{errorCount}</p>
 				</CardContent>
 			</Card>
 		</div>

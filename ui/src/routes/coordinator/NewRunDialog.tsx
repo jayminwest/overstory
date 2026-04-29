@@ -64,8 +64,8 @@ export function NewRunDialog({
 						</DialogDescription>
 					</DialogHeader>
 
-					<div className="flex flex-col gap-4">
-						<div className="flex flex-col gap-1.5">
+					<div className="flex flex-col gap-5">
+						<div className="flex flex-col gap-2">
 							<label htmlFor="new-run-subject" className="text-sm font-medium">
 								Subject <span className="text-muted-foreground font-normal">(optional)</span>
 							</label>
@@ -76,10 +76,10 @@ export function NewRunDialog({
 								onChange={(e) => setSubject(e.target.value)}
 								disabled={isStarting}
 								placeholder="Derived from the first line if blank"
-								className="border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+								className="border border-border rounded-md px-3 py-2 text-sm bg-background placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent disabled:opacity-50 transition-shadow"
 							/>
 						</div>
-						<div className="flex flex-col gap-1.5">
+						<div className="flex flex-col gap-2">
 							<label htmlFor="new-run-body" className="text-sm font-medium">
 								Initial prompt
 							</label>
@@ -91,11 +91,11 @@ export function NewRunDialog({
 								rows={6}
 								required
 								placeholder="What should the coordinator do?"
-								className="resize-y border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+								className="resize-y border border-border rounded-md px-3 py-2 text-sm leading-relaxed bg-background placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent disabled:opacity-50 transition-shadow"
 							/>
 						</div>
 						{error !== null && (
-							<div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+							<div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
 								{error}
 							</div>
 						)}

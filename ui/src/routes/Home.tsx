@@ -37,13 +37,13 @@ export function Home() {
 		"An error occurred.";
 
 	return (
-		<div className="p-6 flex flex-col gap-6">
+		<div className="p-6 flex flex-col gap-6 max-w-7xl mx-auto">
 			<div className="flex items-center justify-between">
-				<h1 className="text-xl font-semibold">Fleet</h1>
+				<h1 className="text-xl font-semibold tracking-tight">Fleet</h1>
 			</div>
 
 			{isError && (
-				<div className="rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive">
+				<div className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
 					{errorMessage}
 				</div>
 			)}
@@ -51,9 +51,12 @@ export function Home() {
 			{isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
 			{!isLoading && runs.length === 0 && (
-				<p className="text-sm text-muted-foreground">
+				<p className="text-sm text-muted-foreground leading-relaxed">
 					No runs yet — start a coordinator with{" "}
-					<code className="font-mono">ov coordinator start</code>.
+					<code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+						ov coordinator start
+					</code>
+					.
 				</p>
 			)}
 

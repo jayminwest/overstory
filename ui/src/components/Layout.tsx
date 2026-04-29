@@ -48,9 +48,9 @@ function TopBar() {
 	const wsStatus = useGlobalWsStatus();
 
 	return (
-		<header className="border-b border-border shrink-0">
+		<header className="border-b border-border shrink-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
 			<div className="h-14 flex items-center gap-6 px-6">
-				<span className="font-semibold text-sm">Overstory</span>
+				<span className="font-semibold text-sm tracking-tight">Overstory</span>
 				<nav className="flex items-center gap-1">
 					<NavItem to="/coordinator" label="Coordinator" />
 					<NavItem to="/" label="Fleet" end />
@@ -75,7 +75,7 @@ function NavItem({ to, label, end }: { to: string; label: string; end?: boolean 
 					"px-3 py-1.5 rounded-md text-sm transition-colors",
 					isActive
 						? "bg-accent text-accent-foreground font-medium"
-						: "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground",
+						: "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground",
 				)
 			}
 		>

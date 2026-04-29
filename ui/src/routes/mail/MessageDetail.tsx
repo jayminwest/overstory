@@ -24,7 +24,7 @@ function typeVariant(type: MailMessageType): "default" | "secondary" | "destruct
 
 function MessageRow({ msg }: { msg: MailMessage }) {
 	return (
-		<div className="flex flex-col gap-1 px-3 py-2 border-b last:border-0">
+		<div className="flex flex-col gap-1.5 px-6 py-4 border-b border-border last:border-0">
 			<div className="flex items-center justify-between gap-2">
 				<span className="text-sm font-medium truncate flex-1">{msg.subject}</span>
 				<Badge variant={typeVariant(msg.type)}>{msg.type}</Badge>
@@ -32,7 +32,7 @@ function MessageRow({ msg }: { msg: MailMessage }) {
 			<span className="text-xs text-muted-foreground">
 				{msg.from} → {msg.to}
 			</span>
-			<pre className="whitespace-pre-wrap font-mono text-xs mt-1">{msg.body}</pre>
+			<pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed mt-2">{msg.body}</pre>
 		</div>
 	);
 }
@@ -51,7 +51,7 @@ export function MessageDetail({ messageId, onReply }: MessageDetailProps) {
 
 	if (messageId === null) {
 		return (
-			<div className="h-full flex items-center justify-center p-6">
+			<div className="h-full flex items-center justify-center p-8">
 				<Card className="max-w-xs w-full">
 					<CardContent className="pt-6 text-sm text-muted-foreground text-center">
 						Select a message
@@ -63,7 +63,7 @@ export function MessageDetail({ messageId, onReply }: MessageDetailProps) {
 
 	if (isLoading || data === undefined) {
 		return (
-			<div className="h-full flex items-center justify-center p-6 text-sm text-muted-foreground">
+			<div className="h-full flex items-center justify-center p-8 text-sm text-muted-foreground">
 				Loading…
 			</div>
 		);
@@ -75,9 +75,11 @@ export function MessageDetail({ messageId, onReply }: MessageDetailProps) {
 		<ScrollArea className="h-full">
 			<div className="flex flex-col gap-0">
 				{/* Header */}
-				<div className="px-4 py-3 border-b flex flex-col gap-1">
-					<div className="flex items-center justify-between gap-2">
-						<span className="font-semibold text-base truncate flex-1">{message.subject}</span>
+				<div className="px-6 py-4 border-b border-border flex flex-col gap-1.5">
+					<div className="flex items-center justify-between gap-3">
+						<span className="font-semibold text-lg truncate flex-1 tracking-tight">
+							{message.subject}
+						</span>
 						<div className="flex items-center gap-2 shrink-0">
 							<Badge variant={typeVariant(message.type)}>{message.type}</Badge>
 							{onReply !== undefined && (
@@ -96,18 +98,20 @@ export function MessageDetail({ messageId, onReply }: MessageDetailProps) {
 				</div>
 
 				{/* Body */}
-				<div className="px-4 py-3 border-b">
-					<pre className="whitespace-pre-wrap font-mono text-xs">{message.body}</pre>
+				<div className="px-6 py-4 border-b border-border">
+					<pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">
+						{message.body}
+					</pre>
 				</div>
 
 				{/* Payload */}
 				{message.payload !== null && (
-					<div className="px-4 py-3 border-b">
+					<div className="px-6 py-4 border-b border-border">
 						<details>
-							<summary className="text-xs text-muted-foreground cursor-pointer select-none">
+							<summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors">
 								Payload
 							</summary>
-							<pre className="whitespace-pre-wrap font-mono text-xs mt-2">
+							<pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed mt-3">
 								{(() => {
 									try {
 										return JSON.stringify(JSON.parse(message.payload ?? ""), null, 2);
@@ -123,7 +127,7 @@ export function MessageDetail({ messageId, onReply }: MessageDetailProps) {
 				{/* Thread replies */}
 				{thread.length > 0 && (
 					<div className="flex flex-col">
-						<div className="px-4 py-2 text-xs font-medium text-muted-foreground border-b">
+						<div className="px-6 py-3 text-xs font-medium uppercase tracking-wide text-muted-foreground border-b border-border bg-muted/30">
 							Thread ({thread.length})
 						</div>
 						{thread.map((msg) => (

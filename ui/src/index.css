@@ -88,11 +88,42 @@
 	--chart-5: hsl(340 75% 55%);
 }
 
+/*
+ * UI scale (operator console polish)
+ *
+ * Spacing tokens — apply via Tailwind utilities, not raw values:
+ *   page shell        → px-6 py-4   (header/topbar; content rows in routes)
+ *   page content      → p-6         (Fleet/Mail/Agent body)
+ *   section header    → px-6 py-3   (route h1 strip)
+ *   thread/feed       → px-6 py-5   (Thread/AgentDetail timeline)
+ *   panel             → px-5 py-3   (mail filter strip, status banners)
+ *   bubble/card       → px-4 py-3   (Thread bubbles, EventRow cards)
+ *   composer          → px-6 py-4   (Coordinator composer)
+ *   form input        → px-3 py-2   (textarea/input/select)
+ *
+ * Vertical rhythm:
+ *   between page sections        → gap-6
+ *   between thread turns         → gap-4
+ *   between bubble subject/body  → gap-1.5
+ *   between header items         → gap-3
+ *
+ * Typography:
+ *   route h1   → text-xl font-semibold tracking-tight
+ *   section h2 → text-base font-semibold
+ *   body       → text-sm leading-relaxed
+ *   meta       → text-xs text-muted-foreground (never smaller)
+ *
+ * Borders:
+ *   default 1px (`border` + `border-border`)
+ *   dashed only for system/pending bubbles
+ *   rounded-md for inputs/buttons; rounded-xl for cards/panels
+ */
+
 @layer base {
 	* {
 		@apply border-border outline-ring/50;
 	}
 	body {
-		@apply bg-background text-foreground;
+		@apply bg-background text-foreground antialiased;
 	}
 }

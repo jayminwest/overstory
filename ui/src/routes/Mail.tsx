@@ -88,7 +88,8 @@ export function Mail() {
 			<ResizablePanelGroup direction="horizontal" className="h-full">
 				<ResizablePanel defaultSize={35} minSize={25}>
 					<div className="flex flex-col h-full">
-						<div className="flex items-center justify-end gap-2 px-3 py-2 border-b">
+						<div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border shrink-0">
+							<h1 className="text-base font-semibold tracking-tight">Mail</h1>
 							<Button size="sm" onClick={handleCompose}>
 								Compose
 							</Button>

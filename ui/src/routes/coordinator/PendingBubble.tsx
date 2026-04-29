@@ -20,17 +20,17 @@ export function PendingBubble({ workEvents, status }: PendingBubbleProps) {
 	const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
 	return (
-		<Card className="py-3 gap-2 max-w-[80%] mr-auto border-dashed">
+		<Card className="py-3 gap-2 max-w-[85%] mr-auto border-dashed border-border">
 			<CardHeader className="px-4 pb-0 pt-0">
 				<div className="flex items-center gap-2">
 					<Spinner stalled={status === "stalled"} />
-					<span className="text-xs text-muted-foreground">
+					<span className="text-xs text-muted-foreground font-medium">
 						{status === "stalled" ? HEADER_STALLED : HEADER_PENDING}
 					</span>
 					{workEvents.length > 0 && (
 						<button
 							type="button"
-							className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+							className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors"
 							onClick={() => setCollapsed((v) => !v)}
 						>
 							{collapsed ? `[+] ${workEvents.length} events` : "[-] hide"}

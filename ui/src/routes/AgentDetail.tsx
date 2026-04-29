@@ -147,14 +147,14 @@ export function AgentDetail() {
 	return (
 		<div className="flex flex-col h-full">
 			{/* Header */}
-			<div className="flex items-center gap-3 px-6 py-4 border-b shrink-0">
-				<h1 className="text-lg font-semibold">{agentLabel}</h1>
+			<div className="flex items-center gap-3 px-6 py-4 border-b border-border shrink-0">
+				<h1 className="text-xl font-semibold tracking-tight font-mono">{agentLabel}</h1>
 				<Badge variant={STATUS_VARIANT[status]}>{STATUS_LABEL[status]}</Badge>
 			</div>
 
 			{/* Timeline */}
 			<div ref={viewportRef} className="flex-1 min-h-0 overflow-auto">
-				<div className="px-4 py-4 flex flex-col gap-2">
+				<div className="px-6 py-5 flex flex-col gap-2.5 max-w-5xl mx-auto">
 					{query.isLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
 					{!query.isLoading && allEvents.length === 0 && (
 						<Card>
@@ -164,9 +164,9 @@ export function AgentDetail() {
 								</CardTitle>
 							</CardHeader>
 							<CardContent>
-								<p className="text-sm text-muted-foreground">
+								<p className="text-sm text-muted-foreground leading-relaxed">
 									Nudge the agent to wake it up:{" "}
-									<code className="font-mono">{`ov nudge ${agentLabel} "Status check"`}</code>
+									<code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">{`ov nudge ${agentLabel} "Status check"`}</code>
 								</p>
 							</CardContent>
 						</Card>
