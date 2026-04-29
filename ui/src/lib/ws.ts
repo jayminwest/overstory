@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useRegisterWsStatus } from "./ws-status";
+
 // ── Types (mirrored locally — do not import server types) ──────────────────
 
 export type EventType =
@@ -137,6 +139,9 @@ export function useWebSocket<T>(
 			setStatus("closed");
 		};
 	}, [url]);
+
+	// Publish status into the global registry when active; null means "not connected".
+	useRegisterWsStatus(url === null ? null : status);
 
 	return { status, ws: wsRef.current };
 }
