@@ -1,6 +1,6 @@
 {
 	"name": "@os-eco/overstory-cli",
-	"version": "0.10.0",
+	"version": "0.10.1",
 	"description": "Multi-agent orchestration for AI coding agents — spawn workers in git worktrees via tmux, coordinate through SQLite mail, merge with tiered conflict resolution. Pluggable runtime adapters for Claude Code, Pi, and more.",
 	"author": "Jaymin West",
 	"license": "MIT",

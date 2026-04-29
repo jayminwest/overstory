@@ -74,7 +74,7 @@ Purpose-built messaging via `bun:sqlite` in `.overstory/mail.db`. WAL mode for c
 ```
 overstory/                        # This repo (the overstory tool itself)
   src/
-    index.ts                      # CLI entry point (Commander.js program, 37 commands)
+    index.ts                      # CLI entry point (Commander.js program, 38 commands)
     types.ts                      # ALL shared types and interfaces
     config.ts                     # Config loader + defaults + validation
     errors.ts                     # Custom error types (extend OverstoryError)
@@ -116,6 +116,8 @@ overstory/                        # This repo (the overstory tool itself)
       discover.ts                 # ov discover (brownfield codebase discovery)
       orchestrator.ts             # ov orchestrator (multi-repo coordination)
       completions.ts              # ov --completions (shell completions)
+      serve.ts                    # ov serve (HTTP + WebSocket surface for the UI)
+      serve/                      # REST handlers (rest.ts), WebSocket broadcaster (ws.ts), static SPA fallback (static.ts)
     canopy/
       client.ts                   # Canopy client (prompt rendering, listing, emission)
     agents/                       # Agent lifecycle management
@@ -188,7 +190,7 @@ overstory/                        # This repo (the overstory tool itself)
       pricing.ts                  # Runtime-agnostic pricing + cost estimation
       transcript.ts               # Claude Code transcript JSONL parser
     doctor/                       # Modular health check system
-      *.ts                        # 12 check categories (see `ov doctor --help`)
+      *.ts                        # 13 check categories (see `ov doctor --help`)
     utils/
       bin.ts                      # Resolve overstory binary for re-launch
       fs.ts                       # Filesystem cleanup (SQLite wipe, JSON reset, directory clear)
@@ -577,7 +579,7 @@ ov doctor                        Run health checks on overstory setup
   --json                                 JSON output
   Categories: dependencies, config, structure, databases,
               consistency, agents, merge, logs, version,
-              ecosystem, providers, watchdog
+              ecosystem, providers, watchdog, serve
 
 ov ecosystem                     Show os-eco tool versions and health
   --json                                 JSON output
@@ -594,6 +596,13 @@ ov clean                         Wipe runtime state (nuclear cleanup)
   --logs  --worktrees  --branches        Individual resource cleanup
   --agents  --specs                      Individual state cleanup
   --json                                 JSON output
+
+ov serve                         HTTP + WebSocket surface for the web UI
+  --port <n>                             Port (default: 8080)
+  --host <addr>                          Bind host (default: 127.0.0.1)
+  --json                                 JSON output
+  Routes: /healthz, /api/runs, /api/agents, /api/events, /api/mail,
+          /ws (per-run/per-agent/mail rooms), SPA fallback to ui/dist
 ```
 
 ## Testing
@@ -695,7 +704,7 @@ Work is NOT complete until `git push` succeeds.
 
 <!-- mulch:start -->
 ## Project Expertise (Mulch)
-<!-- mulch-onboard-v:2 -->
+<!-- mulch-onboard-v:3 -->
 
 This project uses [Mulch](https://github.com/jayminwest/mulch) for structured expertise management.
 
@@ -707,6 +716,11 @@ ml prime
 Injects project-specific conventions, patterns, decisions, failures, references, and guides into
 your context. Run `ml prime --files src/foo.ts` before editing a file to load only records
 relevant to that path (per-file framing, classification age, and confirmation scores included).
+
+For monolith projects where dumping every record wastes context, set
+`prime.default_mode: manifest` in `.mulch/mulch.config.yaml` (or pass `--manifest`) to emit a
+quick reference + domain index. Agents then scope-load with `ml prime <domain>` or
+`ml prime --files <path>`.
 
 **Before completing your task**, record insights worth preserving — conventions discovered,
 patterns applied, failures encountered, or decisions made:

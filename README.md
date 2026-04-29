@@ -176,7 +176,8 @@ Every command supports `--json` where noted. Global flags: `-q`/`--quiet`, `--ti
 | `ov monitor status` | Show monitor state |
 | `ov log <event>` | Log a hook event (`--agent`) |
 | `ov clean` | Clean up worktrees, sessions, artifacts (`--completed`, `--all`, `--run`) |
-| `ov doctor` | Run health checks on overstory setup — 12 categories (`--category`, `--fix`, `--json`) |
+| `ov doctor` | Run health checks on overstory setup — 13 categories (`--category`, `--fix`, `--json`) |
+| `ov serve` | HTTP + WebSocket surface for the web UI (`--port`, `--host`, `--json`) |
 | `ov ecosystem` | Show os-eco tool versions and health (`--json`) |
 | `ov upgrade` | Upgrade overstory to latest npm version (`--check`, `--all`, `--json`) |
 | `ov agents discover` | Discover agents by capability/state/parent (`--capability`, `--state`, `--parent`, `--json`) |
@@ -253,7 +254,7 @@ overstory/
     config.ts                     Config loader + validation
     errors.ts                     Custom error types
     json.ts                       Standardized JSON envelope helpers
-    commands/                     One file per CLI subcommand (37 commands)
+    commands/                     One file per CLI subcommand (38 commands)
       agents.ts                   Agent discovery and querying
       coordinator.ts              Persistent orchestrator lifecycle
       supervisor.ts               Team lead management [DEPRECATED]
@@ -290,6 +291,8 @@ overstory/
       discover.ts                 Brownfield codebase discovery via coordinator-driven scout swarm
       orchestrator.ts             Multi-repo coordination (PersistentAgentSpec)
       completions.ts              Shell completion generation (bash/zsh/fish)
+      serve.ts                    HTTP + WebSocket surface for the web UI
+      serve/                      REST handlers, WebSocket broadcaster, static SPA fallback
     canopy/
       client.ts                   Canopy client (prompt rendering, listing, emission)
     agents/                       Agent lifecycle management

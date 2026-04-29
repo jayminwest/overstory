@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-04-28
+
+### Added
+
+#### `ov serve` HTTP Surface
+- **`ov serve [--port <n>] [--host <addr>]`** — new top-level command (`src/commands/serve.ts`) backed by `Bun.serve` that exposes `/healthz`, REST handlers under `/api/*`, a `/ws` WebSocket upgrade, and SPA static fallback to `ui/dist/`. Designed as the operator surface for the new web UI; defaults to `127.0.0.1:8080` (overstory-ba9c)
+- **Extensible route registry** — `registerApiHandler(handler)` and `registerWsHandler(handler)` let downstream streams register REST and WebSocket handlers without touching `serve.ts`. First non-null API handler wins; only one WS handler may be active at a time. `_resetHandlers()` exported for test isolation
+- **`createServeServer(opts, deps)`** — dependency-injectable factory used by tests to control lifecycle directly without binding to process signals; `deps._restDeps` accepts `false` to skip REST registration
+- **CLI command count: 37 → 38** (new `ov serve`)
+
+#### REST Endpoints over Existing Stores
+- **`src/commands/serve/rest.ts`** — read-only REST surface over `EventStore`, `MailStore`, `SessionStore`, and `RunStore` with no new persistence (overstory-9e8b)
+- **Endpoints** — `GET /api/runs`, `GET /api/runs/:id`, `GET /api/agents`, `GET /api/agents/:name`, `GET /api/events` (filters: `?agent`, `?run`, `?since`, `?cursor`), `GET /api/mail`, `GET /api/mail/:id`, `POST /api/mail/:id/read`
+- **Cursor pagination** — base64url-encoded `{ts, id}` cursors for all list endpoints; `limit` capped at 500. Invalid cursors return `400` via `ValidationError`
+- **`apiJson(data, init?)` / `apiError(message, status)`** in `src/json.ts` — HTTP envelope helpers (`{ success, command: "serve", data, nextCursor? }`) matching the existing `jsonOutput` / `jsonError` envelope shape
+- **Path-traversal guard** in `src/commands/serve/static.ts` — rejects requests escaping `ui/dist/` via decoded `..`/absolute-path tricks
+- **`/healthz` envelope** — now returns `{ uptimeMs, version }` via `apiJson`; `503` for missing `ui/dist` is also a JSON envelope
+
+#### WebSocket Broadcaster
+- **`src/commands/serve/ws.ts`** — `installBroadcaster()` subscribes to `EventStore` writes and `MailStore` inserts, multicasting to per-room socket sets registered via `registerWsHandler` (overstory-22ac)
+- **Per-run / per-agent rooms** — clients connect to `/ws?run=<id>`, `/ws?agent=<name>`, or `/ws?mail=true`; `getUpgradeData()` rejects connections with no recognized query parameter (`400`); each socket is added to the matching `rooms` map and removed on close
+- **Outbound frame schema** — `{ type: "event" | "mail" | "agent_state", ts, payload }`; assistant text events are coalesced in 250 ms windows into a `{ batched: true, events: [...] }` envelope to keep UI render rates manageable
+
+#### `ov doctor --category serve`
+- **`src/doctor/serve.ts`** — new doctor category validating `ui/dist/index.html` presence and probing `127.0.0.1:8080` non-blockingly. Warns on missing build / unreachable port; passes on healthy state. Wired into `ALL_CHECKS` in `src/commands/doctor.ts`; `DoctorCategory` union extended with `"serve"`
+- **Doctor check categories: 12 → 13**
+
+#### Web UI: Fleet, Mail, Live Timeline
+- **Fleet view (`/`)** — `ui/src/routes/Home.tsx` replaced with a real fleet dashboard: `RunPicker`, `SummaryCards`, `AgentTable` polling `/api/runs` and `/api/agents` at 5 s via TanStack Query; row click navigates to `/agents/:name` (overstory-6c4f)
+- **Mail inbox (`/mail`)** — new `ui/src/routes/Mail.tsx` with `ResizablePanelGroup` layout (`ThreadList` + `MessageDetail`), `FilterChips` (unread toggle, from/to agent selects), JSON payload viewer, thread reply rendering, and `useMailSocket` hook subscribing to `/ws?mail=true` (overstory-0ddb)
+- **Per-agent live timeline (`/agents/:name`)** — `ui/src/routes/AgentDetail.tsx` + `agent/EventRow.tsx` stream `/ws?agent=<name>` events into a chronological feed (overstory-fc04)
+- **REST API client** — `ui/src/lib/api.ts` typed fetchers for runs, agents, events, and mail; `ui/src/lib/ws.ts` reusable WebSocket hook with reconnect + room scoping
+- **shadcn primitives** — added `ui/src/components/ui/{table,resizable}.tsx` and `react-resizable-panels` dep; `@biomejs/biome` devDep + `lint` script added to `ui/package.json`
+
+#### Direction Doc
+- **`docs/direction-ui-and-ipc.md`** — new "Operator surface" section commits to the UI as primary operator surface with tmux as opt-in (`--no-headless`); documents the rationale (one mental model, honest fidelity, broken pane-steering) and gates the default flip on Phase 3 landing (overstory-caec, overstory-9cee)
+
+### Fixed
+
+- **UI sidebar `/agents` link removed** — the link pointed to a route that was never registered, so clicking it showed the 404 fallback. The Fleet view at `/` already lists agents
+- **Biome lint/format issues** in serve scaffold — sorted named exports alphabetically to satisfy `organizeImports`; resolved leftover format violations
+
+### Testing
+
+- 3881 tests across 119 files (9072 `expect()` calls)
+- New: `src/commands/serve.test.ts` (171 lines — `createServeServer` lifecycle, `/healthz`, handler registry, SPA fallback, port validation)
+- New: `src/commands/serve/rest.test.ts` (787 lines — every endpoint, cursor pagination, filters, `400`/`404`/`503` paths, path traversal)
+- New: `src/commands/serve/ws.test.ts` (361 lines — room scoping, mail upgrade, broadcaster wiring, text batching window)
+- New: `src/doctor/serve.test.ts` (95 lines — `ui/dist` presence, `index.html` check, port-probe pass/warn)
+
 ## [0.10.0] - 2026-04-28
 
 ### Added
@@ -1780,7 +1830,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Biome configuration for formatting and linting
 - TypeScript strict mode with `noUncheckedIndexedAccess`
 
-[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/jayminwest/overstory/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/jayminwest/overstory/compare/v0.9.4...v0.10.0
 [0.9.4]: https://github.com/jayminwest/overstory/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/jayminwest/overstory/compare/v0.9.2...v0.9.3
