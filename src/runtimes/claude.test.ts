@@ -421,6 +421,64 @@ describe("ClaudeRuntime", () => {
 			// Scout is non-implementation, builder is implementation
 			expect(scoutSettings).not.toBe(builderSettings);
 		});
+
+		test("skips settings.local.json when isHeadless is true", async () => {
+			const worktreePath = join(tempDir, "headless-wt");
+
+			await runtime.deployConfig(
+				worktreePath,
+				{ content: "# Headless Overlay" },
+				{
+					agentName: "headless-builder",
+					capability: "builder",
+					worktreePath,
+					isHeadless: true,
+				},
+			);
+
+			// Overlay should still be written
+			const overlayPath = join(worktreePath, ".claude", "CLAUDE.md");
+			const overlayExists = await Bun.file(overlayPath).exists();
+			expect(overlayExists).toBe(true);
+
+			// But hooks file must NOT be created for headless agents
+			const settingsPath = join(worktreePath, ".claude", "settings.local.json");
+			const settingsExists = await Bun.file(settingsPath).exists();
+			expect(settingsExists).toBe(false);
+		});
+
+		test("still writes settings.local.json when isHeadless is false", async () => {
+			const worktreePath = join(tempDir, "tmux-wt");
+
+			await runtime.deployConfig(
+				worktreePath,
+				{ content: "# Tmux Overlay" },
+				{
+					agentName: "tmux-builder",
+					capability: "builder",
+					worktreePath,
+					isHeadless: false,
+				},
+			);
+
+			const settingsPath = join(worktreePath, ".claude", "settings.local.json");
+			const settingsExists = await Bun.file(settingsPath).exists();
+			expect(settingsExists).toBe(true);
+		});
+
+		test("still writes settings.local.json when isHeadless is omitted (backward compat)", async () => {
+			const worktreePath = join(tempDir, "default-wt");
+
+			await runtime.deployConfig(worktreePath, undefined, {
+				agentName: "default-agent",
+				capability: "builder",
+				worktreePath,
+			});
+
+			const settingsPath = join(worktreePath, ".claude", "settings.local.json");
+			const settingsExists = await Bun.file(settingsPath).exists();
+			expect(settingsExists).toBe(true);
+		});
 	});
 
 	describe("parseTranscript", () => {
