@@ -21,7 +21,6 @@ function Sidebar() {
 			</div>
 			<nav className="flex-1 p-2 space-y-1">
 				<SidebarLink to="/" label="Fleet" end />
-				<SidebarLink to="/agents" label="Agents" />
 				<SidebarLink to="/mail" label="Mail" />
 			</nav>
 		</aside>
