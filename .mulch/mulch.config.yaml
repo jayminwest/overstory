@@ -9,6 +9,7 @@ domains:
   - ecosystem
   - runtimes
   - docs
+  - coordination
 governance:
   max_entries: 100
   warn_entries: 150
