@@ -126,6 +126,14 @@ export interface DirectSpawnOpts {
 	model?: string;
 	/** Path to the instruction/overlay file for this agent. */
 	instructionPath: string;
+	/**
+	 * Runtime-provided session id to resume on follow-up spawns.
+	 *
+	 * Present only on follow-up spawns — when a non-empty string, the runtime
+	 * adapter emits the runtime-specific resume flag in its argv (claude:
+	 * `--resume <id>`). Absent, undefined, null, or empty string → no resume.
+	 */
+	resumeSessionId?: string | null;
 }
 
 /** Structured event emitted by a headless agent on stdout (NDJSON). */

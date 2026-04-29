@@ -817,6 +817,55 @@ describe("ClaudeRuntime.buildDirectSpawn", () => {
 		};
 		expect(runtime.buildDirectSpawn(opts)).not.toContain("--model");
 	});
+
+	test("resumeSessionId emits --resume <id> after --model", () => {
+		const opts: DirectSpawnOpts = {
+			cwd: "/worktree",
+			env: {},
+			instructionPath: ".claude/CLAUDE.md",
+			model: "claude-sonnet-4-6",
+			resumeSessionId: "sess-resume-abc",
+		};
+		const argv = runtime.buildDirectSpawn(opts);
+		// --model and its value precede --resume and its value
+		const modelIdx = argv.indexOf("--model");
+		const resumeIdx = argv.indexOf("--resume");
+		expect(modelIdx).toBeGreaterThan(-1);
+		expect(resumeIdx).toBeGreaterThan(modelIdx + 1);
+		expect(argv[resumeIdx + 1]).toBe("sess-resume-abc");
+		// Trailing pair is --resume <id>
+		expect(argv.at(-2)).toBe("--resume");
+		expect(argv.at(-1)).toBe("sess-resume-abc");
+	});
+
+	test("omits --resume when resumeSessionId is undefined", () => {
+		const opts: DirectSpawnOpts = {
+			cwd: "/worktree",
+			env: {},
+			instructionPath: ".claude/CLAUDE.md",
+		};
+		expect(runtime.buildDirectSpawn(opts)).not.toContain("--resume");
+	});
+
+	test("omits --resume when resumeSessionId is empty string", () => {
+		const opts: DirectSpawnOpts = {
+			cwd: "/worktree",
+			env: {},
+			instructionPath: ".claude/CLAUDE.md",
+			resumeSessionId: "",
+		};
+		expect(runtime.buildDirectSpawn(opts)).not.toContain("--resume");
+	});
+
+	test("omits --resume when resumeSessionId is null", () => {
+		const opts: DirectSpawnOpts = {
+			cwd: "/worktree",
+			env: {},
+			instructionPath: ".claude/CLAUDE.md",
+			resumeSessionId: null,
+		};
+		expect(runtime.buildDirectSpawn(opts)).not.toContain("--resume");
+	});
 });
 
 // ─── parseEvents unit tests ──────────────────────────────────────────────────

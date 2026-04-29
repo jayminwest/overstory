@@ -499,6 +499,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 		// Track active headless agents to clean up stale tailers after the loop.
 		const activeHeadlessAgents = new Set<string>();
 		const eventsDbPath = join(overstoryDir, "events.db");
+		const sessionsDbPath = join(overstoryDir, "sessions.db");
 
 		for (const session of sessions) {
 			// Skip completed sessions — they are terminal and don't need monitoring
@@ -524,6 +525,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 							agentName: session.agentName,
 							runId,
 							eventsDbPath,
+							sessionsDbPath,
 						});
 						tailerRegistry.set(session.agentName, handle);
 					}
