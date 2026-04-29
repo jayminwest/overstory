@@ -758,6 +758,213 @@ describe("registerRestApi", () => {
 		});
 	});
 
+	// ─── POST /api/mail ───────────────────────────────────────────────────────
+
+	describe("POST /api/mail", () => {
+		async function postJson(
+			server: ReturnType<typeof Bun.serve>,
+			path: string,
+			body: unknown,
+		): Promise<{ status: number; body: Record<string, unknown> }> {
+			const res = await fetch(`http://127.0.0.1:${server.port}${path}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			const json = (await res.json()) as Record<string, unknown>;
+			return { status: res.status, body: json };
+		}
+
+		test("happy path returns 200 + messageId", async () => {
+			ctx.sessionStore.upsert(makeSession({ agentName: "alice" }));
+
+			const server = await startServer();
+			const { status, body } = await postJson(server, "/api/mail", {
+				to: "alice",
+				subject: "Hello",
+				body: "world",
+			});
+
+			expect(status).toBe(200);
+			expect(body.success).toBe(true);
+			const data = body.data as { messageId?: string };
+			expect(typeof data.messageId).toBe("string");
+		});
+
+		test("invalid type returns 400", async () => {
+			ctx.sessionStore.upsert(makeSession({ agentName: "bob" }));
+
+			const server = await startServer();
+			const { status, body } = await postJson(server, "/api/mail", {
+				to: "bob",
+				subject: "s",
+				body: "b",
+				type: "not-a-type",
+			});
+
+			expect(status).toBe(400);
+			expect(body.success).toBe(false);
+		});
+
+		test("invalid priority returns 400", async () => {
+			ctx.sessionStore.upsert(makeSession({ agentName: "carol" }));
+
+			const server = await startServer();
+			const { status } = await postJson(server, "/api/mail", {
+				to: "carol",
+				subject: "s",
+				body: "b",
+				priority: "huge",
+			});
+
+			expect(status).toBe(400);
+		});
+
+		test("unknown recipient returns 400", async () => {
+			const server = await startServer();
+			const { status } = await postJson(server, "/api/mail", {
+				to: "ghost",
+				subject: "s",
+				body: "b",
+			});
+			expect(status).toBe(400);
+		});
+
+		test("invalid JSON body returns 400", async () => {
+			const server = await startServer();
+			const res = await fetch(`http://127.0.0.1:${server.port}/api/mail`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: "{not json",
+			});
+			expect(res.status).toBe(400);
+		});
+
+		test("@builders fans out to two active builders", async () => {
+			ctx.sessionStore.upsert(
+				makeSession({ agentName: "build-1", startedAt: "2024-01-01T00:00:00.000Z" }),
+			);
+			ctx.sessionStore.upsert(
+				makeSession({ agentName: "build-2", startedAt: "2024-01-02T00:00:00.000Z" }),
+			);
+
+			const server = await startServer();
+			const { status, body } = await postJson(server, "/api/mail", {
+				to: "@builders",
+				subject: "s",
+				body: "b",
+			});
+
+			expect(status).toBe(200);
+			const data = body.data as { messageIds?: string[] };
+			expect(Array.isArray(data.messageIds)).toBe(true);
+			expect(data.messageIds?.length).toBe(2);
+		});
+	});
+
+	// ─── POST /api/mail/:id/reply ─────────────────────────────────────────────
+
+	describe("POST /api/mail/:id/reply", () => {
+		test("returns 200 + messageId", async () => {
+			const original = ctx.mailStore.insert({
+				id: "msg-reply-orig",
+				from: "alice",
+				to: "operator",
+				subject: "Hi",
+				body: "first",
+				type: "status" as const,
+				priority: "normal" as const,
+				threadId: null,
+			});
+
+			const server = await startServer();
+			const res = await fetch(`http://127.0.0.1:${server.port}/api/mail/${original.id}/reply`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ body: "thanks" }),
+			});
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { data: { messageId: string } };
+			expect(typeof body.data.messageId).toBe("string");
+
+			const reply = ctx.mailStore.getById(body.data.messageId);
+			expect(reply?.to).toBe("alice");
+			expect(reply?.from).toBe("operator");
+			expect(reply?.threadId).toBe(original.id);
+		});
+
+		test("404 for missing id", async () => {
+			const server = await startServer();
+			const res = await fetch(`http://127.0.0.1:${server.port}/api/mail/no-such/reply`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ body: "x" }),
+			});
+			expect(res.status).toBe(404);
+		});
+
+		test("400 when body is missing", async () => {
+			const original = ctx.mailStore.insert({
+				id: "msg-reply-empty",
+				from: "alice",
+				to: "operator",
+				subject: "Hi",
+				body: "first",
+				type: "status" as const,
+				priority: "normal" as const,
+				threadId: null,
+			});
+
+			const server = await startServer();
+			const res = await fetch(`http://127.0.0.1:${server.port}/api/mail/${original.id}/reply`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({}),
+			});
+			expect(res.status).toBe(400);
+		});
+	});
+
+	// ─── DELETE /api/mail/:id ─────────────────────────────────────────────────
+
+	describe("DELETE /api/mail/:id", () => {
+		test("deletes the message and returns 200; second call returns 404", async () => {
+			const msg = ctx.mailStore.insert({
+				id: "msg-to-delete",
+				from: "a",
+				to: "b",
+				subject: "s",
+				body: "b",
+				type: "status" as const,
+				priority: "normal" as const,
+				threadId: null,
+			});
+
+			const server = await startServer();
+			const res1 = await fetch(`http://127.0.0.1:${server.port}/api/mail/${msg.id}`, {
+				method: "DELETE",
+			});
+			expect(res1.status).toBe(200);
+			const body1 = (await res1.json()) as { data: { id: string; deleted: boolean } };
+			expect(body1.data.deleted).toBe(true);
+			expect(body1.data.id).toBe(msg.id);
+			expect(ctx.mailStore.getById(msg.id)).toBeNull();
+
+			const res2 = await fetch(`http://127.0.0.1:${server.port}/api/mail/${msg.id}`, {
+				method: "DELETE",
+			});
+			expect(res2.status).toBe(404);
+		});
+
+		test("404 when id never existed", async () => {
+			const server = await startServer();
+			const res = await fetch(`http://127.0.0.1:${server.port}/api/mail/never-existed`, {
+				method: "DELETE",
+			});
+			expect(res.status).toBe(404);
+		});
+	});
+
 	// ─── Unknown /api/* routes ────────────────────────────────────────────────
 
 	describe("unknown /api/* routes", () => {

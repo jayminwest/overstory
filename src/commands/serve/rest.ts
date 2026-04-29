@@ -18,6 +18,7 @@ import type { SessionStore } from "../../sessions/store.ts";
 import { createRunStore, createSessionStore } from "../../sessions/store.ts";
 import type { EventStore, RunStore } from "../../types.ts";
 import { registerApiHandler } from "../serve.ts";
+import { deleteMail, replyMail, sendMail } from "./mail-actions.ts";
 
 // ─── Cursor helpers ───────────────────────────────────────────────────────────
 
@@ -338,6 +339,64 @@ async function handleMarkMailRead(
 	return apiJson({ id, read: true });
 }
 
+async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
+	let parsed: unknown;
+	try {
+		parsed = await req.json();
+	} catch (err) {
+		throw new ValidationError(
+			`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`,
+			{
+				field: "body",
+			},
+		);
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new ValidationError("Request body must be a JSON object", { field: "body" });
+	}
+	return parsed as Record<string, unknown>;
+}
+
+async function handleSendMail(
+	req: Request,
+	_match: RegExpMatchArray,
+	_params: URLSearchParams,
+	stores: Stores,
+): Promise<Response> {
+	const body = await parseJsonBody(req);
+	const result = sendMail({ mail: stores.mail, session: stores.session }, body);
+	return apiJson(result);
+}
+
+async function handleReplyMail(
+	req: Request,
+	match: RegExpMatchArray,
+	_params: URLSearchParams,
+	stores: Stores,
+): Promise<Response> {
+	const id = match[1];
+	if (id === undefined) return apiError("Message ID required", 400);
+	if (stores.mail.getById(id) === null) {
+		return apiError(`Message not found: ${id}`, 404);
+	}
+	const body = await parseJsonBody(req);
+	const result = replyMail({ mail: stores.mail, session: stores.session }, id, body);
+	return apiJson(result);
+}
+
+async function handleDeleteMail(
+	_req: Request,
+	match: RegExpMatchArray,
+	_params: URLSearchParams,
+	stores: Stores,
+): Promise<Response> {
+	const id = match[1];
+	if (id === undefined) return apiError("Message ID required", 400);
+	const result = deleteMail({ mail: stores.mail, session: stores.session }, id);
+	if (result === null) return apiError(`Message not found: ${id}`, 404);
+	return apiJson(result);
+}
+
 // ─── Route table ─────────────────────────────────────────────────────────────
 
 const ROUTES: Route[] = [
@@ -347,8 +406,11 @@ const ROUTES: Route[] = [
 	{ method: "GET", pattern: /^\/api\/agents\/([^/]+)$/, handler: handleGetAgent },
 	{ method: "GET", pattern: /^\/api\/events$/, handler: handleGetEvents },
 	{ method: "GET", pattern: /^\/api\/mail$/, handler: handleGetMail },
+	{ method: "POST", pattern: /^\/api\/mail$/, handler: handleSendMail },
 	{ method: "GET", pattern: /^\/api\/mail\/([^/]+)$/, handler: handleGetMailMessage },
+	{ method: "DELETE", pattern: /^\/api\/mail\/([^/]+)$/, handler: handleDeleteMail },
 	{ method: "POST", pattern: /^\/api\/mail\/([^/]+)\/read$/, handler: handleMarkMailRead },
+	{ method: "POST", pattern: /^\/api\/mail\/([^/]+)\/reply$/, handler: handleReplyMail },
 ];
 
 // ─── Public registration ──────────────────────────────────────────────────────
@@ -387,25 +449,37 @@ export function registerRestApi(deps?: RestApiDeps): void {
 		const url = new URL(req.url);
 		const path = url.pathname;
 
+		// Two passes: first try to match path+method exactly. If none matches
+		// but the path matched some route, return 405 (method not allowed).
+		let matchedRoute: { route: Route; match: RegExpMatchArray } | null = null;
+		let pathMatched = false;
 		for (const route of ROUTES) {
 			const match = path.match(route.pattern);
-			if (match !== null) {
-				if (req.method !== route.method) {
-					return apiError("Method not allowed", 405);
-				}
-				// Return Promise<Response> — never null — so the type is satisfied
-				return (async (): Promise<Response> => {
-					try {
-						return await route.handler(req, match, url.searchParams, getStores());
-					} catch (err) {
-						if (err instanceof OverstoryError) {
-							return apiError(err.message, statusFromError(err));
-						}
-						process.stderr.write(`REST handler error: ${String(err)}\n`);
-						return apiError("Internal server error", 500);
-					}
-				})();
+			if (match === null) continue;
+			pathMatched = true;
+			if (req.method === route.method) {
+				matchedRoute = { route, match };
+				break;
 			}
+		}
+
+		if (matchedRoute !== null) {
+			const { route, match } = matchedRoute;
+			return (async (): Promise<Response> => {
+				try {
+					return await route.handler(req, match, url.searchParams, getStores());
+				} catch (err) {
+					if (err instanceof OverstoryError) {
+						return apiError(err.message, statusFromError(err));
+					}
+					process.stderr.write(`REST handler error: ${String(err)}\n`);
+					return apiError("Internal server error", 500);
+				}
+			})();
+		}
+
+		if (pathMatched) {
+			return apiError("Method not allowed", 405);
 		}
 
 		return null;
