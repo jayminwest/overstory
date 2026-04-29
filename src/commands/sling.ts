@@ -986,19 +986,22 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				// ov sling exits after spawning, closing the pipe's read end.
 				// If stdout is a pipe, the agent dies on the next write (SIGPIPE).
 				// File writes have no such limit, and the agent survives the CLI exit.
-				//
-				// Note: RPC connection wiring is intentionally omitted here. The RPC pipe
-				// is only useful when the spawner stays alive to consume it. ov sling is
-				// a short-lived CLI — any connection created here dies with the process.
 				const logTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
 				const agentLogDir = join(overstoryDir, "logs", name, logTimestamp);
 				mkdirSync(agentLogDir, { recursive: true });
 
+				// Pass agentName + overstoryDir so spawnHeadlessAgent routes the
+				// child's stdin through a per-agent FIFO. This is what makes the
+				// agent reachable for mail injection and nudge AFTER ov sling exits
+				// — the FIFO file persists; out-of-process writers open it on
+				// demand. See src/agents/headless-stdin.ts and overstory-41eb.
 				const headlessProc = await spawnHeadlessAgent(argv, {
 					cwd: worktreePath,
 					env: { ...(process.env as Record<string, string>), ...directEnv },
 					stdoutFile: join(agentLogDir, "stdout.log"),
 					stderrFile: join(agentLogDir, "stderr.log"),
+					agentName: name,
+					overstoryDir,
 				});
 
 				// 12b. Write initial stdin prompt (SessionStart hook equivalent for headless agents).

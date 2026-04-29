@@ -11,15 +11,18 @@
  * support by calling the exported register*() helpers — no changes to this file needed.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, watch as fsWatch, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
-import { startMailInjectionLoop } from "../agents/headless-mail-injector.ts";
+import {
+	type InjectionWriteResult,
+	startMailInjectionLoop,
+} from "../agents/headless-mail-injector.ts";
+import { agentFifoPath, writeToAgentFifo } from "../agents/headless-stdin.ts";
 import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { apiJson, jsonError, jsonOutput } from "../json.ts";
 import { printError, printSuccess } from "../logging/color.ts";
-import { addHeadlessConnectionListener } from "../runtimes/connections.ts";
 import { type RestApiDeps, registerRestApi } from "./serve/rest.ts";
 import { serveStatic } from "./serve/static.ts";
 import { installBroadcaster } from "./serve/ws.ts";
@@ -202,37 +205,98 @@ export async function createServeServer(
 }
 
 /**
- * Install a per-agent mail injection loop driven by the headless connection registry.
+ * Install per-agent mail injection loops, driven by filesystem discovery of
+ * stdin FIFOs.
  *
- * Replaces the UserPromptSubmit hook for headless Claude agents: every registered
- * HeadlessClaudeConnection gets a polling loop that writes new mail as stream-json
- * user turns to the agent's stdin. Loops are torn down when the agent is removed
- * or when the returned stop function is called (server shutdown).
+ * Replaces the UserPromptSubmit hook for headless Claude agents: each agent
+ * spawned by `ov sling` mkfifos a `{overstoryDir}/agents/{name}/stdin.fifo`,
+ * and `ov serve` watches that directory. For every FIFO it sees, the server
+ * starts a polling loop that opens the FIFO, writes any unread mail as a
+ * stream-json user turn, then closes. Loops are torn down when the FIFO file
+ * disappears (agent terminated + cleanup ran), when the writer reports
+ * "no-reader" (agent died but cleanup hasn't run), or on graceful shutdown.
  *
- * Subscribing via addHeadlessConnectionListener() also catches up on agents that
- * were registered before runServe() started — they receive an immediate onRegister.
+ * The cross-process design — file-on-disk vs in-memory registry — is essential
+ * because `ov sling` and `ov serve` are separate processes. The earlier
+ * connection-registry design only worked when serve and sling shared a process,
+ * which is never the case in production. See overstory-41eb.
  */
-export function installMailInjectors(mailDbPath: string): () => void {
+export function installMailInjectors(mailDbPath: string, overstoryDir: string): () => void {
 	const activeLoops = new Map<string, () => void>();
+	const agentsDir = join(overstoryDir, "agents");
 
-	const removeListener = addHeadlessConnectionListener({
-		onRegister(agentName, stdin) {
-			activeLoops.get(agentName)?.();
-			const stop = startMailInjectionLoop(agentName, stdin, mailDbPath);
-			activeLoops.set(agentName, stop);
-		},
-		onRemove(agentName) {
-			const stop = activeLoops.get(agentName);
-			if (stop) {
-				stop();
-				activeLoops.delete(agentName);
+	const writerFor =
+		(agentName: string) =>
+		(data: string | Uint8Array): InjectionWriteResult =>
+			writeToAgentFifo(overstoryDir, agentName, data);
+
+	const startLoopFor = (agentName: string): void => {
+		if (activeLoops.has(agentName)) return;
+		const stop = startMailInjectionLoop(agentName, writerFor(agentName), mailDbPath);
+		// Wrap stop so we always remove from the map on tear-down. The mail
+		// injector auto-stops on no-reader; this layer covers the explicit
+		// shutdown / FIFO-removed paths.
+		activeLoops.set(agentName, () => {
+			stop();
+			activeLoops.delete(agentName);
+		});
+	};
+
+	const stopLoopFor = (agentName: string): void => {
+		activeLoops.get(agentName)?.();
+	};
+
+	// Discover existing FIFOs at startup. When ov serve restarts mid-swarm, this
+	// resumes injection for any agents that were already spawned.
+	const scan = (): void => {
+		let entries: string[];
+		try {
+			entries = readdirSync(agentsDir);
+		} catch (err: unknown) {
+			const e = err as NodeJS.ErrnoException;
+			if (e.code === "ENOENT") return; // no agents directory yet
+			throw err;
+		}
+		for (const name of entries) {
+			if (existsSync(agentFifoPath(overstoryDir, name))) {
+				startLoopFor(name);
 			}
-		},
-	});
+		}
+	};
+	scan();
+
+	// Watch the agents directory for new spawns and cleanups. fs.watch on a
+	// directory fires for child create/delete; we re-scan on every event because
+	// the rename signal alone doesn't tell us which path changed.
+	let watcher: ReturnType<typeof fsWatch> | null = null;
+	try {
+		watcher = fsWatch(agentsDir, { persistent: false }, () => {
+			scan();
+			// Reap loops whose FIFOs were removed (agent terminated + cleanup ran).
+			for (const name of [...activeLoops.keys()]) {
+				if (!existsSync(agentFifoPath(overstoryDir, name))) {
+					stopLoopFor(name);
+				}
+			}
+		});
+	} catch {
+		// Directory doesn't exist yet — fall back to a periodic rescan. The
+		// rescan also doubles as a safety net if fs.watch misses an event.
+	}
+
+	const rescanTimer = setInterval(() => {
+		scan();
+		for (const name of [...activeLoops.keys()]) {
+			if (!existsSync(agentFifoPath(overstoryDir, name))) {
+				stopLoopFor(name);
+			}
+		}
+	}, 5000);
 
 	return function stopMailInjectors(): void {
-		removeListener();
-		for (const stop of activeLoops.values()) stop();
+		watcher?.close();
+		clearInterval(rescanTimer);
+		for (const stop of [...activeLoops.values()]) stop();
 		activeLoops.clear();
 	};
 }
@@ -245,17 +309,19 @@ export async function runServe(opts: ServeOptions, deps: ServeDeps = {}): Promis
 	const _cfg = deps._loadConfig ?? loadConfig;
 	const config = await _cfg(process.cwd());
 
-	const mailDbPath = join(config.project.root, ".overstory", "mail.db");
+	const overstoryDir = join(config.project.root, ".overstory");
+	const mailDbPath = join(overstoryDir, "mail.db");
 
 	// Install broadcaster before Bun.serve so handler is ready for the first request
 	const stopBroadcaster = installBroadcaster({
-		eventsDbPath: join(config.project.root, ".overstory", "events.db"),
+		eventsDbPath: join(overstoryDir, "events.db"),
 		mailDbPath,
 	});
 
 	// Install per-agent mail injection loops (UserPromptSubmit hook equivalent
-	// for headless Claude agents). Driven by the headless connection registry.
-	const stopMailInjectors = installMailInjectors(mailDbPath);
+	// for headless Claude agents). Discovers agents by watching the per-agent
+	// stdin FIFOs created by `ov sling`.
+	const stopMailInjectors = installMailInjectors(mailDbPath, overstoryDir);
 
 	const server = await createServeServer(opts, deps);
 

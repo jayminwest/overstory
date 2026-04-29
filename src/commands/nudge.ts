@@ -9,8 +9,11 @@
  * rapid-fire nudges to the same agent.
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
+import { encodeUserTurn } from "../agents/headless-prompt.ts";
+import { agentFifoPath, writeToAgentFifo } from "../agents/headless-stdin.ts";
 import { AgentError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
@@ -232,10 +235,34 @@ export async function nudgeAgent(
 		}
 	}
 
-	// Headless path: agent has a registered RuntimeConnection with nudge support
-	const conn = getConnection(agentName);
-	if (conn !== undefined && hasNudge(conn)) {
-		const nudgeResult = await conn.nudge(message);
+	const overstoryDir = join(projectRoot, ".overstory");
+
+	// Headless FIFO path: when a per-agent stdin FIFO exists on disk, route the
+	// nudge through it. This is the cross-process delivery mechanism — sling
+	// creates the FIFO at spawn, and any process (including this one) can open
+	// and write to it as long as the agent is alive (overstory-41eb).
+	const fifoExists = existsSync(agentFifoPath(overstoryDir, agentName));
+	const inProcConn = fifoExists ? undefined : getConnection(agentName);
+	if (fifoExists) {
+		const writeResult = writeToAgentFifo(overstoryDir, agentName, encodeUserTurn(message));
+		if (writeResult === "delivered") {
+			await recordNudge(statePath, agentName);
+			// queued: Claude Code does not reliably poll stdin while an API
+			// stream is in flight, so the message sits in the FIFO buffer until
+			// the current turn completes.
+			result = { delivered: true, queued: true };
+		} else {
+			result = {
+				delivered: false,
+				reason: `Headless agent "${agentName}" is not reading (${writeResult})`,
+			};
+		}
+	} else if (inProcConn !== undefined && hasNudge(inProcConn)) {
+		// In-process registry path: kept for runtimes that register via
+		// setConnection() (e.g., Sapling) and for tests that drive the registry
+		// directly. For headless Claude in production, the FIFO branch above is
+		// the active path.
+		const nudgeResult = await inProcConn.nudge(message);
 		await recordNudge(statePath, agentName);
 		result = { delivered: true, queued: nudgeResult.status === "Queued" };
 	} else {
@@ -270,7 +297,6 @@ export async function nudgeAgent(
 
 	// Record event to EventStore (fire-and-forget)
 	try {
-		const overstoryDir = join(projectRoot, ".overstory");
 		const eventsDbPath = join(overstoryDir, "events.db");
 		const eventStore = createEventStore(eventsDbPath);
 		try {

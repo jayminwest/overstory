@@ -20,9 +20,9 @@ import type { EventStore, RunStore } from "../../types.ts";
 import { registerApiHandler } from "../serve.ts";
 import {
 	askCoordinatorAction,
-	checkCoordinatorComplete,
 	ConflictError,
 	type CoordinatorActionDeps,
+	checkCoordinatorComplete,
 	getCoordinatorState,
 	sendToCoordinator,
 	startCoordinatorHeadless,

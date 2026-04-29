@@ -13,6 +13,7 @@
  */
 
 import { join } from "node:path";
+import { removeAgentFifo } from "../agents/headless-stdin.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
@@ -141,6 +142,13 @@ export async function stopCommand(
 			// Mark session as completed
 			store.updateState(agentName, "completed");
 			store.updateLastActivity(agentName);
+
+			// Reap the per-agent stdin FIFO. Headless agents spawned via ov sling
+			// own a FIFO under .overstory/agents/<name>/stdin.fifo for cross-process
+			// signal delivery; once we kill the agent it is no longer reading and
+			// the file should be removed so ov serve's mail injector can drop the
+			// loop. Idempotent and safe for tmux agents (no-op if FIFO absent).
+			removeAgentFifo(overstoryDir, agentName);
 
 			// Auto-nudge coordinator when a lead truly completes so it wakes up
 			// to process merge_ready / worker_done messages without waiting for

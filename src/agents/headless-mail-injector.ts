@@ -7,43 +7,60 @@
  * stdin instead.
  *
  * This module provides startMailInjectionLoop(), which polls the mail store and
- * writes unread messages as stream-json user turns to the agent's stdin. It is
- * intended to be called by ov serve (or a coordinator-owned process registry)
- * that holds the stdin handle for the lifetime of the agent session.
+ * delivers unread messages as stream-json user turns via a caller-provided write
+ * function. The caller (typically `ov serve`) plugs in a write function backed
+ * by the agent's per-agent stdin FIFO (see src/agents/headless-stdin.ts).
  */
 
-import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
 import { encodeUserTurn } from "./headless-prompt.ts";
+
+/**
+ * Result returned by the caller-provided write function.
+ *
+ * - "delivered": payload was accepted; messages will be marked read on next tick
+ * - "no-reader": agent is gone (e.g., FIFO has no readers). The loop should
+ *   stop polling and let the caller clean up.
+ */
+export type InjectionWriteResult = "delivered" | "no-reader" | "broken-pipe";
+
+/** Function that delivers a stream-json user turn to a single headless agent. */
+export type InjectionWriter = (data: string | Uint8Array) => InjectionWriteResult;
 
 /**
  * Start a server-side mail injection loop for a headless agent.
  *
  * Polls the mail store every intervalMs milliseconds. When unread messages are
- * found, formats them as a single user turn and writes to the agent's stdin.
- * Multiple pending messages are batched into one turn to avoid the agent
- * responding to each individually before it can act.
+ * found, formats them as a single user turn and calls the writer. Multiple
+ * pending messages are batched into one turn to avoid the agent responding to
+ * each individually before it can act.
  *
- * The caller (ov serve or coordinator) is responsible for stopping the loop
- * when the agent session ends by calling the returned cleanup function.
+ * The writer's return value drives the loop's lifecycle:
+ *   - "delivered": continue polling
+ *   - "no-reader" or "broken-pipe": stop the loop. The caller is responsible
+ *     for any FIFO/state cleanup (the loop just stops invoking the writer).
+ *
+ * The caller may also stop the loop explicitly by calling the returned cleanup
+ * function — used for graceful server shutdown.
  *
  * @param agentName - Overstory agent name (used as mail inbox address)
- * @param stdin - Writable sink for the headless agent process stdin
+ * @param writer - Function that writes a single stream-json envelope to the agent
  * @param mailStorePath - Absolute path to the project's mail.db
  * @param intervalMs - Poll interval in milliseconds (default: 2000)
  * @returns Cleanup function that stops the injection loop
  */
 export function startMailInjectionLoop(
 	agentName: string,
-	stdin: { write(data: string | Uint8Array): number | Promise<number> },
+	writer: InjectionWriter,
 	mailStorePath: string,
 	intervalMs = 2000,
 ): () => void {
+	let stopped = false;
 	const timer = setInterval(() => {
+		if (stopped) return;
 		const store = createMailStore(mailStorePath);
 		try {
-			const mailClient = createMailClient(store);
-			const messages = mailClient.check(agentName);
+			const messages = store.getUnread(agentName);
 			if (messages.length === 0) return;
 
 			const text = messages
@@ -53,11 +70,26 @@ export function startMailInjectionLoop(
 				)
 				.join("\n\n---\n\n");
 
-			void stdin.write(encodeUserTurn(text));
+			const result = writer(encodeUserTurn(text));
+			if (result === "no-reader" || result === "broken-pipe") {
+				// Agent gone — stop polling. Leave messages unread so a revived
+				// agent (or human triage) can still see them.
+				stopped = true;
+				clearInterval(timer);
+				return;
+			}
+			// Mark read only on successful delivery to avoid losing messages
+			// when the writer reports a transient failure.
+			for (const msg of messages) {
+				store.markRead(msg.id);
+			}
 		} finally {
 			store.close();
 		}
 	}, intervalMs);
 
-	return () => clearInterval(timer);
+	return () => {
+		stopped = true;
+		clearInterval(timer);
+	};
 }
