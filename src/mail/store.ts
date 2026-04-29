@@ -26,6 +26,8 @@ export interface MailStore {
 	getById(id: string): MailMessage | null;
 	getByThread(threadId: string): MailMessage[];
 	markRead(id: string): void;
+	/** Delete a single message by id. Returns true if a row was deleted. */
+	deleteById(id: string): boolean;
 	/** Delete messages matching the given criteria. Returns the number of messages deleted. */
 	purge(options: { all?: boolean; olderThanMs?: number; agent?: string }): number;
 	close(): void;
@@ -238,6 +240,10 @@ export function createMailStore(dbPath: string): MailStore {
 		UPDATE messages SET read = 1 WHERE id = $id
 	`);
 
+	const deleteByIdStmt = db.prepare<void, { $id: string }>(`
+		DELETE FROM messages WHERE id = $id
+	`);
+
 	// Dynamic filter queries are built at call time since the WHERE clause varies
 	function buildFilterQuery(filters?: {
 		from?: string;
@@ -344,6 +350,18 @@ export function createMailStore(dbPath: string): MailStore {
 
 		markRead(id: string): void {
 			markReadStmt.run({ $id: id });
+		},
+
+		deleteById(id: string): boolean {
+			try {
+				const result = deleteByIdStmt.run({ $id: id });
+				return result.changes > 0;
+			} catch (err) {
+				throw new MailError(`Failed to delete message: ${id}`, {
+					messageId: id,
+					cause: err instanceof Error ? err : undefined,
+				});
+			}
 		},
 
 		purge(options: { all?: boolean; olderThanMs?: number; agent?: string }): number {

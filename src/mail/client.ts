@@ -55,6 +55,9 @@ export interface MailClient {
 	/** Reply to a message. Returns the new message ID. */
 	reply(messageId: string, body: string, from: string): string;
 
+	/** Delete a single message by id. Returns true if a row was deleted. */
+	deleteById(id: string): boolean;
+
 	/** Close the underlying store. */
 	close(): void;
 }
@@ -190,6 +193,10 @@ export function createMailClient(store: MailStore): MailClient {
 			}
 			store.markRead(id);
 			return { alreadyRead: false };
+		},
+
+		deleteById(id): boolean {
+			return store.deleteById(id);
 		},
 
 		reply(messageId, body, from): string {
