@@ -5,6 +5,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { Layout } from "@/components/Layout";
 import { AgentDetail } from "@/routes/AgentDetail";
+import { ConsolePage } from "@/routes/coordinator/ConsolePage";
 import { Home } from "@/routes/Home";
 import { Mail } from "@/routes/Mail";
 
@@ -29,6 +30,7 @@ createRoot(rootEl).render(
 					<Route path="/" element={<Layout />}>
 						<Route index element={<Home />} />
 						<Route path="/agents/:name" element={<AgentDetail />} />
+						<Route path="coordinator" element={<ConsolePage />} />
 						<Route path="mail" element={<Mail />} />
 						<Route
 							path="*"
