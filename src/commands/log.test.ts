@@ -1352,6 +1352,10 @@ try {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
+			// Pin project root to tempDir. Without this, a subprocess started from
+			// inside an `ov sling`-spawned worktree inherits OVERSTORY_PROJECT_ROOT
+			// pointing at the parent project, and writes events to prod's events.db.
+			env: { ...process.env, OVERSTORY_PROJECT_ROOT: tempDir },
 		});
 
 		// Write the JSON payload to stdin and close
@@ -1541,6 +1545,7 @@ try {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
+			env: { ...process.env, OVERSTORY_PROJECT_ROOT: tempDir },
 		});
 
 		// Write empty string and close immediately
