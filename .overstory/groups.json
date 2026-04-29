@@ -1030,5 +1030,17 @@
 		"status": "completed",
 		"createdAt": "2026-04-29T01:07:41.104Z",
 		"completedAt": "2026-04-29T04:30:51.266Z"
+	},
+	{
+		"id": "group-585c8afd",
+		"name": "phase3.5-ui-console",
+		"memberIssueIds": [
+			"overstory-82b4",
+			"overstory-2740",
+			"overstory-d108"
+		],
+		"status": "active",
+		"createdAt": "2026-04-29T15:32:27.543Z",
+		"completedAt": null
 	}
 ]
