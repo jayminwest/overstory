@@ -495,6 +495,105 @@ describe("renderAgentPanel", () => {
 		expect(out).toContain("x");
 		expect(out).toContain("dead-headless");
 	});
+
+	test("renders mixed tmux + headless agents in same frame with correct liveness", () => {
+		const data = {
+			...makeDashboardData({}),
+			status: {
+				currentRunId: null,
+				agents: [
+					{
+						id: "sess-tmux-1",
+						agentName: "pane-agent",
+						capability: "builder",
+						worktreePath: "/tmp/wt/pane-agent",
+						branchName: "overstory/pane-agent/task-t1",
+						taskId: "task-t1",
+						tmuxSession: "overstory-pane-agent",
+						state: "working" as const,
+						pid: 99999,
+						parentAgent: null,
+						depth: 0,
+						runId: null,
+						startedAt: new Date(Date.now() - 10_000).toISOString(),
+						lastActivity: new Date().toISOString(),
+						escalationLevel: 0,
+						stalledSince: null,
+						transcriptPath: null,
+					},
+					{
+						id: "sess-headless-1",
+						agentName: "live-headless",
+						capability: "builder",
+						worktreePath: "/tmp/wt/live-headless",
+						branchName: "overstory/live-headless/task-h1",
+						taskId: "task-h1",
+						tmuxSession: "", // headless
+						state: "working" as const,
+						pid: process.pid, // own PID — guaranteed alive
+						parentAgent: null,
+						depth: 0,
+						runId: null,
+						startedAt: new Date(Date.now() - 10_000).toISOString(),
+						lastActivity: new Date().toISOString(),
+						escalationLevel: 0,
+						stalledSince: null,
+						transcriptPath: null,
+					},
+				],
+				worktrees: [],
+				tmuxSessions: [{ name: "overstory-pane-agent", pid: 99998 }],
+				unreadMailCount: 0,
+				mergeQueueCount: 0,
+				recentMetricsCount: 0,
+			},
+		};
+		const out = renderAgentPanel(data, 100, 12, 3);
+		expect(out).toContain("pane-agent");
+		expect(out).toContain("live-headless");
+		const aliveMarkers = (out.match(/>/g) ?? []).length;
+		expect(aliveMarkers).toBeGreaterThanOrEqual(2);
+		expect(out).not.toContain("x");
+	});
+
+	test("headless agent renders dead marker when tmux session list is non-empty", () => {
+		const deadPid = 2_147_483_647;
+		const data = {
+			...makeDashboardData({}),
+			status: {
+				currentRunId: null,
+				agents: [
+					{
+						id: "sess-dead-headless-1",
+						agentName: "gone-headless",
+						capability: "builder",
+						worktreePath: "/tmp/wt/gone-headless",
+						branchName: "overstory/gone-headless/task-g1",
+						taskId: "task-g1",
+						tmuxSession: "", // headless
+						state: "working" as const,
+						pid: deadPid,
+						parentAgent: null,
+						depth: 0,
+						runId: null,
+						startedAt: new Date(Date.now() - 10_000).toISOString(),
+						lastActivity: new Date().toISOString(),
+						escalationLevel: 0,
+						stalledSince: null,
+						transcriptPath: null,
+					},
+				],
+				worktrees: [],
+				tmuxSessions: [{ name: "overstory-other-tmux", pid: 11111 }],
+				unreadMailCount: 0,
+				mergeQueueCount: 0,
+				recentMetricsCount: 0,
+			},
+		};
+		const out = renderAgentPanel(data, 100, 12, 3);
+		expect(out).toContain("x");
+		expect(out).toContain("gone-headless");
+	});
 });
 
 describe("openDashboardStores", () => {
