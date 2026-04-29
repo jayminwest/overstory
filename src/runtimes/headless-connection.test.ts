@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { HeadlessClaudeConnection } from "./headless-connection.ts";
+import { HeadlessClaudeConnection, hasNudge } from "./headless-connection.ts";
+import type { RuntimeConnection } from "./types.ts";
 
 /**
  * Tests use real subprocesses (sleep, cat, echo) — no mocking.
@@ -168,5 +169,96 @@ describe("HeadlessClaudeConnection", () => {
 			const state = await conn.getState();
 			expect(state.status).toBe("working");
 		});
+	});
+
+	describe("nudge", () => {
+		test("nudge writes a stream-json user-message envelope to stdin", async () => {
+			const proc = Bun.spawn(["cat"], {
+				stdin: "pipe",
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			cleanup.push(() => proc.kill());
+
+			const conn = new HeadlessClaudeConnection(proc.pid, proc.stdin);
+			await conn.nudge("hello nudge");
+			proc.stdin.end();
+
+			const text = await new Response(proc.stdout).text();
+			const parsed = JSON.parse(text.trim()) as Record<string, unknown>;
+			expect(parsed.type).toBe("user");
+			const msg = parsed.message as Record<string, unknown>;
+			expect(msg.role).toBe("user");
+			const content = msg.content as Array<Record<string, unknown>>;
+			expect(content[0]?.type).toBe("text");
+			expect(content[0]?.text).toBe("hello nudge");
+		});
+
+		test("nudge returns Queued status (headless stdin-buffer caveat)", async () => {
+			const proc = Bun.spawn(["cat"], {
+				stdin: "pipe",
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			cleanup.push(() => proc.kill());
+
+			const conn = new HeadlessClaudeConnection(proc.pid, proc.stdin);
+			const result = await conn.nudge("any message");
+			proc.stdin.end();
+			expect(result.status).toBe("Queued");
+		});
+
+		test("nudge envelope ends with a newline (NDJSON line terminator)", async () => {
+			const proc = Bun.spawn(["cat"], {
+				stdin: "pipe",
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			cleanup.push(() => proc.kill());
+
+			const conn = new HeadlessClaudeConnection(proc.pid, proc.stdin);
+			await conn.nudge("newline check");
+			proc.stdin.end();
+
+			const raw = await new Response(proc.stdout).text();
+			expect(raw.endsWith("\n")).toBe(true);
+		});
+	});
+});
+
+describe("hasNudge", () => {
+	test("returns true for HeadlessClaudeConnection (has nudge method)", () => {
+		const proc = Bun.spawn(["sleep", "1"], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		proc.kill();
+
+		const conn = new HeadlessClaudeConnection(proc.pid, proc.stdin);
+		expect(hasNudge(conn)).toBe(true);
+	});
+
+	test("returns false for a plain RuntimeConnection without nudge", () => {
+		const plain: RuntimeConnection = {
+			sendPrompt: async () => {},
+			followUp: async () => {},
+			abort: async () => {},
+			getState: async () => ({ status: "idle" as const }),
+			close: () => {},
+		};
+		expect(hasNudge(plain)).toBe(false);
+	});
+
+	test("returns false for an object with nudge as a non-function", () => {
+		const weird = {
+			sendPrompt: async () => {},
+			followUp: async () => {},
+			abort: async () => {},
+			getState: async () => ({ status: "idle" as const }),
+			close: () => {},
+			nudge: "not a function",
+		} as unknown as RuntimeConnection;
+		expect(hasNudge(weird)).toBe(false);
 	});
 });

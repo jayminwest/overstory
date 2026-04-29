@@ -4,6 +4,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEventStore } from "../events/store.ts";
+import { removeConnection, setConnection } from "../runtimes/connections.ts";
+import type { NudgeableConnection, NudgeResult } from "../runtimes/headless-connection.ts";
 import { createSessionStore } from "../sessions/store.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
 import type { AgentSession, StoredEvent } from "../types.ts";
@@ -228,5 +230,136 @@ describe("nudgeAgent", () => {
 		} finally {
 			store.close();
 		}
+	});
+});
+
+describe("nudgeAgent with headless connection", () => {
+	async function importNudge() {
+		return await import("./nudge.ts");
+	}
+
+	/** Build a NudgeableConnection stub that records calls. */
+	function makeNudgeableConn(
+		result: NudgeResult = { status: "Queued" },
+		onNudge?: (text: string) => void,
+	): NudgeableConnection {
+		return {
+			sendPrompt: async () => {},
+			followUp: async () => {},
+			abort: async () => {},
+			getState: async () => ({ status: "idle" as const }),
+			close: () => {},
+			nudge: async (text: string) => {
+				if (onNudge) onNudge(text);
+				return result;
+			},
+		};
+	}
+
+	afterEach(() => {
+		removeConnection("headless-test-agent");
+	});
+
+	test("routes nudge through connection.nudge() when connection exists", async () => {
+		let capturedText = "";
+		setConnection(
+			"headless-test-agent",
+			makeNudgeableConn({ status: "Queued" }, (t) => {
+				capturedText = t;
+			}),
+		);
+
+		const { nudgeAgent } = await importNudge();
+		const result = await nudgeAgent(tempDir, "headless-test-agent", "ping", true);
+
+		expect(result.delivered).toBe(true);
+		expect(result.queued).toBe(true);
+		expect(capturedText).toBe("ping");
+	});
+
+	test("queued=false when connection returns Delivered", async () => {
+		setConnection("headless-test-agent", makeNudgeableConn({ status: "Delivered" }));
+
+		const { nudgeAgent } = await importNudge();
+		const result = await nudgeAgent(tempDir, "headless-test-agent", "ping", true);
+
+		expect(result.delivered).toBe(true);
+		expect(result.queued).toBe(false);
+	});
+
+	test("falls back to tmux path when connection has no nudge() method", async () => {
+		// Register a plain RuntimeConnection (no nudge method)
+		setConnection("headless-test-agent", {
+			sendPrompt: async () => {},
+			followUp: async () => {},
+			abort: async () => {},
+			getState: async () => ({ status: "idle" as const }),
+			close: () => {},
+		});
+		// Also add a sessions.db entry so resolveTargetSession can find something
+		writeSessionsToStore(tempDir, [makeSession({ agentName: "headless-test-agent" })]);
+
+		const { nudgeAgent } = await importNudge();
+		const result = await nudgeAgent(tempDir, "headless-test-agent");
+		// Falls through to tmux — tmux session not alive
+		expect(result.delivered).toBe(false);
+		expect(result.reason).toContain("not alive");
+		// No queued field when tmux path runs
+		expect(result.queued).toBeUndefined();
+	});
+
+	test("debounce applies to headless nudges", async () => {
+		let nudgeCount = 0;
+		setConnection(
+			"headless-test-agent",
+			makeNudgeableConn({ status: "Queued" }, () => {
+				nudgeCount++;
+			}),
+		);
+
+		const { nudgeAgent } = await importNudge();
+		// First nudge — forced to bypass debounce and prime the state
+		await nudgeAgent(tempDir, "headless-test-agent", "first", true);
+		// Second nudge immediately — should be debounced (within 500ms window)
+		const second = await nudgeAgent(tempDir, "headless-test-agent", "second");
+
+		expect(nudgeCount).toBe(1);
+		expect(second.delivered).toBe(false);
+		expect(second.reason).toContain("Debounced");
+	});
+
+	test("records nudge event for headless delivery", async () => {
+		setConnection("headless-test-agent", makeNudgeableConn({ status: "Queued" }));
+
+		const { nudgeAgent } = await importNudge();
+		await nudgeAgent(tempDir, "headless-test-agent", "event test", true);
+
+		const eventsDbPath = join(tempDir, ".overstory", "events.db");
+		const store = createEventStore(eventsDbPath);
+		try {
+			const events: StoredEvent[] = store.getTimeline({ since: "2000-01-01T00:00:00Z" });
+			const nudgeEvent = events.find((e) => {
+				if (!e.data) return false;
+				const data = JSON.parse(e.data) as Record<string, unknown>;
+				return data.type === "nudge";
+			});
+			expect(nudgeEvent).toBeDefined();
+			expect(nudgeEvent?.agentName).toBe("headless-test-agent");
+			const data = JSON.parse(nudgeEvent?.data ?? "{}") as Record<string, unknown>;
+			expect(data.delivered).toBe(true);
+		} finally {
+			store.close();
+		}
+	});
+
+	test("tmux path: send-keys path invoked for agent with no connection", async () => {
+		writeSessionsToStore(tempDir, [makeSession({ state: "working" })]);
+
+		const { nudgeAgent } = await importNudge();
+		const result = await nudgeAgent(tempDir, "test-agent");
+		// No connection registered → tmux path → tmux session not alive
+		expect(result.delivered).toBe(false);
+		expect(result.reason).toContain("not alive");
+		expect(result.queued).toBeUndefined();
 	});
 });

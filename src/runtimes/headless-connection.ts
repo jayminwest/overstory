@@ -3,6 +3,7 @@
  *
  * Wraps a spawned process handle to provide the RuntimeConnection contract:
  * - sendPrompt / followUp → write to process stdin
+ * - nudge → write a stream-json user-message envelope to stdin (see NudgeResult)
  * - getState → poll process liveness via kill(pid, 0)
  * - abort → SIGTERM with SIGKILL escalation after timeout
  *
@@ -11,6 +12,32 @@
  */
 
 import type { ConnectionState, RuntimeConnection } from "./types.ts";
+
+/**
+ * Result of a nudge() call on a headless agent.
+ *
+ * "Delivered" — the process acknowledged the message (reserved for future use).
+ * "Queued"    — the message was written to the process stdin buffer. Claude Code
+ *               does not reliably poll stdin while an API stream is in flight, so
+ *               the message may not be processed until the current turn completes.
+ *               Phase 4 will implement abort + fork-from-last-turn + resume for
+ *               immediate mid-task steering.
+ */
+export type NudgeResult = { status: "Delivered" | "Queued" };
+
+/**
+ * Extension of RuntimeConnection that supports runtime-agnostic nudge delivery.
+ * Implemented by HeadlessClaudeConnection; tmux-based agents do not implement this.
+ * The `ov nudge` command uses hasNudge() to route through this path when available.
+ */
+export interface NudgeableConnection extends RuntimeConnection {
+	nudge(text: string): Promise<NudgeResult>;
+}
+
+/** Type guard: true when conn exposes a nudge() method (i.e. is a NudgeableConnection). */
+export function hasNudge(conn: RuntimeConnection): conn is NudgeableConnection {
+	return "nudge" in conn && typeof (conn as { nudge?: unknown }).nudge === "function";
+}
 
 /**
  * RuntimeConnection backed by a headless Claude Code subprocess.
@@ -52,6 +79,26 @@ export class HeadlessClaudeConnection implements RuntimeConnection {
 	 */
 	async followUp(text: string): Promise<void> {
 		await this.#stdin.write(text);
+	}
+
+	/**
+	 * Send a nudge message to the headless Claude Code process.
+	 *
+	 * Writes a stream-json user-message envelope to stdin. Claude Code reads
+	 * this as a follow-up user turn between the current and next tool call.
+	 * However, Claude Code does not reliably poll stdin while an API stream is
+	 * in flight — the message sits in the pipe buffer until the current turn
+	 * completes. The return value is always "Queued" to surface this caveat.
+	 * Phase 4 will implement abort + fork-from-last-turn + resume for
+	 * immediate mid-task steering.
+	 */
+	async nudge(text: string): Promise<NudgeResult> {
+		const envelope = `${JSON.stringify({
+			type: "user",
+			message: { role: "user", content: [{ type: "text", text }] },
+		})}\n`;
+		await this.#stdin.write(envelope);
+		return { status: "Queued" };
 	}
 
 	/**

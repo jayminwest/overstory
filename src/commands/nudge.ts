@@ -15,6 +15,8 @@ import { AgentError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
 import { printSuccess } from "../logging/color.ts";
+import { getConnection } from "../runtimes/connections.ts";
+import { hasNudge } from "../runtimes/headless-connection.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { EventStore } from "../types.ts";
 import { isSessionAlive, sendKeys } from "../worktree/tmux.ts";
@@ -199,35 +201,49 @@ function recordNudgeEvent(
 /**
  * Core nudge function. Exported for use by mail send auto-nudge.
  *
+ * Routes through the registered RuntimeConnection when available (headless agents),
+ * or falls back to the tmux send-keys path (interactive agents).
+ *
+ * Headless nudges return queued=true because Claude Code does not reliably poll
+ * stdin while an API stream is in flight — the message sits in the pipe buffer
+ * until the current turn completes.
+ *
  * @param projectRoot - Absolute path to the project root
  * @param agentName - Name of the agent to nudge
  * @param message - Text to send (defaults to mail check prompt)
  * @param force - Skip debounce check
- * @returns Object with delivery status
+ * @returns Object with delivery status; queued=true when headless and buffered
  */
 export async function nudgeAgent(
 	projectRoot: string,
 	agentName: string,
 	message: string = DEFAULT_MESSAGE,
 	force = false,
-): Promise<{ delivered: boolean; reason?: string }> {
-	let result: { delivered: boolean; reason?: string };
+): Promise<{ delivered: boolean; queued?: boolean; reason?: string }> {
+	let result: { delivered: boolean; queued?: boolean; reason?: string };
 
-	// Resolve tmux session (SessionStore for agents, orchestrator-tmux.json for orchestrator)
-	const tmuxSessionName = await resolveTargetSession(projectRoot, agentName);
+	const statePath = join(projectRoot, ".overstory", "nudge-state.json");
 
-	if (!tmuxSessionName) {
-		result = { delivered: false, reason: `No active session for agent "${agentName}"` };
-	} else {
-		// Check debounce (unless forced)
-		let debounced = false;
-		if (!force) {
-			const statePath = join(projectRoot, ".overstory", "nudge-state.json");
-			debounced = await isDebounced(statePath, agentName);
-		}
-
+	// Check debounce early — applies to both headless and tmux paths
+	if (!force) {
+		const debounced = await isDebounced(statePath, agentName);
 		if (debounced) {
-			result = { delivered: false, reason: "Debounced: nudge sent too recently" };
+			return { delivered: false, reason: "Debounced: nudge sent too recently" };
+		}
+	}
+
+	// Headless path: agent has a registered RuntimeConnection with nudge support
+	const conn = getConnection(agentName);
+	if (conn !== undefined && hasNudge(conn)) {
+		const nudgeResult = await conn.nudge(message);
+		await recordNudge(statePath, agentName);
+		result = { delivered: true, queued: nudgeResult.status === "Queued" };
+	} else {
+		// Tmux path: resolve session name from SessionStore / orchestrator-tmux.json
+		const tmuxSessionName = await resolveTargetSession(projectRoot, agentName);
+
+		if (!tmuxSessionName) {
+			result = { delivered: false, reason: `No active session for agent "${agentName}"` };
 		} else {
 			// Verify tmux session is alive
 			const alive = await isSessionAlive(tmuxSessionName);
@@ -239,10 +255,7 @@ export async function nudgeAgent(
 			} else {
 				// Send with retry
 				const delivered = await sendNudgeWithRetry(tmuxSessionName, message);
-
 				if (delivered) {
-					// Record nudge for debounce tracking
-					const statePath = join(projectRoot, ".overstory", "nudge-state.json");
 					await recordNudge(statePath, agentName);
 					result = { delivered: true };
 				} else {
@@ -311,9 +324,18 @@ export async function nudgeCommand(args: string[]): Promise<void> {
 				const result = await nudgeAgent(projectRoot, agentName, message, opts.force ?? false);
 
 				if (opts.json) {
-					jsonOutput("nudge", { agentName, delivered: result.delivered, reason: result.reason });
+					jsonOutput("nudge", {
+						agentName,
+						delivered: result.delivered,
+						queued: result.queued,
+						reason: result.reason,
+					});
 				} else if (result.delivered) {
-					printSuccess("Nudge delivered", agentName);
+					if (result.queued) {
+						printSuccess("Nudge queued (headless — will process after current turn)", agentName);
+					} else {
+						printSuccess("Nudge delivered", agentName);
+					}
 				} else {
 					throw new AgentError(`Nudge failed: ${result.reason}`, { agentName });
 				}
