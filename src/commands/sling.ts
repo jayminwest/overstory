@@ -22,6 +22,7 @@ import { mkdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
+import { buildInitialHeadlessPrompt, formatMailSection } from "../agents/headless-prompt.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
 import { createCanopyClient } from "../canopy/client.ts";
@@ -885,12 +886,18 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			// 9. Resolve runtime + model (needed for deployConfig, spawn, and beacon)
 			const resolvedModel = resolveModel(config, manifest, capability, agentDef.model);
 
-			// 9a. Deploy hooks config (capability-specific guards)
+			// 9a. Resolve headless mode before deployConfig so hooks can be skipped for headless agents.
+			// resolveUseHeadless is also used at 11c for spawn routing — hoisted here to share the value.
+			const useHeadless = resolveUseHeadless(runtime, opts.headless, config);
+
+			// 9b. Deploy hooks config (capability-specific guards). Skipped for headless agents:
+			// settings.local.json hooks don't fire in headless mode; the overlay covers constraints.
 			await runtime.deployConfig(worktreePath, undefined, {
 				agentName: name,
 				capability,
 				worktreePath,
 				qualityGates: config.project.qualityGates,
+				isHeadless: useHeadless,
 			});
 
 			// 9b. Send auto-dispatch mail so it exists when SessionStart hook fires.
@@ -958,7 +965,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			}
 
 			// 11c. Spawn: headless runtimes bypass tmux entirely; tmux path is unchanged.
-			const useHeadless = resolveUseHeadless(runtime, opts.headless, config);
+			// useHeadless was resolved at step 9a (hoisted so deployConfig can skip hooks for headless).
 			if (useHeadless && runtime.buildDirectSpawn) {
 				const directEnv = {
 					...runtime.buildEnv(resolvedModel),
@@ -993,6 +1000,31 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					stdoutFile: join(agentLogDir, "stdout.log"),
 					stderrFile: join(agentLogDir, "stderr.log"),
 				});
+
+				// 12b. Write initial stdin prompt (SessionStart hook equivalent for headless agents).
+				// Combines prime context, pending inbox mail, and the activation beacon into
+				// a single stream-json user turn. Replaces the SessionStart hooks (ov prime +
+				// ov mail check --inject) that fire in tmux mode but not in headless mode.
+				{
+					const pendingMailStore = createMailStore(join(overstoryDir, "mail.db"));
+					try {
+						const pendingMailClient = createMailClient(pendingMailStore);
+						const pendingMessages = pendingMailClient.check(name);
+						const mailSection = formatMailSection(pendingMessages);
+						const beacon = buildBeacon({
+							agentName: name,
+							capability,
+							taskId,
+							parentAgent,
+							depth,
+							instructionPath: runtime.instructionPath,
+						});
+						const initialPrompt = buildInitialHeadlessPrompt(mulchExpertise, mailSection || undefined, beacon);
+						await headlessProc.stdin.write(initialPrompt);
+					} finally {
+						pendingMailStore.close();
+					}
+				}
 
 				// 13. Record session with empty tmuxSession (no tmux pane for headless agents).
 				const session: AgentSession = {

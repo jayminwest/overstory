@@ -128,7 +128,9 @@ export class ClaudeRuntime implements AgentRuntime {
 			await Bun.write(claudeMdPath, overlay.content);
 		}
 
-		await deployHooks(hooks.worktreePath, hooks.agentName, hooks.capability, hooks.qualityGates);
+		if (!hooks.isHeadless) {
+			await deployHooks(hooks.worktreePath, hooks.agentName, hooks.capability, hooks.qualityGates);
+		}
 	}
 
 	/**

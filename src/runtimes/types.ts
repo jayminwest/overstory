@@ -58,6 +58,8 @@ export interface HooksDef {
 	worktreePath: string;
 	/** Quality gates agents must pass before reporting completion. */
 	qualityGates?: QualityGate[];
+	/** When true, skip hooks file deployment. Headless agents don't use settings.local.json. */
+	isHeadless?: boolean;
 }
 
 // === Transcripts ===
