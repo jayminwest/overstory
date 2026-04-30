@@ -88,6 +88,7 @@ describe("watchCommand", () => {
 		expect(out).toContain("watch");
 		expect(out).toContain("--interval");
 		expect(out).toContain("--background");
+		expect(out).toContain("--kill-others");
 		expect(out).toContain("Tier 0");
 	});
 
@@ -111,6 +112,48 @@ describe("watchCommand", () => {
 		expect(err).toContain("already running");
 		expect(err).toContain(`${process.pid}`);
 		expect(process.exitCode).toBe(1);
+	});
+
+	test("foreground mode: refuses when a live foreign PID owns the lock", async () => {
+		// Spawn a long-running child to act as the "foreign live process". Its
+		// PID will not match our own, so acquirePidLock should refuse rather
+		// than treat the existing PID as idempotent self-ownership. The
+		// foreground path used to overwrite this file unconditionally — the
+		// overstory-8ef6 fix forces it to refuse.
+		const sleeper = Bun.spawn(["sleep", "30"], {
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		try {
+			const pidFilePath = join(tempDir, ".overstory", "watchdog.pid");
+			await Bun.write(pidFilePath, `${sleeper.pid}\n`);
+
+			// --json for structured output. No --background, so this exercises
+			// the foreground exclusion path. A correctly contested lock returns
+			// immediately (exit 1) without starting the daemon loop.
+			await watchCommand(["--json"]);
+
+			const out = output();
+			const jsonLine = out
+				.split("\n")
+				.map((l) => l.trim())
+				.find((l) => l.startsWith("{"));
+			expect(jsonLine).toBeDefined();
+			if (jsonLine) {
+				const parsed = JSON.parse(jsonLine);
+				expect(parsed.running).toBe(true);
+				expect(parsed.pid).toBe(sleeper.pid);
+				expect(parsed.error).toContain("already running");
+			}
+			expect(process.exitCode).toBe(1);
+
+			// PID file untouched — still the foreign owner's PID.
+			const fileContent = await Bun.file(pidFilePath).text();
+			expect(fileContent.trim()).toBe(`${sleeper.pid}`);
+		} finally {
+			sleeper.kill("SIGTERM");
+			await sleeper.exited.catch(() => {});
+		}
 	});
 
 	test("background mode: stale PID cleanup", async () => {
