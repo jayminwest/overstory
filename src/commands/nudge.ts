@@ -9,11 +9,9 @@
  * rapid-fire nudges to the same agent.
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
 import { encodeUserTurn } from "../agents/headless-prompt.ts";
-import { agentFifoPath, writeToAgentFifo } from "../agents/headless-stdin.ts";
 import { createManifestLoader } from "../agents/manifest.ts";
 import { type RunTurnOpts, runTurn, type TurnResult } from "../agents/turn-runner.ts";
 import { buildRunTurnOptsFactory, isSpawnPerTurnAgent } from "../agents/turn-runner-dispatch.ts";
@@ -307,7 +305,6 @@ async function tryNudgeViaTurnRunner(
 	} catch {
 		return null;
 	}
-	if (config.runtime?.claudeSpawnPerTurn !== true) return null;
 
 	const manifestLoader = createManifestLoader(
 		join(config.project.root, config.agents.manifestPath),
@@ -365,10 +362,10 @@ async function tryNudgeViaTurnRunner(
  * stdin while an API stream is in flight — the message sits in the pipe buffer
  * until the current turn completes.
  *
- * Phase 2 spawn-per-turn (`runtime.claudeSpawnPerTurn`): for builders, the
- * nudge becomes a single user-turn delivered via `runTurn`. The call awaits
- * the turn synchronously so the in-process turn-lock can serialize against
- * concurrent mail dispatchers.
+ * For task-scoped headless Claude (Phase 3 spawn-per-turn), the nudge becomes
+ * a single user-turn delivered via `runTurn`. The call awaits the turn
+ * synchronously so the in-process turn-lock can serialize against concurrent
+ * mail dispatchers.
  *
  * @param projectRoot - Absolute path to the project root
  * @param agentName - Name of the agent to nudge
@@ -383,7 +380,7 @@ export async function nudgeAgent(
 	force = false,
 	deps: NudgeAgentDeps = {},
 ): Promise<{ delivered: boolean; queued?: boolean; reason?: string }> {
-	let result: { delivered: boolean; queued?: boolean; reason?: string };
+	let result: { delivered: boolean; queued?: boolean; reason?: string } | undefined;
 
 	const statePath = join(projectRoot, ".overstory", "nudge-state.json");
 
@@ -397,52 +394,37 @@ export async function nudgeAgent(
 
 	const overstoryDir = join(projectRoot, ".overstory");
 
-	// Phase 2 spawn-per-turn dispatch (capability-gated to builder, flag-gated
-	// by `runtime.claudeSpawnPerTurn`). When the agent is eligible, deliver the
-	// nudge as a user turn through `runTurn`. The legacy FIFO/tmux paths below
-	// stay intact for everyone else (and remain the default when the flag is off).
-	const spawnPerTurnResult = await tryNudgeViaTurnRunner({
-		agentName,
-		message,
-		overstoryDir,
-		projectRoot,
-		statePath,
-		deps,
-	});
-	if (spawnPerTurnResult !== null) {
-		recordNudgeEventBestEffort(overstoryDir, agentName, message, spawnPerTurnResult.delivered);
-		return spawnPerTurnResult;
-	}
-
-	// Headless FIFO path: when a per-agent stdin FIFO exists on disk, route the
-	// nudge through it. This is the cross-process delivery mechanism — sling
-	// creates the FIFO at spawn, and any process (including this one) can open
-	// and write to it as long as the agent is alive (overstory-41eb).
-	const fifoExists = existsSync(agentFifoPath(overstoryDir, agentName));
-	const inProcConn = fifoExists ? undefined : getConnection(agentName);
-	if (fifoExists) {
-		const writeResult = writeToAgentFifo(overstoryDir, agentName, encodeUserTurn(message));
-		if (writeResult === "delivered") {
-			await recordNudge(statePath, agentName);
-			// queued: Claude Code does not reliably poll stdin while an API
-			// stream is in flight, so the message sits in the FIFO buffer until
-			// the current turn completes.
-			result = { delivered: true, queued: true };
-		} else {
-			result = {
-				delivered: false,
-				reason: `Headless agent "${agentName}" is not reading (${writeResult})`,
-			};
-		}
-	} else if (inProcConn !== undefined && hasNudge(inProcConn)) {
-		// In-process registry path: kept for runtimes that register via
-		// setConnection() (e.g., Sapling) and for tests that drive the registry
-		// directly. For headless Claude in production, the FIFO branch above is
-		// the active path.
+	// Runtime-agnostic delivery preference (mx-17830a):
+	//   1. Live in-process RuntimeConnection (Sapling RPC) → conn.nudge()
+	//   2. Spawn-per-turn task-scoped Claude → runTurn() (no live connection)
+	//   3. Tmux interactive agent → tmux send-keys
+	const inProcConn = getConnection(agentName);
+	if (inProcConn !== undefined && hasNudge(inProcConn)) {
+		// In-process RPC path (Sapling and friends).
 		const nudgeResult = await inProcConn.nudge(message);
 		await recordNudge(statePath, agentName);
 		result = { delivered: true, queued: nudgeResult.status === "Queued" };
 	} else {
+		// Spawn-per-turn dispatch for task-scoped headless Claude. When the
+		// agent is eligible, deliver the nudge as a user turn through `runTurn`.
+		// Returns null when ineligible (terminal state, persistent capability,
+		// flag off, etc.) and we fall through to the tmux path.
+		const spawnPerTurnResult = await tryNudgeViaTurnRunner({
+			agentName,
+			message,
+			overstoryDir,
+			projectRoot,
+			statePath,
+			deps,
+		});
+		if (spawnPerTurnResult !== null) {
+			recordNudgeEventBestEffort(overstoryDir, agentName, message, spawnPerTurnResult.delivered);
+			return spawnPerTurnResult;
+		}
+		// No live connection AND no spawn-per-turn eligibility — try tmux.
+	}
+
+	if (result === undefined) {
 		// Tmux path: resolve session name from SessionStore / orchestrator-tmux.json
 		const tmuxSessionName = await resolveTargetSession(projectRoot, agentName);
 

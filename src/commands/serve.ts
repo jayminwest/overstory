@@ -11,16 +11,10 @@
  * support by calling the exported register*() helpers — no changes to this file needed.
  */
 
-import { existsSync, watch as fsWatch, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
-import {
-	type InjectionWriteResult,
-	startMailInjectionLoop,
-	startTurnRunnerMailLoop,
-	type TurnRunnerFn,
-} from "../agents/headless-mail-injector.ts";
-import { agentFifoPath, writeToAgentFifo } from "../agents/headless-stdin.ts";
+import { startTurnRunnerMailLoop, type TurnRunnerFn } from "../agents/headless-mail-injector.ts";
 import { createManifestLoader } from "../agents/manifest.ts";
 import { runTurn } from "../agents/turn-runner.ts";
 import { buildRunTurnOptsFactory, isSpawnPerTurnAgent } from "../agents/turn-runner-dispatch.ts";
@@ -250,7 +244,7 @@ export interface MailInjectorDispatchDeps {
  * Attempt to start the spawn-per-turn dispatcher for one agent. Returns the
  * stop function on success, or null when the agent is not eligible (capability
  * gate, flag off, terminal state, missing session row, or runtime can't drive
- * a direct spawn). On null, the caller falls back to the legacy FIFO loop.
+ * a direct spawn).
  */
 function tryInstallTurnRunnerLoop(
 	agentName: string,
@@ -285,42 +279,37 @@ function tryInstallTurnRunnerLoop(
 	return startTurnRunnerMailLoop(agentName, factory.build, runTurnFn, mailDbPath);
 }
 
+/**
+ * Install per-agent mail injection loops driven by the spawn-per-turn engine.
+ *
+ * Discovers agents from SessionStore (rather than from a per-agent FIFO file
+ * — Phase 3 deletes the FIFO infrastructure). Sessions in non-terminal state
+ * with a task-scoped capability get a `runTurn`-driven mail dispatcher; loops
+ * auto-stop when the session transitions to `completed`/`zombie`.
+ *
+ * `dispatch` is required: under Phase 3 spawn-per-turn is the only mail
+ * injection mechanism for headless Claude. When called without dispatch (e.g.
+ * in tests that don't exercise mail), the function still returns a no-op stop.
+ */
 export function installMailInjectors(
 	mailDbPath: string,
 	overstoryDir: string,
 	dispatch?: MailInjectorDispatchDeps,
 ): () => void {
 	const activeLoops = new Map<string, () => void>();
-	const agentsDir = join(overstoryDir, "agents");
 
-	const writerFor =
-		(agentName: string) =>
-		(data: string | Uint8Array): InjectionWriteResult =>
-			writeToAgentFifo(overstoryDir, agentName, data);
+	if (dispatch === undefined) {
+		// No manifest available — no spawn-per-turn dispatch possible. Return a
+		// no-op stop so callers can wire shutdown unconditionally.
+		return function noopStopMailInjectors(): void {};
+	}
 
 	const startLoopFor = (agentName: string): void => {
 		if (activeLoops.has(agentName)) return;
-
-		// Phase 2 dispatch: when config + manifest are supplied, peek at the
-		// agent's session row and choose the spawn-per-turn path for builders
-		// with the flag enabled. Otherwise fall back to the FIFO writer loop.
-		if (dispatch !== undefined) {
-			const turnLoop = tryInstallTurnRunnerLoop(agentName, mailDbPath, overstoryDir, dispatch);
-			if (turnLoop !== null) {
-				activeLoops.set(agentName, () => {
-					turnLoop();
-					activeLoops.delete(agentName);
-				});
-				return;
-			}
-		}
-
-		const stop = startMailInjectionLoop(agentName, writerFor(agentName), mailDbPath);
-		// Wrap stop so we always remove from the map on tear-down. The mail
-		// injector auto-stops on no-reader; this layer covers the explicit
-		// shutdown / FIFO-removed paths.
+		const turnLoop = tryInstallTurnRunnerLoop(agentName, mailDbPath, overstoryDir, dispatch);
+		if (turnLoop === null) return;
 		activeLoops.set(agentName, () => {
-			stop();
+			turnLoop();
 			activeLoops.delete(agentName);
 		});
 	};
@@ -329,55 +318,34 @@ export function installMailInjectors(
 		activeLoops.get(agentName)?.();
 	};
 
-	// Discover existing FIFOs at startup. When ov serve restarts mid-swarm, this
-	// resumes injection for any agents that were already spawned.
+	// Discover non-terminal agents from SessionStore. Each rescan re-checks
+	// every agent's state so loops auto-stop on completed/zombie.
 	const scan = (): void => {
-		let entries: string[];
+		const { store } = openSessionStore(overstoryDir);
+		let sessions: ReturnType<typeof store.getAll>;
 		try {
-			entries = readdirSync(agentsDir);
-		} catch (err: unknown) {
-			const e = err as NodeJS.ErrnoException;
-			if (e.code === "ENOENT") return; // no agents directory yet
-			throw err;
+			sessions = store.getAll();
+		} finally {
+			store.close();
 		}
-		for (const name of entries) {
-			if (existsSync(agentFifoPath(overstoryDir, name))) {
-				startLoopFor(name);
+		const liveNames = new Set<string>();
+		for (const session of sessions) {
+			if (session.state === "completed" || session.state === "zombie") continue;
+			liveNames.add(session.agentName);
+			startLoopFor(session.agentName);
+		}
+		// Reap loops whose sessions transitioned to a terminal state.
+		for (const name of [...activeLoops.keys()]) {
+			if (!liveNames.has(name)) {
+				stopLoopFor(name);
 			}
 		}
 	};
 	scan();
 
-	// Watch the agents directory for new spawns and cleanups. fs.watch on a
-	// directory fires for child create/delete; we re-scan on every event because
-	// the rename signal alone doesn't tell us which path changed.
-	let watcher: ReturnType<typeof fsWatch> | null = null;
-	try {
-		watcher = fsWatch(agentsDir, { persistent: false }, () => {
-			scan();
-			// Reap loops whose FIFOs were removed (agent terminated + cleanup ran).
-			for (const name of [...activeLoops.keys()]) {
-				if (!existsSync(agentFifoPath(overstoryDir, name))) {
-					stopLoopFor(name);
-				}
-			}
-		});
-	} catch {
-		// Directory doesn't exist yet — fall back to a periodic rescan. The
-		// rescan also doubles as a safety net if fs.watch misses an event.
-	}
-
-	const rescanTimer = setInterval(() => {
-		scan();
-		for (const name of [...activeLoops.keys()]) {
-			if (!existsSync(agentFifoPath(overstoryDir, name))) {
-				stopLoopFor(name);
-			}
-		}
-	}, 5000);
+	const rescanTimer = setInterval(scan, 5000);
 
 	return function stopMailInjectors(): void {
-		watcher?.close();
 		clearInterval(rescanTimer);
 		for (const stop of [...activeLoops.values()]) stop();
 		activeLoops.clear();
@@ -411,9 +379,9 @@ export async function runServe(opts: ServeOptions, deps: ServeDeps = {}): Promis
 	});
 
 	// Install per-agent mail injection loops (UserPromptSubmit hook equivalent
-	// for headless Claude agents). Discovers agents by watching the per-agent
-	// stdin FIFOs created by `ov sling`. With `runtime.claudeSpawnPerTurn` on,
-	// builders use the spawn-per-turn dispatcher (`runTurn`) instead of FIFO.
+	// for headless Claude agents). Discovers task-scoped agents from
+	// SessionStore and dispatches each batch of unread mail through `runTurn`,
+	// which spawns a fresh claude with --resume per turn (Phase 3 spawn-per-turn).
 	const manifestLoader = createManifestLoader(
 		join(config.project.root, config.agents.manifestPath),
 		join(config.project.root, config.agents.baseDir),

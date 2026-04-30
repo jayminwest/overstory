@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { closeSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAgentFifo, removeAgentFifo } from "../agents/headless-stdin.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
 import type { DevServerHandle } from "./serve/dev.ts";
@@ -181,9 +180,6 @@ describe("installMailInjectors", () => {
 	let overstoryDir: string;
 	let mailDbPath: string;
 	const stoppers: Array<() => void> = [];
-	const readers: Array<{ kill: () => void; exited: Promise<number> }> = [];
-	const fifoFds: number[] = [];
-	const cleanupAgents: string[] = [];
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "overstory-mailinject-test-"));
@@ -194,179 +190,10 @@ describe("installMailInjectors", () => {
 
 	afterEach(async () => {
 		for (const stop of stoppers.splice(0)) stop();
-		for (const reader of readers.splice(0)) {
-			reader.kill();
-			await reader.exited;
-		}
-		for (const fd of fifoFds.splice(0)) {
-			try {
-				closeSync(fd);
-			} catch {}
-		}
-		for (const agentName of cleanupAgents.splice(0)) {
-			removeAgentFifo(overstoryDir, agentName);
-		}
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	/**
-	 * Spawn a small subprocess whose stdin is the agent's FIFO, capturing every
-	 * byte it reads to a file. Returns the path of the capture file so tests
-	 * can read what the "agent" received.
-	 */
-	function spawnFifoReader(agentName: string): string {
-		const captureFile = join(tempDir, `${agentName}.capture`);
-		const scriptPath = join(tempDir, `${agentName}-reader.ts`);
-		writeFileSync(
-			scriptPath,
-			`import { openSync, writeSync, closeSync } from "node:fs";
-			 const out = openSync(${JSON.stringify(captureFile)}, "w");
-			 for await (const chunk of Bun.stdin.stream()) {
-			   writeSync(out, chunk);
-			 }
-			 closeSync(out);
-			`,
-		);
-
-		const fd = createAgentFifo(overstoryDir, agentName);
-		fifoFds.push(fd);
-		cleanupAgents.push(agentName);
-
-		const reader = Bun.spawn(["bun", "run", scriptPath], {
-			stdin: fd,
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		readers.push(reader);
-		return captureFile;
-	}
-
-	test("delivers mid-session mail through a per-agent FIFO", async () => {
-		const captureFile = spawnFifoReader("inject-agent-1");
-		// Allow the reader subprocess to start its read loop.
-		await new Promise((r) => setTimeout(r, 200));
-
-		const stop = installMailInjectors(mailDbPath, overstoryDir);
-		stoppers.push(stop);
-
-		const store = createMailStore(mailDbPath);
-		const client = createMailClient(store);
-		client.send({
-			from: "coordinator",
-			to: "inject-agent-1",
-			subject: "mid-session",
-			body: "Please pivot to task X.",
-			type: "dispatch",
-			priority: "normal",
-		});
-		store.close();
-
-		// Wait through the default 2000ms inject poll.
-		await new Promise((r) => setTimeout(r, 2400));
-
-		const captured = readFileSync(captureFile, "utf-8");
-		expect(captured.length).toBeGreaterThan(0);
-		const parsed = JSON.parse(captured.trimEnd());
-		expect(parsed.type).toBe("user");
-		const text: string = parsed.message.content[0].text;
-		expect(text).toContain("mid-session");
-		expect(text).toContain("Please pivot to task X.");
-	}, 10000);
-
-	test("stops loops on shutdown", async () => {
-		const captureFile = spawnFifoReader("inject-agent-2");
-		await new Promise((r) => setTimeout(r, 200));
-
-		const stop = installMailInjectors(mailDbPath, overstoryDir);
-
-		const store = createMailStore(mailDbPath);
-		const client = createMailClient(store);
-		client.send({
-			from: "coordinator",
-			to: "inject-agent-2",
-			subject: "first",
-			body: "first batch",
-			type: "dispatch",
-			priority: "normal",
-		});
-		store.close();
-
-		await new Promise((r) => setTimeout(r, 2400));
-		const captureAfterFirst = readFileSync(captureFile, "utf-8");
-		expect(captureAfterFirst.length).toBeGreaterThan(0);
-
-		stop();
-
-		// Post-shutdown mail must NOT reach the agent.
-		const store2 = createMailStore(mailDbPath);
-		const client2 = createMailClient(store2);
-		client2.send({
-			from: "coordinator",
-			to: "inject-agent-2",
-			subject: "after-stop",
-			body: "should not arrive",
-			type: "dispatch",
-			priority: "normal",
-		});
-		store2.close();
-
-		await new Promise((r) => setTimeout(r, 2400));
-		const captureAfterStop = readFileSync(captureFile, "utf-8");
-		expect(captureAfterStop).toBe(captureAfterFirst);
-	}, 10000);
-
-	test("reaps the loop for an agent when its FIFO is removed", async () => {
-		spawnFifoReader("inject-agent-3");
-		await new Promise((r) => setTimeout(r, 200));
-
-		const stop = installMailInjectors(mailDbPath, overstoryDir);
-		stoppers.push(stop);
-
-		const store = createMailStore(mailDbPath);
-		const client = createMailClient(store);
-		client.send({
-			from: "coordinator",
-			to: "inject-agent-3",
-			subject: "first",
-			body: "before remove",
-			type: "dispatch",
-			priority: "normal",
-		});
-		store.close();
-
-		await new Promise((r) => setTimeout(r, 2400));
-
-		// Simulate agent termination + cleanup: remove the FIFO file.
-		removeAgentFifo(overstoryDir, "inject-agent-3");
-
-		// Send more mail; the reaper should drop the loop on the next rescan.
-		const store2 = createMailStore(mailDbPath);
-		const client2 = createMailClient(store2);
-		client2.send({
-			from: "coordinator",
-			to: "inject-agent-3",
-			subject: "after-remove",
-			body: "should not arrive",
-			type: "dispatch",
-			priority: "normal",
-		});
-		store2.close();
-
-		// Wait long enough for one rescan tick (5s safety net) + writer no-reader.
-		await new Promise((r) => setTimeout(r, 6000));
-
-		const checkStore = createMailStore(mailDbPath);
-		try {
-			const remaining = checkStore.getUnread("inject-agent-3");
-			// after-remove message should still be unread (writer reported
-			// no-reader and stopped the loop without marking).
-			expect(remaining.some((m) => m.subject === "after-remove")).toBe(true);
-		} finally {
-			checkStore.close();
-		}
-	}, 12000);
-
-	test("dispatches builder agents to runTurn when claudeSpawnPerTurn is enabled", async () => {
+	test("dispatches task-scoped agents to runTurn (SessionStore-driven discovery)", async () => {
 		const { createSessionStore } = await import("../sessions/store.ts");
 		const sessionsDbPath = join(overstoryDir, "sessions.db");
 		const sessionStore = createSessionStore(sessionsDbPath);
@@ -379,7 +206,7 @@ describe("installMailInjectors", () => {
 			taskId: "task-1",
 			tmuxSession: "",
 			state: "working",
-			pid: 999,
+			pid: null,
 			parentAgent: "lead-1",
 			depth: 1,
 			runId: null,
@@ -390,11 +217,6 @@ describe("installMailInjectors", () => {
 			transcriptPath: null,
 		});
 		sessionStore.close();
-
-		// Create the FIFO so the dispatcher discovers this agent during scan.
-		const fifoFd = createAgentFifo(overstoryDir, "build-agent");
-		fifoFds.push(fifoFd);
-		cleanupAgents.push("build-agent");
 
 		const store = createMailStore(mailDbPath);
 		const client = createMailClient(store);
@@ -437,7 +259,7 @@ describe("installMailInjectors", () => {
 				},
 				models: {},
 				logging: { verbose: false, redactSecrets: true },
-				runtime: { default: "claude", claudeSpawnPerTurn: true },
+				runtime: { default: "claude" },
 				providers: {},
 				// biome-ignore lint/suspicious/noExplicitAny: minimal config shape for the test path
 			} as any,
@@ -463,7 +285,7 @@ describe("installMailInjectors", () => {
 					cleanResult: true,
 					newSessionId: null,
 					resumeMismatch: false,
-					workerDoneObserved: false,
+					terminalMailObserved: false,
 					durationMs: 1,
 					initialState: "booting" as const,
 					finalState: "working" as const,

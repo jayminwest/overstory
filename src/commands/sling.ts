@@ -18,13 +18,13 @@
  * 14. Return AgentSession
  */
 
-import { mkdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { buildInitialHeadlessPrompt, formatMailSection } from "../agents/headless-prompt.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createManifestLoader, resolveModel } from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
+import { runTurn } from "../agents/turn-runner.ts";
 import { createCanopyClient } from "../canopy/client.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
@@ -40,9 +40,7 @@ import { createRunStore } from "../sessions/store.ts";
 import type { TrackerIssue } from "../tracker/factory.ts";
 import { createTrackerClient, resolveBackend, trackerCliName } from "../tracker/factory.ts";
 import type { AgentSession, OverlayConfig, OverstoryConfig } from "../types.ts";
-import { resolveOverstoryBin } from "../utils/bin.ts";
 import { createWorktree, rollbackWorktree } from "../worktree/manager.ts";
-import { spawnHeadlessAgent } from "../worktree/process.ts";
 import {
 	capturePaneContent,
 	checkSessionState,
@@ -504,33 +502,6 @@ export function resolveUseHeadless(
 	}
 
 	return false;
-}
-
-/**
- * Resolve whether the spawn-per-turn engine should drive a builder spawn.
- *
- * Phase 2 opt-in. Returns true iff:
- *   1. capability === "builder" (capability gate — only builders use this path)
- *   2. config.runtime.claudeSpawnPerTurn === true (project-level enable)
- *   3. resolved spawn mode is headless (`useHeadless` parameter or `runtime.headless === true`)
- *   4. runtime.buildDirectSpawn is implemented (silent fallback when missing)
- *
- * No throws — Phase 2 is opt-in and reversible. When the flag is on but the
- * runtime cannot satisfy the prerequisites, callers fall back to the existing
- * long-lived FIFO path.
- */
-export function resolveUseSpawnPerTurn(
-	capability: string,
-	runtime: { headless?: boolean; buildDirectSpawn?: unknown },
-	config: { runtime?: { claudeSpawnPerTurn?: boolean } },
-	useHeadless: boolean,
-): boolean {
-	if (capability !== "builder") return false;
-	if (config.runtime?.claudeSpawnPerTurn !== true) return false;
-	if (typeof runtime.buildDirectSpawn !== "function") return false;
-	const headlessActive = useHeadless || runtime.headless === true;
-	if (!headlessActive) return false;
-	return true;
 }
 
 /**
@@ -997,82 +968,46 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			// 11c. Spawn: headless runtimes bypass tmux entirely; tmux path is unchanged.
 			// useHeadless was resolved at step 9a (hoisted so deployConfig can skip hooks for headless).
 			if (useHeadless && runtime.buildDirectSpawn) {
-				const directEnv = {
-					...runtime.buildEnv(resolvedModel),
-					OVERSTORY_AGENT_NAME: name,
-					OVERSTORY_WORKTREE_PATH: worktreePath,
-					OVERSTORY_TASK_ID: taskId,
-					OVERSTORY_PROJECT_ROOT: config.project.root,
-				};
-				// Phase 2 plumbing: thread the prior claude session id (if any) so the
-				// runtime can emit `--resume <id>`. For first-spawn agents the lookup
-				// returns null and the flag is omitted. The same id is mirrored onto the
-				// session row below so the spawn-per-turn engine reads a stable value.
+				// Phase 3 spawn-per-turn: headless agents have NO long-lived process.
+				// sling builds the initial prompt, upserts the session row in
+				// "booting", then drives the first user turn synchronously through
+				// `runTurn`. The runner spawns claude with `--resume` (when a prior
+				// session id exists), writes the prompt to a real stdin pipe, drains
+				// stream-json, captures session id, transitions state to "working"
+				// (or "completed" if terminal mail observed), and exits. No persistent
+				// process remains after this returns; subsequent turns are driven by
+				// `ov serve` (mail) or `ov nudge`.
 				const priorClaudeSessionId = store.getByName(name)?.claudeSessionId ?? null;
-				const argv = runtime.buildDirectSpawn({
-					cwd: worktreePath,
-					env: directEnv,
-					...(resolvedModel.isExplicitOverride ? { model: resolvedModel.model } : {}),
-					instructionPath: runtime.instructionPath,
-					resumeSessionId: priorClaudeSessionId,
-				});
 
-				// Create a timestamped log dir for this headless agent session.
-				// Always redirect stdout to a file. This prevents SIGPIPE death:
-				// ov sling exits after spawning, closing the pipe's read end.
-				// If stdout is a pipe, the agent dies on the next write (SIGPIPE).
-				// File writes have no such limit, and the agent survives the CLI exit.
-				const logTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
-				const agentLogDir = join(overstoryDir, "logs", name, logTimestamp);
-				mkdirSync(agentLogDir, { recursive: true });
-
-				// Pass agentName + overstoryDir so spawnHeadlessAgent routes the
-				// child's stdin through a per-agent FIFO. This is what makes the
-				// agent reachable for mail injection and nudge AFTER ov sling exits
-				// — the FIFO file persists; out-of-process writers open it on
-				// demand. See src/agents/headless-stdin.ts and overstory-41eb.
-				const headlessProc = await spawnHeadlessAgent(argv, {
-					cwd: worktreePath,
-					env: { ...(process.env as Record<string, string>), ...directEnv },
-					stdoutFile: join(agentLogDir, "stdout.log"),
-					stderrFile: join(agentLogDir, "stderr.log"),
-					agentName: name,
-					overstoryDir,
-				});
-
-				// 12b. Write initial stdin prompt (SessionStart hook equivalent for headless agents).
-				// Combines prime context, pending inbox mail, and the activation beacon into
-				// a single stream-json user turn. Replaces the SessionStart hooks (ov prime +
-				// ov mail check --inject) that fire in tmux mode but not in headless mode.
-				{
-					const pendingMailStore = createMailStore(join(overstoryDir, "mail.db"));
-					try {
-						const pendingMailClient = createMailClient(pendingMailStore);
-						const pendingMessages = pendingMailClient.check(name);
-						const mailSection = formatMailSection(pendingMessages);
-						const beacon = buildBeacon({
-							agentName: name,
-							capability,
-							taskId,
-							parentAgent,
-							depth,
-							instructionPath: runtime.instructionPath,
-						});
-						const initialPrompt = buildInitialHeadlessPrompt(
-							mulchExpertise,
-							mailSection || undefined,
-							beacon,
-						);
-						await headlessProc.stdin.write(initialPrompt);
-					} finally {
-						pendingMailStore.close();
-					}
+				// Build the initial prompt (mulch expertise + pending mail + beacon)
+				// as the first user turn.
+				const pendingMailStore = createMailStore(join(overstoryDir, "mail.db"));
+				let initialPrompt: string;
+				try {
+					const pendingMailClient = createMailClient(pendingMailStore);
+					const pendingMessages = pendingMailClient.check(name);
+					const mailSection = formatMailSection(pendingMessages);
+					const beacon = buildBeacon({
+						agentName: name,
+						capability,
+						taskId,
+						parentAgent,
+						depth,
+						instructionPath: runtime.instructionPath,
+					});
+					initialPrompt = buildInitialHeadlessPrompt(
+						mulchExpertise,
+						mailSection || undefined,
+						beacon,
+					);
+				} finally {
+					pendingMailStore.close();
 				}
 
-				// 13. Record session with empty tmuxSession (no tmux pane for headless agents).
-				// Carry priorClaudeSessionId on the upsert so a respawn never clobbers an
-				// existing claude_session_id back to NULL (mulch mx-5c5ae6 — sessions.upsert
-				// ON CONFLICT writes every column, not just the changed ones).
+				// 13. Record session BEFORE runTurn so the runner reads it under its
+				// lock. pid is null — there is no persistent process; the runner
+				// publishes a per-turn PID via .overstory/agents/<name>/turn.pid for
+				// the duration of each turn. Carry priorClaudeSessionId (mx-5c5ae6).
 				const session: AgentSession = {
 					id: `session-${Date.now()}-${name}`,
 					agentName: name,
@@ -1082,7 +1017,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					taskId: taskId,
 					tmuxSession: "",
 					state: "booting",
-					pid: headlessProc.pid,
+					pid: null,
 					parentAgent: parentAgent,
 					depth,
 					runId,
@@ -1102,38 +1037,24 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 					runStore.close();
 				}
 
-				// 13b. Spawn a detached "exit watcher" subprocess that polls the agent
-				// PID and finalizes the session (state -> completed, session_end event,
-				// FIFO cleanup, lead auto-nudge) when the process dies. Headless mode
-				// deploys only PreToolUse security guards (overstory-e24b), so the
-				// per-turn `ov log session-end` Stop hook never fires; without this
-				// watcher, SessionStore stays at 'working' indefinitely after a clean
-				// exit (overstory-267e). Best-effort: failure here is non-fatal — the
-				// agent still runs, and `ov stop` or the watchdog can reap state later.
-				try {
-					const overstoryBin = await resolveOverstoryBin();
-					const watcher = Bun.spawn(
-						[
-							"bun",
-							"run",
-							overstoryBin,
-							"__watch-exit",
-							"--pid",
-							String(headlessProc.pid),
-							"--agent",
-							name,
-						],
-						{
-							cwd: config.project.root,
-							stdout: "ignore",
-							stderr: "ignore",
-							stdin: "ignore",
-						},
-					);
-					watcher.unref();
-				} catch {
-					// Non-fatal: see comment above
-				}
+				// Drive the first user turn synchronously. runTurn manages spawn,
+				// stdin write+EOF, event drain, session_id capture, terminal-mail
+				// detection, and state transition.
+				const turnResult = await runTurn({
+					agentName: name,
+					capability,
+					overstoryDir,
+					worktreePath,
+					projectRoot: config.project.root,
+					taskId,
+					userTurnNdjson: initialPrompt,
+					runtime,
+					resolvedModel,
+					runId,
+					mailDbPath: join(overstoryDir, "mail.db"),
+					eventsDbPath: join(overstoryDir, "events.db"),
+					sessionsDbPath: join(overstoryDir, "sessions.db"),
+				});
 
 				// 14. Output result (headless)
 				if (opts.json ?? false) {
@@ -1144,14 +1065,19 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 						branch: branchName,
 						worktree: worktreePath,
 						tmuxSession: "",
-						pid: headlessProc.pid,
+						pid: null,
+						initialTurnFinalState: turnResult.finalState,
+						claudeSessionId: turnResult.newSessionId,
 					});
 				} else {
-					printSuccess("Agent launched (headless)", name);
-					process.stdout.write(`   Task:     ${taskId}\n`);
-					process.stdout.write(`   Branch:   ${branchName}\n`);
-					process.stdout.write(`   Worktree: ${worktreePath}\n`);
-					process.stdout.write(`   PID:      ${headlessProc.pid}\n`);
+					printSuccess("Agent launched (headless, spawn-per-turn)", name);
+					process.stdout.write(`   Task:                  ${taskId}\n`);
+					process.stdout.write(`   Branch:                ${branchName}\n`);
+					process.stdout.write(`   Worktree:              ${worktreePath}\n`);
+					process.stdout.write(`   First-turn state:      ${turnResult.finalState}\n`);
+					if (turnResult.newSessionId) {
+						process.stdout.write(`   Claude session id:     ${turnResult.newSessionId}\n`);
+					}
 				}
 			} else {
 				// 11c. Preflight: verify tmux is available before attempting session creation

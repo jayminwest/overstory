@@ -52,8 +52,19 @@ unchanged.
 
 | Mode | Spawn path | I/O | Visibility | When to use |
 |------|------------|-----|------------|-------------|
-| **headless** (default, new projects) | `src/worktree/process.ts` -> `Bun.spawn` | NDJSON stream-json on stdout, redirected to log file | `ov serve` web UI (primary), `ov logs --agent <name>`, `ov feed` | Default. UI-driven swarms, CI environments, containers without tmux/DBus, structured per-tool-call event fidelity. |
+| **headless** (default, new projects) | `src/agents/turn-runner.ts` -> `Bun.spawn` per turn (spawn-per-turn for task-scoped workers); `src/worktree/process.ts` -> `Bun.spawn` for long-lived headless capabilities (coordinator/orchestrator/monitor) | NDJSON stream-json on stdout (per-turn log dir for workers; single log file for long-lived) | `ov serve` web UI (primary), `ov logs --agent <name>`, `ov feed` | Default. UI-driven swarms, CI environments, containers without tmux/DBus, structured per-tool-call event fidelity. |
 | **tmux** (opt-in escape hatch) | `src/worktree/tmux.ts` -> `tmux new-session` | Pane content (capture-pane) | `tmux attach` from operator shell | Operator wants to attach and watch / steer a single agent mid-session. Legacy projects pre-default-flip. |
+
+Under headless mode, **task-scoped workers (builder, scout, reviewer, merger,
+lead) use the spawn-per-turn engine** (overstory-2cf9 / Phase 3). There is no
+long-lived process between turns: each user turn (initial dispatch, mail batch,
+nudge) spawns a fresh claude with `--resume <session-id>` via
+`src/agents/turn-runner.ts`, writes the turn to a real stdin pipe, drains
+stream-json into `events.db`, and exits on EOF. The runner observes the
+agent's terminal mail (`worker_done` for builder/scout/reviewer/lead;
+`merged`/`merge_failed` for merger) and transitions the session to
+`completed`. Persistent capabilities (coordinator, orchestrator, monitor) keep
+their long-lived process and continue to use `src/worktree/process.ts`.
 
 Selection is per-spawn:
 

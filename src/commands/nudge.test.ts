@@ -364,104 +364,12 @@ describe("nudgeAgent with headless connection", () => {
 	});
 });
 
-describe("nudgeAgent FIFO path", () => {
-	async function importNudge() {
-		return await import("./nudge.ts");
-	}
-
-	const fifoFds: number[] = [];
-	const fifoAgents: string[] = [];
-	const readers: Array<{ kill: () => void; exited: Promise<number> }> = [];
-
-	afterEach(async () => {
-		for (const reader of readers.splice(0)) {
-			reader.kill();
-			await reader.exited;
-		}
-		const { closeSync } = await import("node:fs");
-		for (const fd of fifoFds.splice(0)) {
-			try {
-				closeSync(fd);
-			} catch {}
-		}
-		const { removeAgentFifo } = await import("../agents/headless-stdin.ts");
-		for (const name of fifoAgents.splice(0)) {
-			removeAgentFifo(join(tempDir, ".overstory"), name);
-		}
-	});
-
-	test("delivers nudge through agent FIFO when present", async () => {
-		const { createAgentFifo } = await import("../agents/headless-stdin.ts");
-		const overstoryDir = join(tempDir, ".overstory");
-		mkdirSync(overstoryDir, { recursive: true });
-
-		const captureFile = join(tempDir, "fifo-capture.txt");
-		const scriptPath = join(tempDir, "fifo-reader.ts");
-		const { writeFileSync } = await import("node:fs");
-		writeFileSync(
-			scriptPath,
-			`import { openSync, writeSync, closeSync } from "node:fs";
-			 const out = openSync(${JSON.stringify(captureFile)}, "w");
-			 for await (const chunk of Bun.stdin.stream()) {
-			   writeSync(out, chunk);
-			 }
-			 closeSync(out);
-			`,
-		);
-
-		const fd = createAgentFifo(overstoryDir, "fifo-agent");
-		fifoFds.push(fd);
-		fifoAgents.push("fifo-agent");
-
-		const reader = Bun.spawn(["bun", "run", scriptPath], {
-			stdin: fd,
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		readers.push(reader);
-		await new Promise((r) => setTimeout(r, 200));
-
-		const { nudgeAgent } = await importNudge();
-		const result = await nudgeAgent(tempDir, "fifo-agent", "fifo-test", true);
-
-		expect(result.delivered).toBe(true);
-		expect(result.queued).toBe(true);
-
-		// Verify the FIFO reader saw the encoded user turn.
-		await new Promise((r) => setTimeout(r, 200));
-		const { readFileSync } = await import("node:fs");
-		const captured = readFileSync(captureFile, "utf-8");
-		expect(captured).toContain("fifo-test");
-		const parsed = JSON.parse(captured.trimEnd());
-		expect(parsed.type).toBe("user");
-	});
-
-	test("returns no-reader error when FIFO exists but agent is not reading", async () => {
-		const { createAgentFifo } = await import("../agents/headless-stdin.ts");
-		const overstoryDir = join(tempDir, ".overstory");
-		mkdirSync(overstoryDir, { recursive: true });
-
-		// Create the FIFO but never spawn a reader. closeSync drops our RDWR
-		// handle, leaving the FIFO with no readers.
-		const fd = createAgentFifo(overstoryDir, "deaf-agent");
-		fifoAgents.push("deaf-agent");
-		const { closeSync } = await import("node:fs");
-		closeSync(fd);
-
-		const { nudgeAgent } = await importNudge();
-		const result = await nudgeAgent(tempDir, "deaf-agent", "hi", true);
-
-		expect(result.delivered).toBe(false);
-		expect(result.reason).toContain("not reading");
-	});
-});
-
 describe("nudgeAgent spawn-per-turn dispatch", () => {
 	async function importNudge() {
 		return await import("./nudge.ts");
 	}
 
-	function fakeLoadConfig(claudeSpawnPerTurn: boolean): typeof import("../config.ts").loadConfig {
+	function fakeLoadConfig(): typeof import("../config.ts").loadConfig {
 		return (async (root: string) => ({
 			project: { name: "test", root, canonicalBranch: "main" },
 			agents: {
@@ -487,7 +395,7 @@ describe("nudgeAgent spawn-per-turn dispatch", () => {
 			},
 			models: {},
 			logging: { verbose: false, redactSecrets: true },
-			runtime: { default: "claude", claudeSpawnPerTurn },
+			runtime: { default: "claude" },
 			providers: {},
 		})) as unknown as typeof import("../config.ts").loadConfig;
 	}
@@ -530,7 +438,7 @@ describe("nudgeAgent spawn-per-turn dispatch", () => {
 				cleanResult: true,
 				newSessionId: null,
 				resumeMismatch: false,
-				workerDoneObserved: false,
+				terminalMailObserved: false,
 				durationMs: 1,
 				initialState: "booting" as const,
 				finalState: "working" as const,
@@ -539,7 +447,7 @@ describe("nudgeAgent spawn-per-turn dispatch", () => {
 
 		const { nudgeAgent } = await importNudge();
 		const result = await nudgeAgent(tempDir, "test-agent", "please pivot", true, {
-			_loadConfig: fakeLoadConfig(true),
+			_loadConfig: fakeLoadConfig(),
 			_runTurnFn: stubRunTurn,
 		});
 
@@ -550,38 +458,7 @@ describe("nudgeAgent spawn-per-turn dispatch", () => {
 		expect(parsed.message.content[0].text).toBe("please pivot");
 	});
 
-	test("falls back to legacy paths when flag is off", async () => {
-		writeSessionsToStore(tempDir, [makeSession({ state: "working", capability: "builder" })]);
-		await writeManifest(tempDir);
-
-		let runTurnCalled = false;
-		const stubRunTurn = async () => {
-			runTurnCalled = true;
-			return {
-				exitCode: 0,
-				cleanResult: true,
-				newSessionId: null,
-				resumeMismatch: false,
-				workerDoneObserved: false,
-				durationMs: 1,
-				initialState: "booting" as const,
-				finalState: "working" as const,
-			};
-		};
-
-		const { nudgeAgent } = await importNudge();
-		const result = await nudgeAgent(tempDir, "test-agent", "ping", true, {
-			_loadConfig: fakeLoadConfig(false),
-			_runTurnFn: stubRunTurn,
-		});
-
-		expect(runTurnCalled).toBe(false);
-		// Falls through to tmux path → "not alive" because no real tmux session
-		expect(result.delivered).toBe(false);
-		expect(result.reason).toContain("not alive");
-	});
-
-	test("non-builder capability is not routed to spawn-per-turn even with flag on", async () => {
+	test("task-scoped non-builder capability (scout) IS routed to spawn-per-turn", async () => {
 		writeSessionsToStore(tempDir, [
 			makeSession({ state: "working", capability: "scout", agentName: "scout-1" }),
 		]);
@@ -595,7 +472,7 @@ describe("nudgeAgent spawn-per-turn dispatch", () => {
 				cleanResult: true,
 				newSessionId: null,
 				resumeMismatch: false,
-				workerDoneObserved: false,
+				terminalMailObserved: false,
 				durationMs: 1,
 				initialState: "booting" as const,
 				finalState: "working" as const,
@@ -604,7 +481,37 @@ describe("nudgeAgent spawn-per-turn dispatch", () => {
 
 		const { nudgeAgent } = await importNudge();
 		await nudgeAgent(tempDir, "scout-1", "ping", true, {
-			_loadConfig: fakeLoadConfig(true),
+			_loadConfig: fakeLoadConfig(),
+			_runTurnFn: stubRunTurn,
+		});
+
+		expect(runTurnCalled).toBe(true);
+	});
+
+	test("persistent capability (coordinator) is NOT routed to spawn-per-turn", async () => {
+		writeSessionsToStore(tempDir, [
+			makeSession({ state: "working", capability: "coordinator", agentName: "coord-1" }),
+		]);
+		await writeManifest(tempDir);
+
+		let runTurnCalled = false;
+		const stubRunTurn = async () => {
+			runTurnCalled = true;
+			return {
+				exitCode: 0,
+				cleanResult: true,
+				newSessionId: null,
+				resumeMismatch: false,
+				terminalMailObserved: false,
+				durationMs: 1,
+				initialState: "booting" as const,
+				finalState: "working" as const,
+			};
+		};
+
+		const { nudgeAgent } = await importNudge();
+		await nudgeAgent(tempDir, "coord-1", "ping", true, {
+			_loadConfig: fakeLoadConfig(),
 			_runTurnFn: stubRunTurn,
 		});
 
@@ -621,7 +528,7 @@ describe("nudgeAgent spawn-per-turn dispatch", () => {
 
 		const { nudgeAgent } = await importNudge();
 		const result = await nudgeAgent(tempDir, "test-agent", "ping", true, {
-			_loadConfig: fakeLoadConfig(true),
+			_loadConfig: fakeLoadConfig(),
 			_runTurnFn: stubRunTurn,
 		});
 

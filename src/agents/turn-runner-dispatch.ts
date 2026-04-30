@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { getRuntime } from "../runtimes/registry.ts";
 import type { AgentRuntime } from "../runtimes/types.ts";
 import type { AgentManifest, AgentSession, OverstoryConfig, ResolvedModel } from "../types.ts";
+import { isTaskScopedCapability } from "./capabilities.ts";
 import { resolveModel } from "./manifest.ts";
 import type { RunTurnOpts } from "./turn-runner.ts";
 
@@ -61,6 +62,7 @@ export function buildRunTurnOptsFactory(input: BuildOptsFactoryInput): BuiltOpts
 
 	const build = (userTurnNdjson: string): RunTurnOpts => ({
 		agentName: session.agentName,
+		capability: session.capability,
 		overstoryDir,
 		worktreePath: session.worktreePath,
 		projectRoot: config.project.root,
@@ -80,18 +82,22 @@ export function buildRunTurnOptsFactory(input: BuildOptsFactoryInput): BuiltOpts
 /**
  * Predicate: is this agent eligible for spawn-per-turn dispatch?
  *
- * Phase 2 capability gate: only builders with `runtime.claudeSpawnPerTurn`
- * enabled and a runtime that implements `buildDirectSpawn`/`parseEvents`
- * (today: claude). Non-terminal state required — completed/zombie sessions
- * are never re-spawned.
+ * Capability gate: any task-scoped worker (builder, scout, reviewer, merger,
+ * lead — see {@link isTaskScopedCapability}) running on a runtime that
+ * implements `buildDirectSpawn`/`parseEvents` (today: claude). Non-terminal
+ * state required — completed/zombie sessions are never re-spawned.
+ *
+ * `_config` is unused at this layer (the project-level gate flag was removed in
+ * Phase 3 once spawn-per-turn became the only path for task-scoped Claude) but
+ * the parameter is preserved so call sites that already thread config in don't
+ * need to change.
  */
 export function isSpawnPerTurnAgent(
 	session: AgentSession,
-	config: OverstoryConfig,
+	_config: OverstoryConfig,
 	runtime: AgentRuntime,
 ): boolean {
-	if (config.runtime?.claudeSpawnPerTurn !== true) return false;
-	if (session.capability !== "builder") return false;
+	if (!isTaskScopedCapability(session.capability)) return false;
 	if (session.state === "completed" || session.state === "zombie") return false;
 	if (typeof runtime.buildDirectSpawn !== "function") return false;
 	if (typeof runtime.parseEvents !== "function") return false;

@@ -12,13 +12,14 @@
  * With --clean-worktree, completed agents skip the kill step and proceed to cleanup.
  */
 
+import { unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { removeAgentFifo } from "../agents/headless-stdin.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { printSuccess, printWarning } from "../logging/color.ts";
 import { openSessionStore } from "../sessions/compat.ts";
+import { readPidFile } from "../utils/pid.ts";
 import { removeWorktree } from "../worktree/manager.ts";
 import { isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
 
@@ -116,19 +117,34 @@ export async function stopCommand(
 		}
 
 		const isZombie = session.state === "zombie";
-		const isHeadless = session.tmuxSession === "" && session.pid !== null;
+		// Headless task-scoped agents (Phase 3 spawn-per-turn): tmuxSession is ""
+		// and session.pid is null between turns. The live PID for an in-flight
+		// turn is published at .overstory/agents/<name>/turn.pid. Sapling RPC
+		// agents still use session.pid for their long-lived process.
+		const isHeadless = session.tmuxSession === "";
+		const turnPidPath = join(overstoryDir, "agents", agentName, "turn.pid");
 
 		let tmuxKilled = false;
 		let pidKilled = false;
 
 		// Skip kill operations for already-completed agents (process/tmux already gone)
 		if (!isAlreadyCompleted) {
-			if (isHeadless && session.pid !== null) {
-				// Headless agent: kill via process tree instead of tmux
-				const alive = proc.isAlive(session.pid);
-				if (alive) {
-					await proc.killTree(session.pid);
+			if (isHeadless) {
+				// Prefer the per-turn PID file (Phase 3) — this catches an in-flight
+				// claude turn for any task-scoped capability. Fall back to the
+				// session row's pid for legacy/long-lived headless runtimes (Sapling).
+				const turnPid = await readPidFile(turnPidPath);
+				const targetPid = turnPid ?? session.pid;
+				if (targetPid !== null && proc.isAlive(targetPid)) {
+					await proc.killTree(targetPid);
 					pidKilled = true;
+				}
+				// Reap the turn.pid file so a subsequent ov stop / mail injector
+				// doesn't see a stale entry. Idempotent.
+				try {
+					await unlink(turnPidPath);
+				} catch {
+					// already gone — non-fatal
 				}
 			} else {
 				// TUI agent: kill via tmux session
@@ -142,13 +158,6 @@ export async function stopCommand(
 			// Mark session as completed
 			store.updateState(agentName, "completed");
 			store.updateLastActivity(agentName);
-
-			// Reap the per-agent stdin FIFO. Headless agents spawned via ov sling
-			// own a FIFO under .overstory/agents/<name>/stdin.fifo for cross-process
-			// signal delivery; once we kill the agent it is no longer reading and
-			// the file should be removed so ov serve's mail injector can drop the
-			// loop. Idempotent and safe for tmux agents (no-op if FIFO absent).
-			removeAgentFifo(overstoryDir, agentName);
 
 			// Auto-nudge coordinator when a lead truly completes so it wakes up
 			// to process merge_ready / worker_done messages without waiting for

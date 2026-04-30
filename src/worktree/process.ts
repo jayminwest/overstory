@@ -1,16 +1,18 @@
 /**
  * Headless subprocess management for non-tmux agent runtimes.
  *
- * Used by `ov sling` when runtime.headless === true to bypass tmux entirely.
- * Provides spawnHeadlessAgent() for direct Bun.spawn() invocation of
- * headless agent processes (e.g., Sapling running with --json).
+ * Used by long-lived headless runtimes that bypass tmux (e.g., Sapling running
+ * with --json). Provides spawnHeadlessAgent() for direct Bun.spawn() invocation.
+ *
+ * Headless Claude Code does NOT use this path — under spawn-per-turn (Phase 3),
+ * Claude agents have no persistent process; each turn spawns a fresh claude
+ * inside `runTurn` (src/agents/turn-runner.ts). This module remains for
+ * runtimes that genuinely need a long-lived RPC channel.
  *
  * Note: isProcessAlive() and killProcessTree() for headless process lifecycle
  * management already exist in src/worktree/tmux.ts — not duplicated here.
  */
 
-import { writeSync } from "node:fs";
-import { createAgentFifo } from "../agents/headless-stdin.ts";
 import { AgentError } from "../errors.ts";
 import { registerHeadlessConnection } from "../runtimes/connections.ts";
 
@@ -61,22 +63,14 @@ export interface SpawnHeadlessOptions {
 	 */
 	stderrFile?: string;
 	/**
-	 * When set together with `overstoryDir`, route the subprocess's stdin through
-	 * a per-agent FIFO under `{overstoryDir}/agents/{agentName}/stdin.fifo`. This
-	 * lets out-of-process callers (ov serve mail injector, ov nudge) deliver
-	 * post-spawn input after `ov sling` exits.
-	 *
-	 * When set without `overstoryDir`, this still registers the in-process
-	 * RuntimeConnection for legacy/test paths but does NOT create a FIFO.
+	 * When set, registers the spawned process as a `RuntimeConnection` keyed by
+	 * this agent name (sibling of Sapling's RPC connect() flow). Lets `ov nudge`,
+	 * the watchdog's liveness/abort path, etc. find the live process via
+	 * `getConnection(agentName)`.
 	 *
 	 * Same namespace as AgentSession.agentName.
 	 */
 	agentName?: string;
-	/**
-	 * Absolute path to the project's `.overstory/` directory. Required to enable
-	 * the per-agent stdin FIFO when `agentName` is set; ignored otherwise.
-	 */
-	overstoryDir?: string;
 }
 
 /**
@@ -115,61 +109,21 @@ export async function spawnHeadlessAgent(
 	const stdoutTarget = opts.stdoutFile ? Bun.file(opts.stdoutFile) : "pipe";
 	const stderrTarget = opts.stderrFile ? Bun.file(opts.stderrFile) : "pipe";
 
-	// FIFO stdin path: when both agentName and overstoryDir are set, route the
-	// child's stdin through a named FIFO so writers in OTHER processes (ov serve
-	// mail injection, ov nudge) can deliver input after this process exits. The
-	// caller keeps the RDWR fd open as the "spawn-time" writer for the initial
-	// prompt; it closes when this process exits, leaving the agent and any
-	// future external writers as the FIFO's sole participants.
-	const useFifoStdin = opts.agentName !== undefined && opts.overstoryDir !== undefined;
-	const fifoFd = useFifoStdin
-		? createAgentFifo(opts.overstoryDir as string, opts.agentName as string)
-		: null;
-
-	// stdin handle: when using a FIFO, write through writeSync(fifoFd, ...). The
-	// caller's RDWR fd is the "spawn-time writer" — it keeps the FIFO unblocked
-	// during the initial prompt write and then closes when the spawner process
-	// exits. Out-of-process writers (mail injector, nudge) take over afterward
-	// via writeToAgentFifo(). Blocking writes here intentionally: the initial
-	// prompt can exceed PIPE_BUF, and blocking handles backpressure correctly.
-	let proc: ReturnType<typeof Bun.spawn>;
-	let stdin: HeadlessProcess["stdin"];
-	if (fifoFd !== null) {
-		proc = Bun.spawn([cmd, ...args], {
-			cwd: opts.cwd,
-			env: opts.env,
-			stdout: stdoutTarget,
-			stderr: stderrTarget,
-			stdin: fifoFd,
-		});
-		stdin = {
-			write(data: string | Uint8Array): number {
-				const buf = typeof data === "string" ? new TextEncoder().encode(data) : data;
-				return writeSync(fifoFd, buf);
-			},
-		};
-	} else {
-		proc = Bun.spawn([cmd, ...args], {
-			cwd: opts.cwd,
-			env: opts.env,
-			stdout: stdoutTarget,
-			stderr: stderrTarget,
-			stdin: "pipe",
-		});
-		stdin = proc.stdin as HeadlessProcess["stdin"];
-	}
+	const proc = Bun.spawn([cmd, ...args], {
+		cwd: opts.cwd,
+		env: opts.env,
+		stdout: stdoutTarget,
+		stderr: stderrTarget,
+		stdin: "pipe",
+	});
 
 	const result: HeadlessProcess = {
 		pid: proc.pid,
-		stdin,
+		stdin: proc.stdin as HeadlessProcess["stdin"],
 		stdout: opts.stdoutFile ? null : (proc.stdout as ReadableStream<Uint8Array>),
 	};
 
-	// Keep the in-process registry path for legacy/test callers (Sapling and the
-	// existing serve.test.ts cases that drive registerHeadlessConnection
-	// directly). The FIFO is the production cross-process path for headless
-	// Claude — see installMailInjectors in src/commands/serve.ts.
-	if (opts.agentName && !useFifoStdin) {
+	if (opts.agentName) {
 		registerHeadlessConnection(opts.agentName, result);
 	}
 

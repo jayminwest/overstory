@@ -114,6 +114,7 @@ describe("buildRunTurnOptsFactory", () => {
 
 		const opts = factory.build('{"type":"user"}\n');
 		expect(opts.agentName).toBe("build-agent-1");
+		expect(opts.capability).toBe("builder");
 		expect(opts.worktreePath).toBe("/tmp/wt-build");
 		expect(opts.taskId).toBe("task-1");
 		expect(opts.runId).toBe("run-abc");
@@ -124,61 +125,58 @@ describe("buildRunTurnOptsFactory", () => {
 		expect(opts.userTurnNdjson).toBe('{"type":"user"}\n');
 		expect(opts.runtime).toBe(runtime);
 	});
+
+	test("threads merger capability through to runTurn opts", () => {
+		const session = makeSession({ capability: "merger", agentName: "merge-1" });
+		const factory = buildRunTurnOptsFactory({
+			session,
+			config: makeConfig(),
+			manifest: makeManifest(),
+			overstoryDir: "/tmp/proj/.overstory",
+			_getRuntime: () => fakeRuntime(),
+			_resolveModel: () => ({ model: "claude-sonnet", isExplicitOverride: false }),
+		});
+		expect(factory.build("x").capability).toBe("merger");
+	});
 });
 
 describe("isSpawnPerTurnAgent", () => {
 	const runtime = fakeRuntime();
+	const config = makeConfig();
 
-	test("returns true for builder + flag on + non-terminal + claude runtime", () => {
+	test("returns true for a builder in non-terminal state on a claude-like runtime", () => {
 		const ok = isSpawnPerTurnAgent(
 			makeSession({ capability: "builder", state: "working" }),
-			makeConfig({ runtime: { default: "claude", claudeSpawnPerTurn: true } }),
+			config,
 			runtime,
 		);
 		expect(ok).toBe(true);
 	});
 
-	test("returns false when flag is off", () => {
-		const off = isSpawnPerTurnAgent(
-			makeSession(),
-			makeConfig({ runtime: { default: "claude", claudeSpawnPerTurn: false } }),
-			runtime,
-		);
-		expect(off).toBe(false);
+	test("admits all task-scoped capabilities (scout, reviewer, merger, lead, builder)", () => {
+		for (const cap of ["builder", "scout", "reviewer", "merger", "lead"]) {
+			expect(isSpawnPerTurnAgent(makeSession({ capability: cap }), config, runtime)).toBe(true);
+		}
 	});
 
-	test("returns false for non-builder capabilities", () => {
-		const scout = isSpawnPerTurnAgent(
-			makeSession({ capability: "scout" }),
-			makeConfig({ runtime: { default: "claude", claudeSpawnPerTurn: true } }),
-			runtime,
-		);
-		expect(scout).toBe(false);
+	test("rejects persistent capabilities (coordinator, orchestrator, monitor)", () => {
+		for (const cap of ["coordinator", "orchestrator", "monitor"]) {
+			expect(isSpawnPerTurnAgent(makeSession({ capability: cap }), config, runtime)).toBe(false);
+		}
 	});
 
 	test("returns false for terminal states (completed, zombie)", () => {
-		const config = makeConfig({ runtime: { default: "claude", claudeSpawnPerTurn: true } });
 		expect(isSpawnPerTurnAgent(makeSession({ state: "completed" }), config, runtime)).toBe(false);
 		expect(isSpawnPerTurnAgent(makeSession({ state: "zombie" }), config, runtime)).toBe(false);
 	});
 
 	test("returns false when runtime cannot direct-spawn", () => {
 		const noDirectSpawn = fakeRuntime({ buildDirectSpawn: undefined });
-		const result = isSpawnPerTurnAgent(
-			makeSession(),
-			makeConfig({ runtime: { default: "claude", claudeSpawnPerTurn: true } }),
-			noDirectSpawn,
-		);
-		expect(result).toBe(false);
+		expect(isSpawnPerTurnAgent(makeSession(), config, noDirectSpawn)).toBe(false);
 	});
 
 	test("returns false when runtime cannot parseEvents", () => {
 		const noParser = fakeRuntime({ parseEvents: undefined });
-		const result = isSpawnPerTurnAgent(
-			makeSession(),
-			makeConfig({ runtime: { default: "claude", claudeSpawnPerTurn: true } }),
-			noParser,
-		);
-		expect(result).toBe(false);
+		expect(isSpawnPerTurnAgent(makeSession(), config, noParser)).toBe(false);
 	});
 });

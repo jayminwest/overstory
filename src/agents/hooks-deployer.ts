@@ -708,11 +708,13 @@ export async function deployHooks(
 	// Parse the base config from the template
 	const config = JSON.parse(content) as { hooks: Record<string, HookEntry[]> };
 
-	// Headless mode: drop all template-derived hook entries (overstory-e24b).
-	// The template's SessionStart/UserPromptSubmit/PostToolUse/Stop/PreCompact/PreToolUse
-	// commands are either redundant with the stream-json parser or have headless equivalents
-	// (initial stdin prompt, mail injection loop). The dynamic security guards added below
-	// are the only PreToolUse entries we keep.
+	// Headless mode: drop all template-derived hook entries.
+	// Under spawn-per-turn (Phase 3, overstory-2cf9), the turn-runner provides
+	// the user prompt and emits its own observability events for every turn;
+	// the template's SessionStart/UserPromptSubmit/PostToolUse/Stop/PreCompact
+	// hooks would either double-deliver mail (UserPromptSubmit re-injects on top
+	// of the runner's prompt) or duplicate session_end / per-tool events.
+	// Only the dynamic PreToolUse security guards added below are retained.
 	if (headlessOnly) {
 		config.hooks = {};
 	}

@@ -21,7 +21,6 @@
  */
 
 import { join } from "node:path";
-import { removeAgentFifo } from "../agents/headless-stdin.ts";
 import { nudgeAgent } from "../commands/nudge.ts";
 import { createEventStore } from "../events/store.ts";
 import {
@@ -612,8 +611,6 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 				store.updateState(session.agentName, "zombie");
 				// Reset escalation tracking on terminal state
 				store.updateEscalation(session.agentName, 0, null);
-				// Reap the headless stdin FIFO. Idempotent and safe for tmux agents.
-				removeAgentFifo(join(root, ".overstory"), session.agentName);
 				session.state = "zombie";
 				session.escalationLevel = 0;
 				session.stalledSince = null;
@@ -683,7 +680,6 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 				if (actionResult.terminated) {
 					store.updateState(session.agentName, "zombie");
 					store.updateEscalation(session.agentName, 0, null);
-					removeAgentFifo(join(root, ".overstory"), session.agentName);
 					session.state = "zombie";
 					session.escalationLevel = 0;
 					session.stalledSince = null;
