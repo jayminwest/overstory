@@ -7,7 +7,38 @@
  */
 
 import { Database } from "bun:sqlite";
-import type { AgentSession, AgentState, InsertRun, Run, RunStatus, RunStore } from "../types.ts";
+import type {
+	AgentSession,
+	AgentState,
+	InsertRun,
+	Run,
+	RunStatus,
+	RunStore,
+	TransitionOutcome,
+} from "../types.ts";
+
+/**
+ * Allowed predecessor states for each target state, enforced by
+ * `tryTransitionState` via an atomic SQL compare-and-swap.
+ *
+ * Invariants:
+ *   - `completed` is sticky: nothing transitions out of it. The watchdog cannot
+ *     reclassify a properly-completed agent as zombie.
+ *   - `zombie` is durable except `ov stop` may promote it to `completed` for
+ *     cleanup. A turn-runner that "settles to working" after watchdog already
+ *     wrote zombie is rejected — last writer no longer wins.
+ *   - Idempotent self-transitions (e.g. `working → working`) are allowed.
+ *   - `booting` is set only by the initial `upsert` and never re-entered.
+ *
+ * See overstory-a993 for the race symptoms this guard prevents.
+ */
+const TRANSITION_ALLOWED_FROM: Record<AgentState, readonly AgentState[]> = {
+	booting: [],
+	working: ["booting", "working", "stalled"],
+	stalled: ["booting", "working", "stalled"],
+	completed: ["booting", "working", "stalled", "zombie", "completed"],
+	zombie: ["booting", "working", "stalled", "zombie"],
+};
 
 export interface SessionStore {
 	/** Insert or update a session. Uses agent_name as the unique key. */
@@ -22,8 +53,24 @@ export interface SessionStore {
 	count(): number;
 	/** Get sessions belonging to a specific run. */
 	getByRun(runId: string): AgentSession[];
-	/** Update only the state of a session. */
+	/**
+	 * Update only the state of a session.
+	 *
+	 * Unconditional override — does not validate the prev → next transition.
+	 * Reserved for forced cleanup paths (`ov clean`, `ov sling` startup failure,
+	 * supervisor/coordinator/monitor self-management). For race-prone writers
+	 * (turn-runner settle, `ov stop`, watchdog), use `tryTransitionState`.
+	 */
 	updateState(agentName: string, state: AgentState): void;
+	/**
+	 * Atomically transition a session's state, validated against the matrix in
+	 * `TRANSITION_ALLOWED_FROM`. Implemented as a single `UPDATE ... WHERE state
+	 * IN (...)` so concurrent writers cannot both succeed against the same row.
+	 *
+	 * Returns a discriminated outcome describing whether the write landed and,
+	 * on rejection, whether the row was missing or the transition was illegal.
+	 */
+	tryTransitionState(agentName: string, newState: AgentState): TransitionOutcome;
 	/** Update lastActivity to current ISO timestamp. */
 	updateLastActivity(agentName: string): void;
 	/** Update escalation level and stalled timestamp. */
@@ -314,6 +361,24 @@ export function createSessionStore(dbPath: string): SessionStore {
 		UPDATE sessions SET state = $state WHERE agent_name = $agent_name
 	`);
 
+	// Per-target-state CAS statements. The IN-list values come from a static
+	// matrix we control (TRANSITION_ALLOWED_FROM), so inlining as literals is
+	// safe and lets bun:sqlite re-use the prepared plan without dynamic params.
+	const tryTransitionStmts = (() => {
+		const stmts: Partial<
+			Record<AgentState, ReturnType<typeof db.prepare<void, { $agent_name: string }>>>
+		> = {};
+		for (const target of Object.keys(TRANSITION_ALLOWED_FROM) as AgentState[]) {
+			const allowed = TRANSITION_ALLOWED_FROM[target];
+			if (allowed.length === 0) continue;
+			const inList = allowed.map((s) => `'${s}'`).join(",");
+			stmts[target] = db.prepare<void, { $agent_name: string }>(
+				`UPDATE sessions SET state = '${target}' WHERE agent_name = $agent_name AND state IN (${inList})`,
+			);
+		}
+		return stmts;
+	})();
+
 	const updateLastActivityStmt = db.prepare<void, { $agent_name: string; $last_activity: string }>(`
 		UPDATE sessions SET last_activity = $last_activity WHERE agent_name = $agent_name
 	`);
@@ -401,6 +466,37 @@ export function createSessionStore(dbPath: string): SessionStore {
 
 		updateState(agentName: string, state: AgentState): void {
 			updateStateStmt.run({ $agent_name: agentName, $state: state });
+		},
+
+		tryTransitionState(agentName: string, newState: AgentState): TransitionOutcome {
+			// Read prev for diagnostic accuracy before the CAS. The read is racy
+			// against another writer landing first, but the CAS that follows is
+			// authoritative — `changes === 0` means the CAS rejected against
+			// whatever the row holds NOW, regardless of what we read here.
+			const before = getByNameStmt.get({ $agent_name: agentName });
+			if (before === null) {
+				return { ok: false, reason: "not_found", attempted: newState };
+			}
+			const stmt = tryTransitionStmts[newState];
+			if (stmt !== undefined) {
+				const result = stmt.run({ $agent_name: agentName });
+				if (result.changes > 0) {
+					return { ok: true, prev: before.state as AgentState, next: newState };
+				}
+			}
+			// CAS rejected (or no stmt for this target, e.g. booting). Re-read to
+			// report the state that actually blocked us — another writer may have
+			// landed between our `before` read and the CAS.
+			const after = getByNameStmt.get({ $agent_name: agentName });
+			if (after === null) {
+				return { ok: false, reason: "not_found", attempted: newState };
+			}
+			return {
+				ok: false,
+				reason: "illegal_transition",
+				prev: after.state as AgentState,
+				attempted: newState,
+			};
 		},
 
 		updateLastActivity(agentName: string): void {

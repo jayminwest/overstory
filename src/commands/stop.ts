@@ -155,8 +155,12 @@ export async function stopCommand(
 				}
 			}
 
-			// Mark session as completed
-			store.updateState(agentName, "completed");
+			// Mark session as completed via the guarded transition. `completed` is
+			// reachable from every non-completed state (including zombie, so `ov
+			// stop` can promote a watchdog-flagged zombie to a clean completion),
+			// so the only way this rejects is if state is already `completed` —
+			// which is the no-op we want anyway. Race-safe under overstory-a993.
+			store.tryTransitionState(agentName, "completed");
 			store.updateLastActivity(agentName);
 
 			// Auto-nudge coordinator when a lead truly completes so it wakes up

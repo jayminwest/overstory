@@ -259,16 +259,37 @@ function checkTerminalMailSince(
 	}
 }
 
+/**
+ * Guarded state transition for the turn runner. Uses the SessionStore CAS
+ * (`tryTransitionState`) so a concurrent writer — `ov stop` writing
+ * `completed`, watchdog writing `zombie` — cannot be silently overwritten
+ * by the turn-runner's "settle to working/completed/zombie" at end of turn.
+ *
+ * Returns true when the transition landed. Rejected transitions are not
+ * fatal: the SQL CAS preserves whatever the conflicting writer set, which
+ * is the correct outcome for this race (overstory-a993).
+ *
+ * `onError` fires on database/IO failure. `onRejected` fires when the CAS
+ * rejected the transition (the row exists but was in a state that disallowed
+ * the move). Both are diagnostic-only — the caller need not recover.
+ */
 function updateSessionState(
 	sessionsDbPath: string,
 	agentName: string,
 	state: AgentState,
 	onError?: (err: unknown) => void,
+	onRejected?: (prev: AgentState, attempted: AgentState) => void,
 ): boolean {
 	try {
 		const store = createSessionStore(sessionsDbPath);
 		try {
-			store.updateState(agentName, state);
+			const outcome = store.tryTransitionState(agentName, state);
+			if (!outcome.ok) {
+				if (outcome.reason === "illegal_transition") {
+					onRejected?.(outcome.prev, outcome.attempted);
+				}
+				return false;
+			}
 		} finally {
 			store.close();
 		}
@@ -652,8 +673,16 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 
 				if (!bootedToWorking && initialState === "booting") {
 					bootedToWorking = true;
-					updateSessionState(sessionsDbPath, agentName, "working", (err) =>
-						runnerLog("warn", "failed to transition booting → working", err),
+					updateSessionState(
+						sessionsDbPath,
+						agentName,
+						"working",
+						(err) => runnerLog("warn", "failed to transition booting → working", err),
+						(prev, attempted) =>
+							runnerLog(
+								"warn",
+								`booting → working rejected: state is now ${prev} (attempted ${attempted})`,
+							),
 					);
 				}
 
@@ -722,8 +751,16 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 		}
 
 		if (finalState !== initialState) {
-			updateSessionState(sessionsDbPath, agentName, finalState, (err) =>
-				runnerLog("warn", `failed to transition state to ${finalState}`, err),
+			updateSessionState(
+				sessionsDbPath,
+				agentName,
+				finalState,
+				(err) => runnerLog("warn", `failed to transition state to ${finalState}`, err),
+				(prev, attempted) =>
+					runnerLog(
+						"warn",
+						`turn-end transition ${initialState} → ${attempted} rejected: state is now ${prev}`,
+					),
 			);
 		}
 		// `lastActivity` advancing past `startedAt` is a turn-cleanup contract

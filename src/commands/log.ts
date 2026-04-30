@@ -67,8 +67,12 @@ function updateLastActivity(projectRoot: string, agentName: string): void {
 			const session = store.getByName(agentName);
 			if (session) {
 				store.updateLastActivity(agentName);
-				if (session.state === "booting" || session.state === "zombie") {
-					store.updateState(agentName, "working");
+				// Tool-use observed: try booting → working. Matrix-guarded so a
+				// zombie classification (set by watchdog) is NOT silently revived
+				// here — that revival was a contributor to the schizophrenic
+				// state=zombie + tool-use-active symptom in overstory-a993.
+				if (session.state === "booting") {
+					store.tryTransitionState(agentName, "working");
 				}
 			}
 		} finally {

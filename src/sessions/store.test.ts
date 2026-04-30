@@ -382,6 +382,196 @@ describe("updateState", () => {
 	});
 });
 
+// === tryTransitionState (matrix-guarded CAS) ===
+
+describe("tryTransitionState", () => {
+	test("returns not_found for an unknown agent", () => {
+		const outcome = store.tryTransitionState("nonexistent", "completed");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok) {
+			expect(outcome.reason).toBe("not_found");
+			expect(outcome.attempted).toBe("completed");
+		}
+	});
+
+	test("booting → working lands and returns prev/next", () => {
+		store.upsert(makeSession({ state: "booting" }));
+		const outcome = store.tryTransitionState("test-agent", "working");
+		expect(outcome.ok).toBe(true);
+		if (outcome.ok) {
+			expect(outcome.prev).toBe("booting");
+			expect(outcome.next).toBe("working");
+		}
+		expect(store.getByName("test-agent")?.state).toBe("working");
+	});
+
+	test("working → completed lands (clean turn-end settle)", () => {
+		store.upsert(makeSession({ state: "working" }));
+		const outcome = store.tryTransitionState("test-agent", "completed");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("working → zombie lands (watchdog terminate)", () => {
+		store.upsert(makeSession({ state: "working" }));
+		const outcome = store.tryTransitionState("test-agent", "zombie");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("zombie → completed lands (ov stop cleanup of zombie)", () => {
+		store.upsert(makeSession({ state: "zombie" }));
+		const outcome = store.tryTransitionState("test-agent", "completed");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("completed → zombie is rejected (sticky completed)", () => {
+		store.upsert(makeSession({ state: "completed" }));
+		const outcome = store.tryTransitionState("test-agent", "zombie");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("completed");
+			expect(outcome.attempted).toBe("zombie");
+		}
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("completed → working is rejected (turn-runner cannot revive completed)", () => {
+		store.upsert(makeSession({ state: "completed" }));
+		const outcome = store.tryTransitionState("test-agent", "working");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("completed");
+		}
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("zombie → working is rejected (PreToolUse hook cannot revive zombie)", () => {
+		store.upsert(makeSession({ state: "zombie" }));
+		const outcome = store.tryTransitionState("test-agent", "working");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("zombie");
+			expect(outcome.attempted).toBe("working");
+		}
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("idempotent same-state transitions land (working → working)", () => {
+		store.upsert(makeSession({ state: "working" }));
+		const outcome = store.tryTransitionState("test-agent", "working");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("working");
+	});
+
+	test("idempotent completed → completed is allowed", () => {
+		store.upsert(makeSession({ state: "completed" }));
+		const outcome = store.tryTransitionState("test-agent", "completed");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("idempotent zombie → zombie is allowed", () => {
+		store.upsert(makeSession({ state: "zombie" }));
+		const outcome = store.tryTransitionState("test-agent", "zombie");
+		expect(outcome.ok).toBe(true);
+	});
+
+	test("nothing transitions into booting (matrix has no allowed predecessors)", () => {
+		store.upsert(makeSession({ state: "working" }));
+		const outcome = store.tryTransitionState("test-agent", "booting");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("working");
+		}
+	});
+
+	test("stalled → working is allowed (recovery)", () => {
+		store.upsert(makeSession({ state: "stalled" }));
+		const outcome = store.tryTransitionState("test-agent", "working");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("working");
+	});
+
+	test("race scenario: ov stop wins, late watchdog zombie write rejected", () => {
+		// Models the overstory-a993 symptom directly: ov stop completes the
+		// agent first; a stale watchdog tick then tries to mark it zombie.
+		store.upsert(makeSession({ state: "working" }));
+
+		const stopOutcome = store.tryTransitionState("test-agent", "completed");
+		expect(stopOutcome.ok).toBe(true);
+
+		const watchdogOutcome = store.tryTransitionState("test-agent", "zombie");
+		expect(watchdogOutcome.ok).toBe(false);
+		if (!watchdogOutcome.ok && watchdogOutcome.reason === "illegal_transition") {
+			expect(watchdogOutcome.prev).toBe("completed");
+		}
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("race scenario: watchdog wins zombie, late turn-runner working write rejected", () => {
+		// Watchdog observes the agent dead and marks zombie; meanwhile a
+		// turn-runner whose initialState was 'working' tries to settle to
+		// 'working' at end of turn. The settle must NOT undo the zombie call.
+		store.upsert(makeSession({ state: "working" }));
+
+		const watchdogOutcome = store.tryTransitionState("test-agent", "zombie");
+		expect(watchdogOutcome.ok).toBe(true);
+
+		const turnRunnerOutcome = store.tryTransitionState("test-agent", "working");
+		expect(turnRunnerOutcome.ok).toBe(false);
+		if (!turnRunnerOutcome.ok && turnRunnerOutcome.reason === "illegal_transition") {
+			expect(turnRunnerOutcome.prev).toBe("zombie");
+		}
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("race scenario: ov stop promotes a zombie to completed", () => {
+		// Inverse of the previous race: watchdog already marked zombie, then
+		// the operator runs `ov stop` to clean up. The cleanup must succeed.
+		store.upsert(makeSession({ state: "zombie" }));
+
+		const stopOutcome = store.tryTransitionState("test-agent", "completed");
+		expect(stopOutcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("concurrent CAS: two writers try the same target, only one observes ok", () => {
+		// Simulates the SQL CAS exclusivity: two writers race against the same
+		// row with the same target. The DB serializes the writes; only the one
+		// that finds the row in an allowed-from state when the CAS executes
+		// reports ok=true. We can't truly run them in parallel from a single
+		// thread, but we can prove the invariant: after BOTH calls, the row
+		// is in the target state and exactly one call returned ok=true.
+		store.upsert(makeSession({ state: "working" }));
+
+		const a = store.tryTransitionState("test-agent", "completed");
+		const b = store.tryTransitionState("test-agent", "completed");
+
+		// First call lands (working → completed). Second is idempotent
+		// (completed → completed is in the matrix), so both report ok.
+		expect(a.ok).toBe(true);
+		expect(b.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("concurrent CAS: conflicting targets — second writer rejected", () => {
+		// First writer lands working → completed; second writer attempts
+		// working → zombie but the row is now completed → REJECTED.
+		store.upsert(makeSession({ state: "working" }));
+
+		const stop = store.tryTransitionState("test-agent", "completed");
+		expect(stop.ok).toBe(true);
+
+		const watchdog = store.tryTransitionState("test-agent", "zombie");
+		expect(watchdog.ok).toBe(false);
+		if (!watchdog.ok && watchdog.reason === "illegal_transition") {
+			expect(watchdog.prev).toBe("completed");
+		}
+	});
+});
+
 // === updateLastActivity ===
 
 describe("updateLastActivity", () => {

@@ -578,11 +578,20 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 			}
 			const check = evaluateHealth(session, tmuxAlive, thresholds);
 
-			// Transition state forward only (investigate action holds state)
+			// Transition state forward only (investigate action holds state).
+			// `transitionState` computes the watchdog's preferred target;
+			// `tryTransitionState` is the matrix-guarded CAS — `completed → *`
+			// is rejected here so a properly-completed agent cannot be
+			// reclassified as zombie by a late watchdog tick (overstory-a993).
 			const newState = transitionState(session.state, check);
 			if (newState !== session.state) {
-				store.updateState(session.agentName, newState);
-				session.state = newState;
+				const outcome = store.tryTransitionState(session.agentName, newState);
+				if (outcome.ok) {
+					session.state = newState;
+				} else if (outcome.reason === "illegal_transition") {
+					// Resync local mirror — another writer settled state durably.
+					session.state = outcome.prev;
+				}
 			}
 
 			if (onHealthCheck) {
@@ -603,10 +612,17 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 					getConnection: getConn,
 					removeConnection: removeConn,
 				});
-				store.updateState(session.agentName, "zombie");
+				// Matrix-guarded: rejected when state is `completed` so a clean
+				// `ov stop` cannot be silently downgraded to zombie by a late
+				// watchdog termination (overstory-a993).
+				const outcome = store.tryTransitionState(session.agentName, "zombie");
 				// Reset escalation tracking on terminal state
 				store.updateEscalation(session.agentName, 0, null);
-				session.state = "zombie";
+				if (outcome.ok) {
+					session.state = "zombie";
+				} else if (outcome.reason === "illegal_transition") {
+					session.state = outcome.prev;
+				}
 				session.escalationLevel = 0;
 				session.stalledSince = null;
 			} else if (check.action === "investigate") {
@@ -673,9 +689,14 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 				});
 
 				if (actionResult.terminated) {
-					store.updateState(session.agentName, "zombie");
+					// Matrix-guarded: completed → zombie is rejected (overstory-a993).
+					const outcome = store.tryTransitionState(session.agentName, "zombie");
 					store.updateEscalation(session.agentName, 0, null);
-					session.state = "zombie";
+					if (outcome.ok) {
+						session.state = "zombie";
+					} else if (outcome.reason === "illegal_transition") {
+						session.state = outcome.prev;
+					}
 					session.escalationLevel = 0;
 					session.stalledSince = null;
 				}

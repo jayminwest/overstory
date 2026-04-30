@@ -188,6 +188,22 @@ export type Capability = (typeof SUPPORTED_CAPABILITIES)[number];
 
 export type AgentState = "booting" | "working" | "completed" | "stalled" | "zombie";
 
+/**
+ * Result of a guarded state transition attempt (`SessionStore.tryTransitionState`).
+ *
+ * Discriminated by `ok`. When `ok` is false, `reason` distinguishes:
+ *   - `not_found`: no session exists for the given name.
+ *   - `illegal_transition`: a session exists but the matrix forbids prev → attempted.
+ *
+ * `prev` is always the state observed by the SQL CAS. For `illegal_transition` it
+ * is the state that blocked the write (which may differ from what the caller read,
+ * if another writer landed first).
+ */
+export type TransitionOutcome =
+	| { ok: true; prev: AgentState; next: AgentState }
+	| { ok: false; reason: "not_found"; attempted: AgentState }
+	| { ok: false; reason: "illegal_transition"; prev: AgentState; attempted: AgentState };
+
 export interface AgentSession {
 	id: string; // Unique session ID
 	agentName: string; // Unique per-session name
