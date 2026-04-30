@@ -92,14 +92,21 @@ function migrateSchema(db: Database): void {
 	const hasPayloadColumn = row.sql.includes("payload");
 	const hasProtocolTypes = row.sql.includes("worker_done");
 	const hasDecisionGate = row.sql.includes("decision_gate");
+	const hasWorkerDied = row.sql.includes("worker_died");
 
 	// If schema is fully up to date, nothing to do
-	if (hasCheckConstraints && hasPayloadColumn && hasProtocolTypes && hasDecisionGate) {
+	if (
+		hasCheckConstraints &&
+		hasPayloadColumn &&
+		hasProtocolTypes &&
+		hasDecisionGate &&
+		hasWorkerDied
+	) {
 		return;
 	}
 
 	// If only missing the payload column (has correct CHECK constraints), use ALTER TABLE
-	if (hasCheckConstraints && hasProtocolTypes && !hasPayloadColumn) {
+	if (hasCheckConstraints && hasProtocolTypes && hasWorkerDied && !hasPayloadColumn) {
 		db.exec("ALTER TABLE messages ADD COLUMN payload TEXT");
 		return;
 	}

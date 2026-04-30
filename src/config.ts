@@ -90,6 +90,7 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		rpcTimeoutMs: 5_000, // 5 seconds for RPC getState() calls
 		triageTimeoutMs: 30_000, // 30 seconds for Tier 1 AI triage calls
 		maxEscalationLevel: 3, // Maximum escalation level before termination
+		notifyParentOnDeath: true, // Send worker_died mail to parent when watchdog terminates a child
 	},
 	coordinator: {
 		exitTriggers: {
@@ -631,6 +632,16 @@ function validateConfig(config: OverstoryConfig): void {
 				value: config.watchdog.maxEscalationLevel,
 			});
 		}
+	}
+
+	if (
+		config.watchdog.notifyParentOnDeath !== undefined &&
+		typeof config.watchdog.notifyParentOnDeath !== "boolean"
+	) {
+		throw new ValidationError("watchdog.notifyParentOnDeath must be a boolean", {
+			field: "watchdog.notifyParentOnDeath",
+			value: config.watchdog.notifyParentOnDeath,
+		});
 	}
 
 	// mulch.primeFormat must be one of the valid options

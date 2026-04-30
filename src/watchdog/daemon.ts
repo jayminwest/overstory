@@ -35,7 +35,7 @@ import { createMulchClient } from "../mulch/client.ts";
 import { getConnection, removeConnection } from "../runtimes/connections.ts";
 import type { RuntimeConnection } from "../runtimes/types.ts";
 import { openSessionStore } from "../sessions/compat.ts";
-import type { AgentSession, EventStore, HealthCheck } from "../types.ts";
+import type { AgentSession, EventStore, HealthCheck, WorkerDiedPayload } from "../types.ts";
 import { isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
 import { evaluateHealth, transitionState } from "./health.ts";
 import { type TriageResult, triageAgent } from "./triage.ts";
@@ -264,6 +264,13 @@ export interface DaemonOptions {
 	zombieThresholdMs: number;
 	nudgeIntervalMs?: number;
 	tier1Enabled?: boolean;
+	/**
+	 * When true (default), the watchdog sends a synthetic `worker_died` mail to
+	 * `session.parentAgent` the first time it transitions a session to `zombie`
+	 * (overstory-c111). Without this, the parent — typically a lead waiting for
+	 * `worker_done` — blocks indefinitely on mail that will never arrive.
+	 */
+	notifyParentOnDeath?: boolean;
 	onHealthCheck?: (check: HealthCheck) => void;
 	/** Dependency injection for testing. Uses real implementations when omitted. */
 	_tmux?: {
@@ -418,6 +425,70 @@ async function killAgent(ctx: {
 }
 
 /**
+ * Send a synthetic `worker_died` mail to the parent of a watchdog-terminated
+ * session (overstory-c111). Fire-and-forget: never throws.
+ *
+ * Called only when `tryTransitionState(..., "zombie")` returns `ok: true`, so
+ * the state-machine's idempotence dedupes us — a subsequent watchdog tick that
+ * tries to re-zombify a session sees `illegal_transition` and skips notify.
+ */
+function notifyParentOfDeath(ctx: {
+	session: AgentSession;
+	mailStore: MailStore | null;
+	reason: string;
+	tier: 0 | 1;
+	eventStore: EventStore | null;
+	runId: string | null;
+}): void {
+	const { session, mailStore, reason, tier, eventStore, runId } = ctx;
+	if (mailStore === null) return;
+	if (session.parentAgent === null) return;
+
+	const payload: WorkerDiedPayload = {
+		agentName: session.agentName,
+		capability: session.capability,
+		taskId: session.taskId,
+		reason,
+		lastActivity: session.lastActivity,
+		terminatedBy: tier === 0 ? "tier0" : "tier1",
+	};
+
+	try {
+		mailStore.insert({
+			id: "",
+			from: session.agentName,
+			to: session.parentAgent,
+			subject: `[WATCHDOG] worker_died: ${session.agentName}`,
+			body:
+				`Worker "${session.agentName}" (${session.capability}) on task ${session.taskId} ` +
+				`was terminated by the watchdog. Reason: ${reason}. ` +
+				`Last activity: ${session.lastActivity}. ` +
+				`Decide whether to retry the work, escalate, or report the failure upstream.`,
+			type: "worker_died",
+			priority: "high",
+			threadId: null,
+			payload: JSON.stringify(payload),
+		});
+	} catch {
+		// Mail-send failure must never crash the watchdog.
+		return;
+	}
+
+	recordEvent(eventStore, {
+		runId,
+		agentName: session.agentName,
+		eventType: "mail_sent",
+		level: "warn",
+		data: {
+			type: "worker_died",
+			parent: session.parentAgent,
+			reason,
+			tier,
+		},
+	});
+}
+
+/**
  * Run a single daemon tick. Exported for testing — allows direct invocation
  * of the monitoring logic without starting the interval-based daemon loop.
  *
@@ -430,6 +501,7 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 		zombieThresholdMs,
 		nudgeIntervalMs = 60_000,
 		tier1Enabled = false,
+		notifyParentOnDeath = true,
 		onHealthCheck,
 	} = options;
 	const tmux = options._tmux ?? { isSessionAlive, killSession };
@@ -578,6 +650,12 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 			}
 			const check = evaluateHealth(session, tmuxAlive, thresholds);
 
+			// Snapshot the pre-tick state so the worker_died notify path can
+			// dedupe across re-ticks (overstory-c111). Subsequent `tryTransitionState`
+			// calls below mutate session.state, and the matrix allows the idempotent
+			// `zombie → zombie` self-transition — both would erase the dedup signal.
+			const stateBeforeTick = session.state;
+
 			// Transition state forward only (investigate action holds state).
 			// `transitionState` computes the watchdog's preferred target;
 			// `tryTransitionState` is the matrix-guarded CAS — `completed → *`
@@ -620,6 +698,21 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 				store.updateEscalation(session.agentName, 0, null);
 				if (outcome.ok) {
 					session.state = "zombie";
+					// First-time zombify: notify parent so it doesn't block on
+					// missing `worker_done` mail (overstory-c111). Dedup uses the
+					// pre-tick snapshot because the matrix allows the idempotent
+					// zombie → zombie transition (both `outcome.ok` and the earlier
+					// transitionState call would otherwise mask re-ticks).
+					if (notifyParentOnDeath && stateBeforeTick !== "zombie") {
+						notifyParentOfDeath({
+							session,
+							mailStore,
+							reason,
+							tier: 0,
+							eventStore,
+							runId,
+						});
+					}
 				} else if (outcome.reason === "illegal_transition") {
 					session.state = outcome.prev;
 				}
@@ -694,6 +787,19 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 					store.updateEscalation(session.agentName, 0, null);
 					if (outcome.ok) {
 						session.state = "zombie";
+						// First-time zombify: notify parent so it doesn't block on
+						// missing `worker_done` mail (overstory-c111). Dedup via
+						// the pre-tick snapshot — see the terminate branch above.
+						if (notifyParentOnDeath && stateBeforeTick !== "zombie") {
+							notifyParentOfDeath({
+								session,
+								mailStore,
+								reason: actionResult.deathReason ?? "Watchdog escalation terminated agent",
+								tier: actionResult.deathTier ?? 0,
+								eventStore,
+								runId,
+							});
+						}
 					} else if (outcome.reason === "illegal_transition") {
 						session.state = outcome.prev;
 					}
@@ -799,7 +905,13 @@ async function executeEscalationAction(ctx: {
 	) => Promise<void>;
 	getConnection: (name: string) => RuntimeConnection | undefined;
 	removeConnection: (name: string) => void;
-}): Promise<{ terminated: boolean; stateChanged: boolean }> {
+}): Promise<{
+	terminated: boolean;
+	stateChanged: boolean;
+	/** Reason and tier of the termination (only set when `terminated` is true). */
+	deathReason?: string;
+	deathTier?: 0 | 1;
+}> {
 	const {
 		session,
 		root,
@@ -892,13 +1004,8 @@ async function executeEscalationAction(ctx: {
 
 			if (result.verdict === "terminate") {
 				// Record the failure via mulch (Tier 1 AI triage)
-				await recordFailure(
-					root,
-					session,
-					"AI triage classified as terminal failure",
-					1,
-					result.verdict,
-				);
+				const triageReason = "AI triage classified as terminal failure";
+				await recordFailure(root, session, triageReason, 1, result.verdict);
 
 				await killAgent({
 					session,
@@ -908,7 +1015,12 @@ async function executeEscalationAction(ctx: {
 					getConnection: getConn,
 					removeConnection: removeConn,
 				});
-				return { terminated: true, stateChanged: true };
+				return {
+					terminated: true,
+					stateChanged: true,
+					deathReason: triageReason,
+					deathTier: 1,
+				};
 			}
 
 			if (result.verdict === "retry") {
@@ -941,7 +1053,8 @@ async function executeEscalationAction(ctx: {
 			});
 
 			// Record the failure via mulch (Tier 0: progressive escalation to terminal level)
-			await recordFailure(root, session, "Progressive escalation reached terminal level", 0);
+			const escalationReason = "Progressive escalation reached terminal level";
+			await recordFailure(root, session, escalationReason, 0);
 
 			await killAgent({
 				session,
@@ -951,7 +1064,12 @@ async function executeEscalationAction(ctx: {
 				getConnection: getConn,
 				removeConnection: removeConn,
 			});
-			return { terminated: true, stateChanged: true };
+			return {
+				terminated: true,
+				stateChanged: true,
+				deathReason: escalationReason,
+				deathTier: 0,
+			};
 		}
 	}
 }

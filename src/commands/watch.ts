@@ -244,6 +244,7 @@ async function runWatch(opts: {
 		zombieThresholdMs,
 		nudgeIntervalMs: config.watchdog.nudgeIntervalMs,
 		tier1Enabled: config.watchdog.tier1Enabled,
+		notifyParentOnDeath: config.watchdog.notifyParentOnDeath ?? true,
 		onHealthCheck(check) {
 			const timestamp = new Date().toISOString().slice(11, 19);
 			process.stdout.write(`[${timestamp}] ${formatCheck(check)}\n`);

@@ -83,6 +83,7 @@ export function parsePayload<T extends MailProtocolType>(
 /** Protocol types that represent structured coordination messages. */
 const PROTOCOL_TYPES = new Set<string>([
 	"worker_done",
+	"worker_died",
 	"merge_ready",
 	"merged",
 	"merge_failed",

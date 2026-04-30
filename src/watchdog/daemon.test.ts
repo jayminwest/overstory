@@ -19,9 +19,10 @@ import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEventStore } from "../events/store.ts";
+import { createMailStore } from "../mail/store.ts";
 import { createSessionStore } from "../sessions/store.ts";
 import { cleanupTempDir } from "../test-helpers.ts";
-import type { AgentSession, HealthCheck, StoredEvent } from "../types.ts";
+import type { AgentSession, HealthCheck, StoredEvent, WorkerDiedPayload } from "../types.ts";
 import { buildCompletionMessage, runDaemonTick, startDaemon } from "./daemon.ts";
 
 // === Test constants ===
@@ -2849,5 +2850,257 @@ describe("killAgent uses RuntimeConnection.abort() when available", () => {
 		// Agent is healthy (alive PID, fresh lastActivity, tmux fallback returns alive)
 		expect(checks).toHaveLength(1);
 		expect(checks[0]?.action).toBe("none");
+	});
+});
+
+// ============================================================
+// worker_died notification (overstory-c111)
+// ============================================================
+
+describe("worker_died parent notification", () => {
+	let tempRoot: string;
+
+	beforeEach(async () => {
+		tempRoot = await createTempRoot();
+	});
+
+	afterEach(async () => {
+		await cleanupTempDir(tempRoot);
+	});
+
+	test("terminate path sends worker_died mail to parentAgent on first zombify", async () => {
+		const session = makeSession({
+			agentName: "dead-builder",
+			capability: "builder",
+			parentAgent: "lead-1",
+			tmuxSession: "overstory-dead-builder",
+			state: "working",
+			lastActivity: new Date().toISOString(),
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const mailDb = join(tempRoot, ".overstory", "mail.db");
+		const mailStore = createMailStore(mailDb);
+
+		try {
+			await runDaemonTick({
+				root: tempRoot,
+				...THRESHOLDS,
+				_tmux: tmuxWithLiveness({ "overstory-dead-builder": false }),
+				_triage: triageAlways("extend"),
+				_recordFailure: async () => {},
+				_mailStore: mailStore,
+			});
+
+			const inbox = mailStore.getUnread("lead-1");
+			expect(inbox).toHaveLength(1);
+			const msg = inbox[0];
+			expect(msg).toBeDefined();
+			if (!msg) return;
+			expect(msg.type).toBe("worker_died");
+			expect(msg.from).toBe("dead-builder");
+			expect(msg.to).toBe("lead-1");
+			expect(msg.priority).toBe("high");
+			expect(msg.payload).not.toBeNull();
+			const payload = JSON.parse(msg.payload ?? "{}") as WorkerDiedPayload;
+			expect(payload.agentName).toBe("dead-builder");
+			expect(payload.capability).toBe("builder");
+			expect(payload.terminatedBy).toBe("tier0");
+			expect(payload.reason).toBeTruthy();
+		} finally {
+			mailStore.close();
+		}
+	});
+
+	test("orphan agent (parentAgent=null) receives no notification", async () => {
+		const session = makeSession({
+			agentName: "orphan-agent",
+			parentAgent: null,
+			tmuxSession: "overstory-orphan-agent",
+			state: "working",
+			lastActivity: new Date().toISOString(),
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const mailDb = join(tempRoot, ".overstory", "mail.db");
+		const mailStore = createMailStore(mailDb);
+
+		try {
+			await runDaemonTick({
+				root: tempRoot,
+				...THRESHOLDS,
+				_tmux: tmuxWithLiveness({ "overstory-orphan-agent": false }),
+				_triage: triageAlways("extend"),
+				_recordFailure: async () => {},
+				_mailStore: mailStore,
+			});
+
+			expect(mailStore.getAll({ type: "worker_died" })).toHaveLength(0);
+		} finally {
+			mailStore.close();
+		}
+	});
+
+	test("re-tick on already-zombie session does not send a second worker_died", async () => {
+		// Subsequent ticks see the session already in `zombie`. The state matrix
+		// rejects zombie → zombie transitions, so notify is gated on `outcome.ok`.
+		const session = makeSession({
+			agentName: "re-zombie-agent",
+			parentAgent: "lead-2",
+			tmuxSession: "overstory-re-zombie-agent",
+			state: "working",
+			lastActivity: new Date().toISOString(),
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const mailDb = join(tempRoot, ".overstory", "mail.db");
+		const mailStore = createMailStore(mailDb);
+
+		try {
+			const tickOpts = {
+				root: tempRoot,
+				...THRESHOLDS,
+				_tmux: tmuxWithLiveness({ "overstory-re-zombie-agent": false }),
+				_triage: triageAlways("extend"),
+				_recordFailure: async () => {},
+				_mailStore: mailStore,
+			};
+			await runDaemonTick(tickOpts);
+			await runDaemonTick(tickOpts);
+			await runDaemonTick(tickOpts);
+
+			expect(mailStore.getAll({ to: "lead-2", type: "worker_died" })).toHaveLength(1);
+		} finally {
+			mailStore.close();
+		}
+	});
+
+	test("notifyParentOnDeath=false suppresses the synthetic mail", async () => {
+		const session = makeSession({
+			agentName: "opt-out-agent",
+			parentAgent: "lead-3",
+			tmuxSession: "overstory-opt-out-agent",
+			state: "working",
+			lastActivity: new Date().toISOString(),
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const mailDb = join(tempRoot, ".overstory", "mail.db");
+		const mailStore = createMailStore(mailDb);
+
+		try {
+			await runDaemonTick({
+				root: tempRoot,
+				...THRESHOLDS,
+				notifyParentOnDeath: false,
+				_tmux: tmuxWithLiveness({ "overstory-opt-out-agent": false }),
+				_triage: triageAlways("extend"),
+				_recordFailure: async () => {},
+				_mailStore: mailStore,
+			});
+
+			expect(mailStore.getAll({ type: "worker_died" })).toHaveLength(0);
+			// State should still transition normally
+			const reloaded = readSessionsFromStore(tempRoot);
+			expect(reloaded[0]?.state).toBe("zombie");
+		} finally {
+			mailStore.close();
+		}
+	});
+
+	test("escalation-level-3 terminate also notifies parent with tier0 reason", async () => {
+		// Stalled agent with alive tmux: progressive escalation drives it to level 3
+		// terminate. The notify path runs through the escalation branch, not the
+		// `check.action === "terminate"` branch.
+		const stalledSince = new Date(Date.now() - 4 * 60_000).toISOString();
+		const lastActivity = new Date(Date.now() - 60_000).toISOString();
+		const session = makeSession({
+			agentName: "escalated-agent",
+			parentAgent: "coordinator",
+			tmuxSession: "overstory-escalated-agent",
+			state: "working",
+			lastActivity,
+			stalledSince,
+			escalationLevel: 3,
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const mailDb = join(tempRoot, ".overstory", "mail.db");
+		const mailStore = createMailStore(mailDb);
+
+		try {
+			await runDaemonTick({
+				root: tempRoot,
+				...THRESHOLDS,
+				nudgeIntervalMs: 60_000,
+				_tmux: tmuxWithLiveness({ "overstory-escalated-agent": true }),
+				_triage: triageAlways("extend"),
+				_nudge: async () => ({ delivered: true }),
+				_recordFailure: async () => {},
+				_mailStore: mailStore,
+			});
+
+			const inbox = mailStore.getUnread("coordinator");
+			expect(inbox).toHaveLength(1);
+			const msg = inbox[0];
+			if (!msg) return;
+			expect(msg.type).toBe("worker_died");
+			const payload = JSON.parse(msg.payload ?? "{}") as WorkerDiedPayload;
+			expect(payload.terminatedBy).toBe("tier0");
+			expect(payload.reason).toContain("Progressive escalation");
+		} finally {
+			mailStore.close();
+		}
+	});
+
+	test("tier1 triage terminate sets terminatedBy=tier1 in payload", async () => {
+		// stalledSince must produce expectedLevel==2 from nudgeIntervalMs=60_000:
+		// floor(stalledMs / 60_000) === 2 requires 2*60_000 <= stalledMs < 3*60_000.
+		const stalledSince = new Date(Date.now() - 150_000).toISOString();
+		const lastActivity = new Date(Date.now() - 60_000).toISOString();
+		const session = makeSession({
+			agentName: "triaged-agent",
+			parentAgent: "lead-triage",
+			tmuxSession: "overstory-triaged-agent",
+			state: "working",
+			lastActivity,
+			stalledSince,
+			escalationLevel: 2,
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const mailDb = join(tempRoot, ".overstory", "mail.db");
+		const mailStore = createMailStore(mailDb);
+
+		try {
+			await runDaemonTick({
+				root: tempRoot,
+				...THRESHOLDS,
+				nudgeIntervalMs: 60_000,
+				tier1Enabled: true,
+				_tmux: tmuxWithLiveness({ "overstory-triaged-agent": true }),
+				_triage: triageAlways("terminate"),
+				_nudge: async () => ({ delivered: true }),
+				_recordFailure: async () => {},
+				_mailStore: mailStore,
+			});
+
+			const inbox = mailStore.getUnread("lead-triage");
+			expect(inbox).toHaveLength(1);
+			const msg = inbox[0];
+			if (!msg) return;
+			expect(msg.type).toBe("worker_died");
+			const payload = JSON.parse(msg.payload ?? "{}") as WorkerDiedPayload;
+			expect(payload.terminatedBy).toBe("tier1");
+			expect(payload.reason).toContain("AI triage");
+		} finally {
+			mailStore.close();
+		}
 	});
 });

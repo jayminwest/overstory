@@ -108,6 +108,7 @@ export interface OverstoryConfig {
 		rpcTimeoutMs?: number; // Timeout for RPC getState() calls (default 5_000)
 		triageTimeoutMs?: number; // Timeout for Tier 1 AI triage calls (default 30_000)
 		maxEscalationLevel?: number; // Maximum escalation level before termination (default 3)
+		notifyParentOnDeath?: boolean; // Send synthetic worker_died mail to parent on watchdog termination (default true)
 	};
 	models: Partial<Record<string, ModelRef>>;
 	logging: {
@@ -249,6 +250,7 @@ export type MailSemanticType = "status" | "question" | "result" | "error";
 /** Protocol message types for structured agent coordination. */
 export type MailProtocolType =
 	| "worker_done"
+	| "worker_died"
 	| "merge_ready"
 	| "merged"
 	| "merge_failed"
@@ -268,6 +270,7 @@ export const MAIL_MESSAGE_TYPES: readonly MailMessageType[] = [
 	"result",
 	"error",
 	"worker_done",
+	"worker_died",
 	"merge_ready",
 	"merged",
 	"merge_failed",
@@ -300,6 +303,27 @@ export interface WorkerDonePayload {
 	branch: string;
 	exitCode: number;
 	filesModified: string[];
+}
+
+/**
+ * Watchdog signals the parent that one of its children was terminated.
+ *
+ * Synthetic mail injected by the Tier 0 daemon when it transitions a worker
+ * to `zombie` (overstory-c111). Without this, the parent — typically a lead
+ * waiting for `worker_done` from this child — would block indefinitely on
+ * mail that will never arrive. The parent reads this on its next mail-injector
+ * tick and decides whether to retry, escalate, or report up.
+ */
+export interface WorkerDiedPayload {
+	agentName: string;
+	capability: string;
+	taskId: string;
+	/** Reason the watchdog terminated the child (e.g. "Process terminated"). */
+	reason: string;
+	/** ISO timestamp of the child's last observed activity. */
+	lastActivity: string;
+	/** Watchdog tier that detected the failure. */
+	terminatedBy: "tier0" | "tier1";
 }
 
 /** Supervisor signals branch is verified and ready for merge. */
@@ -373,6 +397,7 @@ export interface DecisionGatePayload {
 /** Maps protocol message types to their payload interfaces. */
 export interface MailPayloadMap {
 	worker_done: WorkerDonePayload;
+	worker_died: WorkerDiedPayload;
 	merge_ready: MergeReadyPayload;
 	merged: MergedPayload;
 	merge_failed: MergeFailedPayload;
