@@ -28,7 +28,8 @@
 	"files": [
 		"src",
 		"agents",
-		"templates"
+		"templates",
+		"ui/dist"
 	],
 	"publishConfig": {
 		"access": "public"
@@ -41,7 +42,9 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsc --noEmit",
-		"version:bump": "bun scripts/version-bump.ts"
+		"version:bump": "bun scripts/version-bump.ts",
+		"build:ui": "cd ui && bun install && bun run build",
+		"prepack": "bun run build:ui"
 	},
 	"dependencies": {
 		"@os-eco/mulch-cli": "^0.6.2",

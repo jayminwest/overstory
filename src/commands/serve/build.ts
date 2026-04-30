@@ -6,6 +6,11 @@
  * node_modules is missing) followed by `bun run build` when so. Silent when
  * the existing build is up to date.
  *
+ * No-ops when the project has no `ui/src` directory — the production-install
+ * case where the user's project doesn't carry a UI workspace and is meant to
+ * serve the prebuilt assets shipped inside the @os-eco/overstory-cli package
+ * (see overstory-916d).
+ *
  * The runner and filesystem helpers are injectable so tests can drive the
  * decision logic without invoking real subprocess builds.
  */
@@ -141,6 +146,11 @@ export async function ensureUiBuild(opts: EnsureUiBuildOptions): Promise<void> {
 		((msg: string): void => {
 			process.stderr.write(`[ui-build] ${msg}\n`);
 		});
+
+	// Production-install case: when the project has no ui/src, there are no
+	// sources to build from. ov serve falls back to the prebuilt assets shipped
+	// inside the npm package — see resolveUiDistPath() in serve.ts.
+	if (!exists(join(opts.uiDir, "src"))) return;
 
 	const distIndex = join(opts.uiDir, "dist", "index.html");
 	let needBuild = false;

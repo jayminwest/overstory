@@ -165,6 +165,20 @@ describe("ensureUiBuild", () => {
 		expect(messages).toEqual(["Installing UI dependencies…", "Building UI…", "UI built"]);
 	});
 
+	test("no-ops when ui/src is absent (production-install case)", async () => {
+		// No setupUiDir() — tempDir has no ui/ at all, mirroring a fresh `ov init`
+		// in a project that doesn't carry a UI workspace (overstory-916d).
+		const uiDir = join(tempDir, "ui");
+
+		const messages: string[] = [];
+		const { runner, calls } = makeRunner([]);
+		await ensureUiBuild({ uiDir, _runner: runner, log: (m) => messages.push(m) });
+
+		// Neither install nor build runs, and no progress messages are emitted.
+		expect(calls.length).toBe(0);
+		expect(messages.length).toBe(0);
+	});
+
 	test("walks ui/src/ recursively and triggers on nested-file mtime", async () => {
 		const { uiDir } = setupUiDir(tempDir);
 		mkdirSync(join(uiDir, "node_modules"));

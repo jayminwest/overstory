@@ -136,7 +136,15 @@ describe("registerRestApi", () => {
 	async function startServer(): Promise<ReturnType<typeof Bun.serve>> {
 		const origCwd = process.cwd;
 		process.cwd = () => ctx.tempDir;
-		const server = await createServeServer({ port: 0, host: "127.0.0.1" }, { _restDeps: false });
+		// Force project-relative ui/dist resolution so tests asserting "no UI"
+		// don't accidentally serve the package-bundled fallback (overstory-916d).
+		const server = await createServeServer(
+			{ port: 0, host: "127.0.0.1" },
+			{
+				_restDeps: false,
+				_resolveUiDistPath: (root) => join(root, "ui", "dist"),
+			},
+		);
 		process.cwd = origCwd;
 		ctx.servers.push(server);
 		return server;

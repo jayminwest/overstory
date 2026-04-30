@@ -11,6 +11,7 @@ import {
 	installMailInjectors,
 	registerApiHandler,
 	registerWsHandler,
+	resolveUiDistPath,
 	runServe,
 } from "./serve.ts";
 
@@ -45,14 +46,28 @@ describe("createServeServer", () => {
 	});
 
 	async function startServer(
-		opts: { port?: number; host?: string } = {},
+		opts: {
+			port?: number;
+			host?: string;
+			resolveUiDistPath?: ((projectRoot: string) => string) | "default";
+		} = {},
 	): Promise<ReturnType<typeof Bun.serve>> {
 		const origCwd = process.cwd;
 		// Swap cwd so loadConfig resolves to tempDir
 		process.cwd = () => tempDir;
+		// Default to project-relative ui/dist so the package-bundled fallback
+		// (which exists in this dev repo) doesn't leak into tests that assert
+		// "no UI" semantics. Pass "default" to opt into the production resolver.
+		const resolveUiDist =
+			opts.resolveUiDistPath === "default"
+				? undefined
+				: (opts.resolveUiDistPath ?? ((root: string): string => join(root, "ui", "dist")));
 		const server = await createServeServer(
 			{ port: opts.port ?? 0, host: opts.host ?? "127.0.0.1" },
-			{ _restDeps: false },
+			{
+				_restDeps: false,
+				...(resolveUiDist ? { _resolveUiDistPath: resolveUiDist } : {}),
+			},
 		);
 		process.cwd = origCwd;
 		servers.push(server);
@@ -163,6 +178,28 @@ describe("createServeServer", () => {
 		// Non-upgrade request to /ws should return 404
 		const res = await fetch(`http://127.0.0.1:${server.port}/ws`);
 		expect(res.status).toBe(404);
+	});
+
+	test("resolveUiDistPath: prefers project ui/dist when present", () => {
+		const projectDist = join(tempDir, "ui", "dist");
+		mkdirSync(projectDist, { recursive: true });
+		expect(resolveUiDistPath(tempDir)).toBe(projectDist);
+	});
+
+	test("resolveUiDistPath: falls back to package-bundled ui/dist when project has no ui/", () => {
+		// tempDir has no ui/ — simulates fresh `ov init` (overstory-916d).
+		const resolved = resolveUiDistPath(tempDir);
+		expect(resolved).not.toBe(join(tempDir, "ui", "dist"));
+		// Resolves to the dev repo's own ui/dist (or wherever the package lives).
+		expect(resolved.endsWith("/ui/dist")).toBe(true);
+	});
+
+	test("static files: falls back to package-bundled ui/dist when project has no ui/", async () => {
+		// No project ui/dist — use the production resolver so the package fallback is exercised.
+		const server = await startServer({ resolveUiDistPath: "default" });
+		// The dev repo's ui/dist exists, so we get a real index.html (200), not 503.
+		const res = await fetch(`http://127.0.0.1:${server.port}/`);
+		expect(res.status).toBe(200);
 	});
 
 	test("registerWsHandler replaces previous handler", () => {

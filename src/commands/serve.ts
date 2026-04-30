@@ -97,6 +97,28 @@ export interface ServeDeps {
 	_startDevServer?: typeof startDevServer;
 	/** Skip the auto-build step entirely (test isolation). */
 	_skipAutoBuild?: boolean;
+	/**
+	 * Override ui/dist resolution. Default prefers `<projectRoot>/ui/dist`,
+	 * falling back to the prebuilt assets shipped inside the npm package. Tests
+	 * pass a stub returning a non-existent path to force the 503 branch in
+	 * serveStatic without depending on the dev repo's package layout.
+	 */
+	_resolveUiDistPath?: (projectRoot: string) => string;
+}
+
+/**
+ * Resolve the directory containing built UI assets. Prefers the project's own
+ * `ui/dist` (so overstory dev builds and project-local UI overrides win), and
+ * falls back to the prebuilt `ui/dist` shipped inside @os-eco/overstory-cli
+ * for production installs that have no `ui/` workspace (overstory-916d).
+ */
+export function resolveUiDistPath(
+	projectRoot: string,
+	_exists: typeof existsSync = existsSync,
+): string {
+	const projectDist = join(projectRoot, "ui", "dist");
+	if (_exists(projectDist)) return projectDist;
+	return new URL("../../ui/dist", import.meta.url).pathname;
 }
 
 /** Read the package version once at module load to avoid circular imports with index.ts. */
@@ -126,7 +148,8 @@ export async function createServeServer(
 
 	const port = opts.port ?? 8080;
 	const hostname = opts.host ?? "127.0.0.1";
-	const uiDistPath = join(config.project.root, "ui", "dist");
+	const _resolveUiDist = deps._resolveUiDistPath ?? resolveUiDistPath;
+	const uiDistPath = _resolveUiDist(config.project.root);
 	const startTime = performance.now();
 
 	// Register REST handlers before Bun.serve() — skip only for test isolation
