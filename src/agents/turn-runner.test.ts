@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,12 @@ import type { AgentRuntime, DirectSpawnOpts } from "../runtimes/types.ts";
 import { createSessionStore } from "../sessions/store.ts";
 import type { AgentSession, ResolvedModel } from "../types.ts";
 import { _resetInProcessLocks, readTurnLock } from "./turn-lock.ts";
-import { runTurn, type TurnSpawnFn, type TurnSubprocess } from "./turn-runner.ts";
+import {
+	type RunnerLogger,
+	runTurn,
+	type TurnSpawnFn,
+	type TurnSubprocess,
+} from "./turn-runner.ts";
 
 // ---------- fake subprocess plumbing ----------
 
@@ -220,6 +226,7 @@ function makeRunOpts(
 		sigkillDelayMs?: number;
 		runId?: string | null;
 		capability?: string;
+		_logWarning?: RunnerLogger;
 	},
 ): Parameters<typeof runTurn>[0] {
 	return {
@@ -244,7 +251,12 @@ function makeRunOpts(
 		...(overrides._spawnFn !== undefined ? { _spawnFn: overrides._spawnFn } : {}),
 		...(overrides.abortSignal !== undefined ? { abortSignal: overrides.abortSignal } : {}),
 		...(overrides.sigkillDelayMs !== undefined ? { sigkillDelayMs: overrides.sigkillDelayMs } : {}),
+		...(overrides._logWarning !== undefined ? { _logWarning: overrides._logWarning } : {}),
 	};
+}
+
+function turnPidPathFor(ctx: Ctx, agentName: string): string {
+	return join(ctx.overstoryDir, "agents", agentName, "turn.pid");
 }
 
 // ---------- tests ----------
@@ -810,5 +822,138 @@ describe("runTurn", () => {
 		await expect(runTurn(makeRunOpts(ctx, "no-build", { runtime: incomplete }))).rejects.toThrow(
 			/buildDirectSpawn/,
 		);
+	});
+
+	// ---------- cleanup-invariant tests (overstory-4af3) ----------
+	//
+	// The runner publishes turn.pid for cross-process abort and updates
+	// lastActivity at the end of every turn. Both must hold even when the
+	// inner SessionStore writes silently fail. These tests pin the cleanup
+	// contract so future regressions surface immediately.
+
+	test("happy path: turn.pid is removed and lastActivity advances past startedAt", async () => {
+		const startedAt = new Date(Date.now() - 60_000).toISOString();
+		seedSession(ctx.sessionsDbPath, {
+			agentName: "cleanup-ok",
+			state: "working",
+			startedAt,
+			lastActivity: startedAt,
+		});
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			emitFakeTurn(fake, { sessionId: "cleanup-ok-session" });
+			fake._exit(0);
+			return fake;
+		};
+
+		const result = await runTurn(makeRunOpts(ctx, "cleanup-ok", { runtime, _spawnFn: spawnFn }));
+
+		expect(result.exitCode).toBe(0);
+
+		const turnPidPath = turnPidPathFor(ctx, "cleanup-ok");
+		expect(existsSync(turnPidPath)).toBe(false);
+
+		const after = readSession(ctx.sessionsDbPath, "cleanup-ok");
+		expect(after?.lastActivity).not.toBe(startedAt);
+		expect(new Date(after?.lastActivity ?? 0).getTime()).toBeGreaterThan(
+			new Date(startedAt).getTime(),
+		);
+	});
+
+	test("spawn throws: turn.pid is never written and finally cleanup is a no-op", async () => {
+		seedSession(ctx.sessionsDbPath, { agentName: "spawn-fail", state: "booting" });
+		const { runtime } = makeSpyRuntime();
+		const failingSpawn: TurnSpawnFn = () => {
+			throw new Error("ENOENT: claude binary missing");
+		};
+
+		await expect(
+			runTurn(makeRunOpts(ctx, "spawn-fail", { runtime, _spawnFn: failingSpawn })),
+		).rejects.toThrow(/binary missing/);
+
+		expect(existsSync(turnPidPathFor(ctx, "spawn-fail"))).toBe(false);
+	});
+
+	test("parser throws: outer finally still runs and removes turn.pid", async () => {
+		seedSession(ctx.sessionsDbPath, { agentName: "parser-fail", state: "working" });
+
+		// Custom runtime whose parseEvents returns an async iterable that
+		// rejects on first read — mirrors a stream-json parse error mid-turn.
+		const base = new ClaudeRuntime();
+		const failingIterable: AsyncIterable<never> = {
+			[Symbol.asyncIterator](): AsyncIterator<never> {
+				return {
+					next(): Promise<IteratorResult<never>> {
+						return Promise.reject(new Error("synthetic stream-json parse error"));
+					},
+				};
+			},
+		};
+		const broken: AgentRuntime = {
+			...base,
+			id: base.id,
+			stability: base.stability,
+			instructionPath: base.instructionPath,
+			buildSpawnCommand: base.buildSpawnCommand.bind(base),
+			buildPrintCommand: base.buildPrintCommand.bind(base),
+			deployConfig: base.deployConfig.bind(base),
+			detectReady: base.detectReady.bind(base),
+			parseTranscript: base.parseTranscript.bind(base),
+			getTranscriptDir: base.getTranscriptDir.bind(base),
+			buildEnv: base.buildEnv.bind(base),
+			buildDirectSpawn: base.buildDirectSpawn.bind(base),
+			parseEvents: (() => failingIterable) as unknown as AgentRuntime["parseEvents"],
+		};
+
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			fake._exit(0);
+			return fake;
+		};
+
+		await expect(
+			runTurn(makeRunOpts(ctx, "parser-fail", { runtime: broken, _spawnFn: spawnFn })),
+		).rejects.toThrow(/synthetic stream-json/);
+
+		// Cleanup contract holds even on thrown parser.
+		expect(existsSync(turnPidPathFor(ctx, "parser-fail"))).toBe(false);
+	});
+
+	test("silent SessionStore failure surfaces as a runner warning", async () => {
+		seedSession(ctx.sessionsDbPath, { agentName: "ss-fail", state: "working" });
+		const { runtime } = makeSpyRuntime();
+
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			emitFakeTurn(fake, { sessionId: "ss-fail-session" });
+			fake._exit(0);
+			return fake;
+		};
+
+		const warnings: Array<{ level: string; message: string }> = [];
+		const logger: RunnerLogger = (level, message) => {
+			warnings.push({ level, message });
+		};
+
+		// Point sessionsDbPath at a path that exists as a DIRECTORY so every
+		// SessionStore open in the runner throws. The runner must keep going
+		// (cleanup contract) AND surface the failure via the logger.
+		const badSessionsPath = ctx.overstoryDir; // directory, not a db file
+		const opts = {
+			...makeRunOpts(ctx, "ss-fail", { runtime, _spawnFn: spawnFn, _logWarning: logger }),
+			sessionsDbPath: badSessionsPath,
+		};
+
+		await runTurn(opts);
+
+		// The lastActivity update silently failed (it's a directory, not a db),
+		// which is exactly the scenario that masked overstory-4af3. The runner
+		// must report the contract violation via _logWarning at error level.
+		const errors = warnings.filter((w) => w.level === "error");
+		expect(errors.some((w) => w.message.includes("lastActivity stayed at startedAt"))).toBe(true);
+
+		// turn.pid must still be cleaned up regardless.
+		expect(existsSync(turnPidPathFor(ctx, "ss-fail"))).toBe(false);
 	});
 });

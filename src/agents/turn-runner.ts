@@ -8,7 +8,9 @@
  *   - writes the user turn to a real stdin pipe and closes it (claude sees EOF)
  *   - drains `runtime.parseEvents` and tees events into events.db
  *   - captures the new session id via the parser's `onSessionId` hook
- *   - snapshots mail.db before spawn and detects new `worker_done` from the agent
+ *   - snapshots mail.db before spawn and detects the agent's capability-specific
+ *     terminal mail (`worker_done` for builder/scout/reviewer/lead;
+ *     `merged`/`merge_failed` for merger)
  *   - applies state-transition rules (booting → working, completed when done)
  *   - handles abort signals with SIGTERM → SIGKILL escalation
  *   - releases the lock on every exit path
@@ -23,7 +25,8 @@
  */
 
 import { Database } from "bun:sqlite";
-import { mkdir } from "node:fs/promises";
+import { appendFileSync, existsSync } from "node:fs";
+import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
@@ -31,6 +34,7 @@ import { filterToolArgs } from "../events/tool-filter.ts";
 import type { AgentEvent, AgentRuntime, DirectSpawnOpts } from "../runtimes/types.ts";
 import { createSessionStore } from "../sessions/store.ts";
 import type { AgentState, EventStore, EventType, ResolvedModel } from "../types.ts";
+import { terminalMailTypesFor } from "./capabilities.ts";
 import { acquireTurnLock } from "./turn-lock.ts";
 
 /** TODO(phase1): remove once `resumeSessionId` lives in `DirectSpawnOpts`. */
@@ -63,8 +67,24 @@ export type TurnSpawnFn = (
 	},
 ) => TurnSubprocess;
 
+/** Severity of an internal runner diagnostic. `error` indicates a contract violation. */
+export type RunnerLogLevel = "warn" | "error";
+
+/**
+ * Internal runner diagnostic sink. Replaces the swallowed `catch {}` blocks
+ * around SessionStore writes and turn.pid I/O so that future failures are
+ * visible (overstory-4af3). Test injection point.
+ */
+export type RunnerLogger = (level: RunnerLogLevel, message: string, err?: unknown) => void;
+
 export interface RunTurnOpts {
 	agentName: string;
+	/**
+	 * Worker capability driving terminal-mail detection (builder/scout/reviewer/
+	 * merger/lead). The runner uses {@link terminalMailTypesFor} to decide which
+	 * mail types signal completion for this agent.
+	 */
+	capability: string;
 	overstoryDir: string;
 	worktreePath: string;
 	projectRoot: string;
@@ -81,6 +101,12 @@ export interface RunTurnOpts {
 	_spawnFn?: TurnSpawnFn;
 	/** Test injection: time source. */
 	_now?: () => Date;
+	/**
+	 * Test injection: runner diagnostic sink. When omitted, warnings append to
+	 * `<turnLogDir>/runner.log` and mirror to `process.stderr` with a
+	 * `[turn-runner:<level>] <agent>:` prefix.
+	 */
+	_logWarning?: RunnerLogger;
 	/** Operator-driven kill (e.g. `ov stop`). */
 	abortSignal?: AbortSignal;
 	/** Time between SIGTERM and SIGKILL on abort. Default 2000ms. */
@@ -96,8 +122,12 @@ export interface TurnResult {
 	newSessionId: string | null;
 	/** True iff a prior session id was requested and the new one differs. */
 	resumeMismatch: boolean;
-	/** True iff a `worker_done` mail from the agent appeared during the turn. */
-	workerDoneObserved: boolean;
+	/**
+	 * True iff a capability-specific terminal mail from the agent appeared
+	 * during the turn (`worker_done` for builder/scout/reviewer/lead,
+	 * `merged`/`merge_failed` for merger).
+	 */
+	terminalMailObserved: boolean;
 	/** Wall-clock turn duration in milliseconds. */
 	durationMs: number;
 	/** AgentState read from SessionStore at the start of the turn. */
@@ -192,7 +222,15 @@ function recordAgentEvent(
 	});
 }
 
-function checkWorkerDoneSince(mailDbPath: string, agentName: string, sinceTs: string): boolean {
+function checkTerminalMailSince(
+	mailDbPath: string,
+	agentName: string,
+	capability: string,
+	sinceTs: string,
+): boolean {
+	const types = terminalMailTypesFor(capability);
+	if (types.length === 0) return false;
+
 	let db: Database;
 	try {
 		db = new Database(mailDbPath);
@@ -201,10 +239,14 @@ function checkWorkerDoneSince(mailDbPath: string, agentName: string, sinceTs: st
 	}
 	try {
 		db.exec("PRAGMA busy_timeout = 5000");
-		const stmt = db.prepare<{ c: number }, { $a: string; $t: string }>(
-			"SELECT 1 AS c FROM messages WHERE from_agent = $a AND type = 'worker_done' AND created_at > $t LIMIT 1",
-		);
-		const row = stmt.get({ $a: agentName, $t: sinceTs });
+		const placeholders = types.map((_, i) => `$t${i}`).join(",");
+		const sql = `SELECT 1 AS c FROM messages WHERE from_agent = $a AND type IN (${placeholders}) AND created_at > $ts LIMIT 1`;
+		const stmt = db.prepare<{ c: number }, Record<string, string>>(sql);
+		const params: Record<string, string> = { $a: agentName, $ts: sinceTs };
+		types.forEach((t, i) => {
+			params[`$t${i}`] = t;
+		});
+		const row = stmt.get(params);
 		return row !== null;
 	} catch {
 		return false;
@@ -217,7 +259,12 @@ function checkWorkerDoneSince(mailDbPath: string, agentName: string, sinceTs: st
 	}
 }
 
-function updateSessionState(sessionsDbPath: string, agentName: string, state: AgentState): void {
+function updateSessionState(
+	sessionsDbPath: string,
+	agentName: string,
+	state: AgentState,
+	onError?: (err: unknown) => void,
+): boolean {
 	try {
 		const store = createSessionStore(sessionsDbPath);
 		try {
@@ -225,12 +272,18 @@ function updateSessionState(sessionsDbPath: string, agentName: string, state: Ag
 		} finally {
 			store.close();
 		}
-	} catch {
-		// non-fatal
+		return true;
+	} catch (err) {
+		onError?.(err);
+		return false;
 	}
 }
 
-function updateSessionLastActivity(sessionsDbPath: string, agentName: string): void {
+function updateSessionLastActivity(
+	sessionsDbPath: string,
+	agentName: string,
+	onError?: (err: unknown) => void,
+): boolean {
 	try {
 		const store = createSessionStore(sessionsDbPath);
 		try {
@@ -238,12 +291,19 @@ function updateSessionLastActivity(sessionsDbPath: string, agentName: string): v
 		} finally {
 			store.close();
 		}
-	} catch {
-		// non-fatal
+		return true;
+	} catch (err) {
+		onError?.(err);
+		return false;
 	}
 }
 
-function updateSessionClaudeId(sessionsDbPath: string, agentName: string, sessionId: string): void {
+function updateSessionClaudeId(
+	sessionsDbPath: string,
+	agentName: string,
+	sessionId: string,
+	onError?: (err: unknown) => void,
+): boolean {
 	try {
 		const store = createSessionStore(sessionsDbPath);
 		try {
@@ -251,9 +311,42 @@ function updateSessionClaudeId(sessionsDbPath: string, agentName: string, sessio
 		} finally {
 			store.close();
 		}
-	} catch {
-		// non-fatal
+		return true;
+	} catch (err) {
+		onError?.(err);
+		return false;
 	}
+}
+
+/**
+ * Build the default runner diagnostic sink. Appends to `<turnLogDir>/runner.log`
+ * (synchronous, safe inside async functions) and mirrors to `process.stderr`
+ * with a `[turn-runner:<level>] <agent>:` prefix. Failures in the sink itself
+ * are swallowed — diagnostics must never break the turn.
+ */
+function defaultRunnerLogger(agentName: string, runnerLogPath: string | null): RunnerLogger {
+	return (level, message, err) => {
+		const ts = new Date().toISOString();
+		const detail =
+			err instanceof Error
+				? `: ${err.message}`
+				: err !== undefined && err !== null
+					? `: ${String(err)}`
+					: "";
+		const line = `${ts} [${level}] ${message}${detail}\n`;
+		if (runnerLogPath) {
+			try {
+				appendFileSync(runnerLogPath, line);
+			} catch {
+				// best-effort; the stderr mirror still surfaces the warning
+			}
+		}
+		try {
+			process.stderr.write(`[turn-runner:${level}] ${agentName}: ${message}${detail}\n`);
+		} catch {
+			// nothing to do if stderr is unwritable
+		}
+	};
 }
 
 async function teeStreamToWriter(
@@ -311,6 +404,7 @@ async function teeStreamToWriter(
 export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 	const {
 		agentName,
+		capability,
 		overstoryDir,
 		worktreePath,
 		projectRoot,
@@ -362,7 +456,7 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 			cleanResult: false,
 			newSessionId: null,
 			resumeMismatch: false,
-			workerDoneObserved: false,
+			terminalMailObserved: false,
 			durationMs: 0,
 			initialState: preInitialState,
 			finalState: preInitialState,
@@ -373,6 +467,11 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 	const startedAtMs = now().getTime();
 	let initialState: AgentState = preInitialState;
 	let priorSessionId: string | null = null;
+	let turnPidPath: string | null = null;
+	// Per-turn diagnostic sink. Bound after the turn log dir is created;
+	// pre-creation failures (rare — only the lock-held SessionStore re-read)
+	// remain silent because the file path doesn't exist yet.
+	let runnerLog: RunnerLogger = opts._logWarning ?? defaultRunnerLogger(agentName, null);
 
 	try {
 		// Re-read session under the lock — the value passed to the caller may be
@@ -420,6 +519,20 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 		const stderrPath = join(turnLogDir, "stderr.log");
 		const stderrWriter = Bun.file(stderrPath).writer();
 
+		// Bind the runner-diagnostic sink now that the per-turn log dir exists.
+		// Subsequent silent-failure paths (SessionStore writes, turn.pid I/O)
+		// route through `runnerLog` so future leaks/contract violations are
+		// diagnosable (overstory-4af3).
+		const runnerLogPath = join(turnLogDir, "runner.log");
+		runnerLog = opts._logWarning ?? defaultRunnerLogger(agentName, runnerLogPath);
+
+		// Per-agent state dir (shared with applied-records.json, identity.yaml).
+		// Holds turn.pid while a turn is in flight so other processes (`ov stop`,
+		// watchdog) can find and signal the live claude PID.
+		const agentStateDir = join(overstoryDir, "agents", agentName);
+		await mkdir(agentStateDir, { recursive: true });
+		turnPidPath = join(agentStateDir, "turn.pid");
+
 		// Snapshot worker_done baseline. Use wall-clock now so any worker_done
 		// mail created during the turn is attributable to this run.
 		const snapshotTs = now().toISOString();
@@ -441,6 +554,15 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 				// ignore
 			}
 			throw err;
+		}
+
+		// Publish the live claude PID so other processes (`ov stop`, watchdog) can
+		// find and signal it. Best-effort: failure is non-fatal, the turn still
+		// runs — operators just lose the cross-process kill primitive for this turn.
+		try {
+			await Bun.write(turnPidPath, `${proc.pid}\n`);
+		} catch (err) {
+			runnerLog("warn", "failed to write turn.pid", err);
 		}
 
 		// Tee stderr stream into the per-turn stderr.log without blocking the parser.
@@ -519,7 +641,9 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 			const parser = parseEvents(proc.stdout, {
 				onSessionId: (sid: string) => {
 					newSessionId = sid;
-					updateSessionClaudeId(sessionsDbPath, agentName, sid);
+					updateSessionClaudeId(sessionsDbPath, agentName, sid, (err) =>
+						runnerLog("warn", "failed to persist claudeSessionId", err),
+					);
 				},
 			});
 
@@ -528,7 +652,9 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 
 				if (!bootedToWorking && initialState === "booting") {
 					bootedToWorking = true;
-					updateSessionState(sessionsDbPath, agentName, "working");
+					updateSessionState(sessionsDbPath, agentName, "working", (err) =>
+						runnerLog("warn", "failed to transition booting → working", err),
+					);
 				}
 
 				if (event.type === "result") {
@@ -552,7 +678,8 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 		let exitCode: number | null;
 		try {
 			exitCode = await proc.exited;
-		} catch {
+		} catch (err) {
+			runnerLog("warn", "proc.exited rejected", err);
 			exitCode = null;
 		}
 		if (sigkillTimer) {
@@ -573,7 +700,12 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 			// best-effort
 		}
 
-		const workerDoneObserved = checkWorkerDoneSince(mailDbPath, agentName, snapshotTs);
+		const terminalMailObserved = checkTerminalMailSince(
+			mailDbPath,
+			agentName,
+			capability,
+			snapshotTs,
+		);
 
 		const resumeMismatch =
 			priorSessionId !== null && newSessionId !== null && newSessionId !== priorSessionId;
@@ -581,7 +713,7 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 		let finalState: AgentState;
 		if (aborted) {
 			finalState = "zombie";
-		} else if (cleanResult && workerDoneObserved) {
+		} else if (cleanResult && terminalMailObserved) {
 			finalState = "completed";
 		} else if (observedAnyEvent || bootedToWorking) {
 			finalState = "working";
@@ -590,9 +722,21 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 		}
 
 		if (finalState !== initialState) {
-			updateSessionState(sessionsDbPath, agentName, finalState);
+			updateSessionState(sessionsDbPath, agentName, finalState, (err) =>
+				runnerLog("warn", `failed to transition state to ${finalState}`, err),
+			);
 		}
-		updateSessionLastActivity(sessionsDbPath, agentName);
+		// `lastActivity` advancing past `startedAt` is a turn-cleanup contract
+		// invariant — silent failure here was the smoking gun in overstory-4af3.
+		const lastActivityOk = updateSessionLastActivity(sessionsDbPath, agentName, (err) =>
+			runnerLog("warn", "failed to update lastActivity", err),
+		);
+		if (!lastActivityOk) {
+			runnerLog(
+				"error",
+				"lastActivity stayed at startedAt — session.lastActivity is unreliable for this turn",
+			);
+		}
 
 		const durationMs = now().getTime() - startedAtMs;
 
@@ -601,12 +745,39 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 			cleanResult,
 			newSessionId,
 			resumeMismatch,
-			workerDoneObserved,
+			terminalMailObserved,
 			durationMs,
 			initialState,
 			finalState,
 		};
 	} finally {
+		// PID-file cleanup so a follow-up turn never sees a stale PID (covers
+		// thrown errors as well as the happy path). ENOENT is expected on the
+		// "spawn never happened" path; any other error is a contract violation
+		// because turn.pid is the cross-process kill primitive (overstory-2cf9).
+		if (turnPidPath) {
+			try {
+				await unlink(turnPidPath);
+			} catch (err) {
+				const code = (err as NodeJS.ErrnoException | undefined)?.code;
+				if (code !== "ENOENT") {
+					runnerLog("error", `failed to unlink turn.pid at ${turnPidPath}`, err);
+				}
+			}
+			// Contract assertion: turn.pid must NOT survive the runner. A
+			// surviving file means a follow-up `ov stop` or watchdog will target
+			// a stale PID. Surface the violation loudly (overstory-4af3).
+			try {
+				if (existsSync(turnPidPath)) {
+					runnerLog(
+						"error",
+						`turn.pid still exists at ${turnPidPath} after cleanup — kill primitive will target stale PID`,
+					);
+				}
+			} catch {
+				// existsSync should not throw, but keep diagnostics defensive
+			}
+		}
 		lock.release();
 	}
 }
