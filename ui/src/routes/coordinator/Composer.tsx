@@ -30,7 +30,7 @@ const SLASH_ENTRIES: SlashEntry[] = [
 
 function isSlashOnly(value: string): boolean {
 	const trimmed = value.trim();
-	return trimmed === "" || trimmed === "/" || /^\/[a-z-]*$/.test(trimmed);
+	return trimmed === "/" || /^\/[a-z-]*$/.test(trimmed);
 }
 
 function matchSlashEntries(value: string): SlashEntry[] {
