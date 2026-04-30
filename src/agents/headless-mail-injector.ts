@@ -60,6 +60,11 @@ export type TurnRunnerTickResult =
  * @param runTurnFn - Function that drives one turn (typically `runTurn` from turn-runner.ts)
  * @param mailStorePath - Absolute path to the project's mail.db
  * @param intervalMs - Poll interval in milliseconds (default: 2000)
+ * @param isAgentLive - Optional per-tick predicate. When provided and it returns
+ *   false, the loop short-circuits (no mail dispatch) and self-terminates.
+ *   This closes the gap between `ov stop` writing state=completed and the
+ *   serve.ts rescan timer reaping this loop, which would otherwise keep
+ *   ticking and dispatch a new turn against a stopped agent (overstory-eb7c).
  * @returns Cleanup function that stops the dispatcher
  */
 export function startTurnRunnerMailLoop(
@@ -68,13 +73,30 @@ export function startTurnRunnerMailLoop(
 	runTurnFn: TurnRunnerFn,
 	mailStorePath: string,
 	intervalMs = 2000,
+	isAgentLive?: () => boolean,
 ): () => void {
 	let stopped = false;
 	let inFlight = false;
+	let timer: ReturnType<typeof setInterval> | null = null;
+
+	const stop = (): void => {
+		stopped = true;
+		if (timer !== null) {
+			clearInterval(timer);
+			timer = null;
+		}
+	};
 
 	const tick = async (): Promise<TurnRunnerTickResult> => {
 		if (stopped) return { kind: "idle" };
 		if (inFlight) return { kind: "in-flight" };
+		// Per-tick state guard. `ov stop` flips state=completed and kills the
+		// in-flight claude, but until the rescan reaps this loop the next tick
+		// would otherwise dispatch a fresh turn against the stopped agent.
+		if (isAgentLive && !isAgentLive()) {
+			stop();
+			return { kind: "idle" };
+		}
 		const store = createMailStore(mailStorePath);
 		let messages: ReturnType<typeof store.getUnread>;
 		try {
@@ -116,16 +138,13 @@ export function startTurnRunnerMailLoop(
 		}
 	};
 
-	const timer = setInterval(() => {
+	timer = setInterval(() => {
 		// Errors and rejections are absorbed inside tick; this layer just
 		// prevents an unhandled-rejection if tick itself throws synchronously.
 		tick().catch(() => {});
 	}, intervalMs);
 
-	return () => {
-		stopped = true;
-		clearInterval(timer);
-	};
+	return stop;
 }
 
 /**

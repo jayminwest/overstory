@@ -276,7 +276,29 @@ function tryInstallTurnRunnerLoop(
 	if (!isSpawnPerTurnAgent(session, dispatch.config, factory.runtime)) return null;
 
 	const runTurnFn = dispatch._runTurnFn ?? runTurn;
-	return startTurnRunnerMailLoop(agentName, factory.build, runTurnFn, mailDbPath);
+	// Per-tick liveness check: re-read SessionStore on every poll so that
+	// `ov stop` (which writes state=completed within ~milliseconds) is observed
+	// before the 5s rescan reaps the loop. Without this guard, the 2s tick
+	// could dispatch a fresh runTurn against the stopped agent during the
+	// rescan window (overstory-eb7c).
+	const isAgentLive = (): boolean => {
+		const { store: liveStore } = openSessionStore(overstoryDir);
+		try {
+			const live = liveStore.getByName(agentName);
+			if (!live) return false;
+			return live.state !== "completed" && live.state !== "zombie";
+		} finally {
+			liveStore.close();
+		}
+	};
+	return startTurnRunnerMailLoop(
+		agentName,
+		factory.build,
+		runTurnFn,
+		mailDbPath,
+		undefined,
+		isAgentLive,
+	);
 }
 
 /**

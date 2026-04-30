@@ -223,6 +223,109 @@ describe("startTurnRunnerMailLoop", () => {
 		expect(callsAfterStop).toBeGreaterThan(0);
 	});
 
+	test("per-tick isAgentLive=false short-circuits dispatch and self-stops the loop", async () => {
+		const store = createMailStore(mailDbPath);
+		const client = createMailClient(store);
+		client.send({
+			from: "lead",
+			to: "stopped-agent",
+			subject: "Late mail",
+			body: "Should never be dispatched to a stopped agent.",
+			type: "dispatch",
+			priority: "normal",
+		});
+		store.close();
+
+		// Simulate the agent being marked completed before the first tick fires.
+		// The per-tick guard must short-circuit dispatch — closing the rescan
+		// window in serve.ts that allows ov stop to leak a fresh runTurn call
+		// (overstory-eb7c).
+		const stub = makeRunTurnStub();
+		const stop = startTurnRunnerMailLoop(
+			"stopped-agent",
+			fakeOptsFactory("stopped-agent"),
+			stub.runTurn,
+			mailDbPath,
+			30,
+			() => false,
+		);
+
+		await new Promise((r) => setTimeout(r, 200));
+		stop();
+
+		expect(stub.calls.length).toBe(0);
+		// Mail must remain unread because the loop never delivered it.
+		const checkStore = createMailStore(mailDbPath);
+		try {
+			expect(checkStore.getUnread("stopped-agent").length).toBe(1);
+		} finally {
+			checkStore.close();
+		}
+	});
+
+	test("isAgentLive flips to false mid-loop: no further runTurn invocations", async () => {
+		const store = createMailStore(mailDbPath);
+		const client = createMailClient(store);
+		// Two batches of mail. The first runTurn marks batch 1 read; before the
+		// next tick fires we flip the agent to terminal, and a second batch of
+		// mail arrives. The guard must prevent that second batch from
+		// dispatching.
+		client.send({
+			from: "lead",
+			to: "flipping-agent",
+			subject: "Batch 1",
+			body: "First batch.",
+			type: "dispatch",
+			priority: "normal",
+		});
+		store.close();
+
+		let live = true;
+		const stub = makeRunTurnStub();
+		const wrappedRunTurn = async (opts: RunTurnOpts): Promise<TurnResult> => {
+			// After the first turn completes, simulate ov stop: agent flips to
+			// completed and a new mail arrives that the rescan would see.
+			const r = await stub.runTurn(opts);
+			live = false;
+			const s = createMailStore(mailDbPath);
+			const c = createMailClient(s);
+			c.send({
+				from: "lead",
+				to: "flipping-agent",
+				subject: "Batch 2 (post-stop)",
+				body: "Should not be dispatched.",
+				type: "dispatch",
+				priority: "normal",
+			});
+			s.close();
+			return r;
+		};
+
+		const stop = startTurnRunnerMailLoop(
+			"flipping-agent",
+			fakeOptsFactory("flipping-agent"),
+			wrappedRunTurn,
+			mailDbPath,
+			30,
+			() => live,
+		);
+
+		await new Promise((r) => setTimeout(r, 300));
+		stop();
+
+		// Exactly one runTurn call: the first batch. Batch 2 must not have
+		// reached the dispatcher.
+		expect(stub.calls.length).toBe(1);
+		const checkStore = createMailStore(mailDbPath);
+		try {
+			// Batch 1 marked read (delivered). Batch 2 still unread (never
+			// dispatched).
+			expect(checkStore.getUnread("flipping-agent").length).toBe(1);
+		} finally {
+			checkStore.close();
+		}
+	});
+
 	test("re-entrancy guard: second tick while first is in flight is a no-op", async () => {
 		const store = createMailStore(mailDbPath);
 		const client = createMailClient(store);
