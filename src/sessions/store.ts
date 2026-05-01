@@ -40,6 +40,18 @@ const TRANSITION_ALLOWED_FROM: Record<AgentState, readonly AgentState[]> = {
 	zombie: ["booting", "working", "stalled", "zombie"],
 };
 
+/**
+ * States in which an agent's tmux session no longer exists. When a session
+ * lands in one of these, `tmux_session` is cleared to `''` so the agents-side
+ * view stops surfacing tmux session names that have been torn down.
+ *
+ * The live `tmuxSessions` array on `ov status` reflects what tmux actually
+ * reports; the stored `tmux_session` column is what the agents-side view reads.
+ * Without this clear, completed/zombie agents carry stale tmux strings forever
+ * (overstory-14c0).
+ */
+const TERMINAL_STATES: readonly AgentState[] = ["completed", "zombie"];
+
 export interface SessionStore {
 	/** Insert or update a session. Uses agent_name as the unique key. */
 	upsert(session: AgentSession): void;
@@ -357,8 +369,15 @@ export function createSessionStore(dbPath: string): SessionStore {
 		SELECT * FROM sessions WHERE run_id = $run_id ORDER BY started_at ASC
 	`);
 
+	// Clear tmux_session when landing in a terminal state — the tmux session
+	// has already been torn down by ov stop / watchdog / coordinator cleanup,
+	// so the stored string is stale (overstory-14c0).
+	const terminalInList = TERMINAL_STATES.map((s) => `'${s}'`).join(",");
 	const updateStateStmt = db.prepare<void, { $agent_name: string; $state: string }>(`
-		UPDATE sessions SET state = $state WHERE agent_name = $agent_name
+		UPDATE sessions
+		SET state = $state,
+		    tmux_session = CASE WHEN $state IN (${terminalInList}) THEN '' ELSE tmux_session END
+		WHERE agent_name = $agent_name
 	`);
 
 	// Per-target-state CAS statements. The IN-list values come from a static
@@ -368,12 +387,16 @@ export function createSessionStore(dbPath: string): SessionStore {
 		const stmts: Partial<
 			Record<AgentState, ReturnType<typeof db.prepare<void, { $agent_name: string }>>>
 		> = {};
+		const terminalSet = new Set<AgentState>(TERMINAL_STATES);
 		for (const target of Object.keys(TRANSITION_ALLOWED_FROM) as AgentState[]) {
 			const allowed = TRANSITION_ALLOWED_FROM[target];
 			if (allowed.length === 0) continue;
 			const inList = allowed.map((s) => `'${s}'`).join(",");
+			const setClause = terminalSet.has(target)
+				? `state = '${target}', tmux_session = ''`
+				: `state = '${target}'`;
 			stmts[target] = db.prepare<void, { $agent_name: string }>(
-				`UPDATE sessions SET state = '${target}' WHERE agent_name = $agent_name AND state IN (${inList})`,
+				`UPDATE sessions SET ${setClause} WHERE agent_name = $agent_name AND state IN (${inList})`,
 			);
 		}
 		return stmts;

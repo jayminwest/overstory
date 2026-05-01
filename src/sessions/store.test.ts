@@ -572,6 +572,118 @@ describe("tryTransitionState", () => {
 	});
 });
 
+// === tmux_session clearing on terminal transitions (overstory-14c0) ===
+//
+// The tmux session is torn down by ov stop / watchdog / coordinator cleanup
+// before the state lands at completed/zombie. The stored tmux_session string
+// would otherwise stay forever, surfacing dead session names in the agents
+// view of `ov status`. Both updateState and tryTransitionState must clear it.
+
+describe("tmux_session clearing on terminal transitions", () => {
+	const tmux = "overstory-test-agent";
+
+	describe("updateState", () => {
+		test("clears tmux_session when transitioning to completed", () => {
+			store.upsert(makeSession({ state: "working", tmuxSession: tmux }));
+			store.updateState("test-agent", "completed");
+			const result = store.getByName("test-agent");
+			expect(result?.state).toBe("completed");
+			expect(result?.tmuxSession).toBe("");
+		});
+
+		test("clears tmux_session when transitioning to zombie", () => {
+			store.upsert(makeSession({ state: "working", tmuxSession: tmux }));
+			store.updateState("test-agent", "zombie");
+			const result = store.getByName("test-agent");
+			expect(result?.state).toBe("zombie");
+			expect(result?.tmuxSession).toBe("");
+		});
+
+		test("preserves tmux_session when transitioning to a non-terminal state", () => {
+			store.upsert(makeSession({ state: "booting", tmuxSession: tmux }));
+			store.updateState("test-agent", "working");
+			expect(store.getByName("test-agent")?.tmuxSession).toBe(tmux);
+
+			store.updateState("test-agent", "stalled");
+			expect(store.getByName("test-agent")?.tmuxSession).toBe(tmux);
+		});
+
+		test("idempotent terminal write keeps tmux_session cleared", () => {
+			store.upsert(makeSession({ state: "completed", tmuxSession: "" }));
+			store.updateState("test-agent", "completed");
+			expect(store.getByName("test-agent")?.tmuxSession).toBe("");
+		});
+	});
+
+	describe("tryTransitionState", () => {
+		test("clears tmux_session on working → completed", () => {
+			store.upsert(makeSession({ state: "working", tmuxSession: tmux }));
+			const outcome = store.tryTransitionState("test-agent", "completed");
+			expect(outcome.ok).toBe(true);
+			expect(store.getByName("test-agent")?.tmuxSession).toBe("");
+		});
+
+		test("clears tmux_session on working → zombie", () => {
+			store.upsert(makeSession({ state: "working", tmuxSession: tmux }));
+			const outcome = store.tryTransitionState("test-agent", "zombie");
+			expect(outcome.ok).toBe(true);
+			expect(store.getByName("test-agent")?.tmuxSession).toBe("");
+		});
+
+		test("clears tmux_session on zombie → completed (ov stop cleanup of zombie)", () => {
+			// Zombie may still hold a tmux_session if the watchdog landed before
+			// any cleanup pass; the subsequent ov stop must wipe it.
+			store.upsert(makeSession({ state: "zombie", tmuxSession: tmux }));
+			const outcome = store.tryTransitionState("test-agent", "completed");
+			expect(outcome.ok).toBe(true);
+			expect(store.getByName("test-agent")?.tmuxSession).toBe("");
+		});
+
+		test("clears tmux_session on stalled → zombie (watchdog terminate)", () => {
+			store.upsert(makeSession({ state: "stalled", tmuxSession: tmux }));
+			const outcome = store.tryTransitionState("test-agent", "zombie");
+			expect(outcome.ok).toBe(true);
+			expect(store.getByName("test-agent")?.tmuxSession).toBe("");
+		});
+
+		test("preserves tmux_session on non-terminal targets (booting → working)", () => {
+			store.upsert(makeSession({ state: "booting", tmuxSession: tmux }));
+			const outcome = store.tryTransitionState("test-agent", "working");
+			expect(outcome.ok).toBe(true);
+			expect(store.getByName("test-agent")?.tmuxSession).toBe(tmux);
+		});
+
+		test("preserves tmux_session on non-terminal targets (stalled → working)", () => {
+			store.upsert(makeSession({ state: "stalled", tmuxSession: tmux }));
+			const outcome = store.tryTransitionState("test-agent", "working");
+			expect(outcome.ok).toBe(true);
+			expect(store.getByName("test-agent")?.tmuxSession).toBe(tmux);
+		});
+
+		test("does not clear tmux_session when CAS rejects an illegal terminal transition", () => {
+			// completed → zombie is rejected. The row must remain untouched —
+			// in particular, tmux_session must keep whatever the row already
+			// held (an empty string here, since the prior completed write
+			// cleared it).
+			store.upsert(makeSession({ state: "completed", tmuxSession: "" }));
+			const outcome = store.tryTransitionState("test-agent", "zombie");
+			expect(outcome.ok).toBe(false);
+			expect(store.getByName("test-agent")?.tmuxSession).toBe("");
+		});
+
+		test("does not clear tmux_session when CAS rejects against a live row", () => {
+			// nothing transitions into booting; a working row keeps both state
+			// and tmux_session.
+			store.upsert(makeSession({ state: "working", tmuxSession: tmux }));
+			const outcome = store.tryTransitionState("test-agent", "booting");
+			expect(outcome.ok).toBe(false);
+			const result = store.getByName("test-agent");
+			expect(result?.state).toBe("working");
+			expect(result?.tmuxSession).toBe(tmux);
+		});
+	});
+});
+
 // === updateLastActivity ===
 
 describe("updateLastActivity", () => {
