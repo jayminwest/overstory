@@ -17,11 +17,6 @@
  *
  * This module does NOT decide WHEN to run a turn. The mail injector and nudge
  * command call `runTurn(opts)` when they have a user turn to deliver.
- *
- * Phase 1 plumbing contract: `DirectSpawnOpts.resumeSessionId` is added by the
- * sibling phase1-plumbing-builder. Until that lands, we extend the type
- * locally so this module compiles. Runtimes that don't yet read the field
- * silently ignore it (structural typing).
  */
 
 import { Database } from "bun:sqlite";
@@ -36,11 +31,6 @@ import { createSessionStore } from "../sessions/store.ts";
 import type { AgentState, EventStore, EventType, ResolvedModel } from "../types.ts";
 import { terminalMailTypesFor } from "./capabilities.ts";
 import { acquireTurnLock } from "./turn-lock.ts";
-
-/** TODO(phase1): remove once `resumeSessionId` lives in `DirectSpawnOpts`. */
-type DirectSpawnOptsWithResume = DirectSpawnOpts & {
-	resumeSessionId?: string | null;
-};
 
 /** Subprocess shape required by `runTurn`. Compatible with `Bun.spawn`. */
 export interface TurnSubprocess {
@@ -275,6 +265,54 @@ function checkTerminalMailSince(
 		return row !== null;
 	} catch {
 		return false;
+	} finally {
+		try {
+			db.close();
+		} catch {
+			// best-effort
+		}
+	}
+}
+
+/**
+ * Latest `created_at` timestamp of a terminal mail (`worker_done`/`result` for
+ * task-scoped workers; `merged`/`merge_failed` for merger) sent by `agentName`.
+ *
+ * Returns `null` when the agent has no prior terminal mail or the mail DB is
+ * unavailable. The runner uses this as the snapshot baseline for the new turn:
+ * any terminal mail with `created_at > snapshot` is attributable to the spawn
+ * we are about to start. Querying the actual prior timestamp eliminates the
+ * misattribution window that `now()` opened — a prior-turn `worker_done` that
+ * lands between baseline capture and spawn would have falsely tripped the
+ * "terminal mail observed" check (overstory-088b C1).
+ */
+function latestTerminalMailTs(
+	mailDbPath: string,
+	agentName: string,
+	capability: string,
+): string | null {
+	const types = terminalMailTypesFor(capability);
+	if (types.length === 0) return null;
+
+	let db: Database;
+	try {
+		db = new Database(mailDbPath);
+	} catch {
+		return null;
+	}
+	try {
+		db.exec("PRAGMA busy_timeout = 5000");
+		const placeholders = types.map((_, i) => `$t${i}`).join(",");
+		const sql = `SELECT MAX(created_at) AS ts FROM messages WHERE from_agent = $a AND type IN (${placeholders})`;
+		const stmt = db.prepare<{ ts: string | null }, Record<string, string>>(sql);
+		const params: Record<string, string> = { $a: agentName };
+		types.forEach((t, i) => {
+			params[`$t${i}`] = t;
+		});
+		const row = stmt.get(params);
+		return row?.ts ?? null;
+	} catch {
+		return null;
 	} finally {
 		try {
 			db.close();
@@ -551,8 +589,7 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 			...directEnv,
 		};
 
-		// Phase 1 contract: pass resumeSessionId so the runtime can emit `--resume`.
-		const directOpts: DirectSpawnOptsWithResume = {
+		const directOpts: DirectSpawnOpts = {
 			cwd: worktreePath,
 			env: directEnv,
 			...(resolvedModel.isExplicitOverride ? { model: resolvedModel.model } : {}),
@@ -581,9 +618,15 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 		await mkdir(agentStateDir, { recursive: true });
 		turnPidPath = join(agentStateDir, "turn.pid");
 
-		// Snapshot worker_done baseline. Use wall-clock now so any worker_done
-		// mail created during the turn is attributable to this run.
-		const snapshotTs = now().toISOString();
+		// Snapshot the terminal-mail baseline at the latest prior terminal mail
+		// (`worker_done`/`result` for task workers, `merged`/`merge_failed` for
+		// merger). Querying the actual prior timestamp — rather than wall-clock
+		// `now()` — closes the misattribution window where a prior turn's
+		// terminal mail lands between baseline capture and spawn (overstory-088b
+		// C1). Falls back to epoch when no prior terminal mail exists, so the
+		// first terminal mail of the agent's lifetime is attributed to this turn.
+		const snapshotTs =
+			latestTerminalMailTs(mailDbPath, agentName, capability) ?? new Date(0).toISOString();
 
 		// Spawn. Failures here propagate after the finally below releases the lock.
 		let proc: TurnSubprocess;
@@ -735,6 +778,37 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 					updateSessionClaudeId(sessionsDbPath, agentName, sid, (err) =>
 						runnerLog("warn", "failed to persist claudeSessionId", err),
 					);
+					// Resume mismatch (overstory-088b C2): the runtime returned a
+					// different session id than the one we asked it to resume.
+					// `--resume` is best-effort — claude can decide to start a fresh
+					// session if it cannot rehydrate the requested one. Surface a
+					// structured warning event so observability mirrors the runner
+					// diagnostic and downstream tooling can detect the mismatch.
+					if (priorSessionId !== null && sid !== priorSessionId) {
+						try {
+							eventStore.insert({
+								runId,
+								agentName,
+								sessionId: sid,
+								eventType: "custom",
+								toolName: null,
+								toolArgs: null,
+								toolDurationMs: null,
+								level: "warn",
+								data: JSON.stringify({
+									type: "resume_mismatch",
+									requestedSessionId: priorSessionId,
+									observedSessionId: sid,
+								}),
+							});
+						} catch {
+							// non-fatal — observability must not break the turn
+						}
+						runnerLog(
+							"warn",
+							`resume mismatch: requested ${priorSessionId} but runtime returned ${sid}`,
+						);
+					}
 				},
 			});
 
@@ -767,6 +841,19 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 					// non-fatal — observability must not break the turn
 				}
 			}
+		} catch (err) {
+			// Parser iteration threw (malformed stream-json, decoder error, etc.).
+			// The subprocess is still running and would orphan past lock.release()
+			// if we just propagated the error (overstory-088b C3). Send SIGKILL so
+			// it cannot keep producing output or holding resources, then rethrow
+			// for the outer finally to clean up turn.pid and release the lock.
+			runnerLog("error", "parser iteration threw — killing subprocess to avoid orphan", err);
+			try {
+				proc.kill("SIGKILL");
+			} catch {
+				// process may have already exited
+			}
+			throw err;
 		} finally {
 			clearStallTimer();
 			if (stallSigkillTimer) {

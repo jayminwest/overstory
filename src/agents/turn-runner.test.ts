@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createEventStore } from "../events/store.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
 import { ClaudeRuntime } from "../runtimes/claude.ts";
@@ -407,6 +408,61 @@ describe("runTurn", () => {
 		// SessionStore overwritten with the observed value.
 		const after = readSession(ctx.sessionsDbPath, "mismatch");
 		expect(after?.claudeSessionId).toBe("actually-new");
+
+		// overstory-088b C2: a structured warn event lands in events.db so
+		// observability mirrors the runner diagnostic. Carries both the requested
+		// and observed session ids in the data payload.
+		const eventStore = createEventStore(ctx.eventsDbPath);
+		try {
+			const events = eventStore.getByAgent("mismatch");
+			const mismatchEvent = events.find((e) => {
+				if (e.eventType !== "custom" || e.level !== "warn" || !e.data) return false;
+				try {
+					const parsed = JSON.parse(e.data) as { type?: string };
+					return parsed.type === "resume_mismatch";
+				} catch {
+					return false;
+				}
+			});
+			expect(mismatchEvent).toBeDefined();
+			const payload = JSON.parse(mismatchEvent?.data ?? "{}") as {
+				type: string;
+				requestedSessionId: string;
+				observedSessionId: string;
+			};
+			expect(payload.requestedSessionId).toBe("want-resume");
+			expect(payload.observedSessionId).toBe("actually-new");
+		} finally {
+			eventStore.close();
+		}
+	});
+
+	test("resume match (sid === priorSessionId) does NOT emit a mismatch event", async () => {
+		seedSession(ctx.sessionsDbPath, {
+			agentName: "match",
+			state: "working",
+			claudeSessionId: "same-id",
+		});
+		const { runtime } = makeSpyRuntime();
+
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			emitFakeTurn(fake, { sessionId: "same-id" });
+			fake._exit(0);
+			return fake;
+		};
+
+		const result = await runTurn(makeRunOpts(ctx, "match", { runtime, _spawnFn: spawnFn }));
+		expect(result.resumeMismatch).toBe(false);
+
+		const eventStore = createEventStore(ctx.eventsDbPath);
+		try {
+			const events = eventStore.getByAgent("match");
+			const mismatchEvent = events.find((e) => e.data?.includes("resume_mismatch") ?? false);
+			expect(mismatchEvent).toBeUndefined();
+		} finally {
+			eventStore.close();
+		}
 	});
 
 	test("terminalMailObserved + clean exit → completed state", async () => {
@@ -1060,13 +1116,22 @@ describe("runTurn", () => {
 
 		const fake = makeFakeProc();
 		const spawnFn: TurnSpawnFn = () => {
-			fake._exit(0);
+			// Don't auto-exit: simulate a still-live subprocess so we can verify
+			// the C3 kill path actually fires before the lock is released. If we
+			// pre-exited the fake here, kill() would still record but the test
+			// wouldn't distinguish the runner-driven kill from no-op cleanup.
 			return fake;
 		};
 
 		await expect(
 			runTurn(makeRunOpts(ctx, "parser-fail", { runtime: broken, _spawnFn: spawnFn })),
 		).rejects.toThrow(/synthetic stream-json/);
+
+		// overstory-088b C3: parser throw must kill the live subprocess to avoid
+		// orphaning past lock.release. SIGKILL is correct here — we are on a
+		// non-recoverable error path and must guarantee the process dies.
+		expect(fake._killSignals).toContain("SIGKILL");
+		expect(fake._killed).toBe(true);
 
 		// Cleanup contract holds even on thrown parser.
 		expect(existsSync(turnPidPathFor(ctx, "parser-fail"))).toBe(false);
