@@ -404,6 +404,17 @@ function sendSignal(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
  *         failures are silently handled since the goal is best-effort cleanup)
  */
 export async function killSession(name: string): Promise<void> {
+	// Defense in depth: an empty session name passed to `tmux -t` is prefix-matched
+	// against every session in the server, wildcard-killing the entire overstory
+	// swarm (overstory-74ce). Reject empty names at the boundary so a regression in
+	// any caller surfaces loudly instead of silently nuking the tmux server.
+	if (name === "") {
+		throw new AgentError(
+			"killSession called with empty session name (would wildcard-kill all tmux sessions due to prefix matching)",
+			{ agentName: name },
+		);
+	}
+
 	// Step 1: Get the pane PID before killing the tmux session
 	const panePid = await getPanePid(name);
 
@@ -457,6 +468,12 @@ export async function getCurrentSessionName(): Promise<string | null> {
  * @returns true if the session exists, false otherwise
  */
 export async function isSessionAlive(name: string): Promise<boolean> {
+	// Defense in depth: an empty `-t` argument is prefix-matched against every
+	// session, so `has-session` would return true whenever any overstory session
+	// exists. Treat empty as "not alive" without contacting tmux (overstory-74ce).
+	if (name === "") {
+		return false;
+	}
 	const { exitCode } = await runCommand(tmuxCmd("has-session", "-t", name));
 	return exitCode === 0;
 }

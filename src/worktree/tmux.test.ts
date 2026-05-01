@@ -830,6 +830,22 @@ describe("killSession", () => {
 			expect(agentErr.agentName).toBe("ghost-agent");
 		}
 	});
+
+	test("throws AgentError when called with empty session name", async () => {
+		// Defense in depth (overstory-74ce): tmux's `-t` argument prefix-matches
+		// every session in the server when given an empty string. Without this
+		// guard a regression in any caller would wildcard-kill the entire
+		// overstory swarm. spawn must NOT be invoked.
+		await expect(killSession("")).rejects.toThrow(AgentError);
+		expect(spawnSpy).not.toHaveBeenCalled();
+
+		try {
+			await killSession("");
+		} catch (err: unknown) {
+			const agentErr = err as AgentError;
+			expect(agentErr.message).toContain("wildcard");
+		}
+	});
 });
 
 describe("isSessionAlive", () => {
@@ -868,6 +884,15 @@ describe("isSessionAlive", () => {
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
 		expect(cmd).toEqual(["tmux", "-L", "overstory", "has-session", "-t", "my-agent"]);
+	});
+
+	test("returns false for empty session name without calling tmux", async () => {
+		// Defense in depth (overstory-74ce): an empty `-t` argument prefix-matches
+		// every overstory session, so `has-session` would falsely report alive
+		// whenever any agent is running. Short-circuit to false without invoking tmux.
+		const alive = await isSessionAlive("");
+		expect(alive).toBe(false);
+		expect(spawnSpy).not.toHaveBeenCalled();
 	});
 });
 
