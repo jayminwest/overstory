@@ -65,7 +65,7 @@ ov hooks install
 ov coordinator start
 
 # Open the web UI — primary operator surface for the swarm
-ov serve   # then open http://localhost:8080
+ov serve   # then open http://localhost:7321
 ```
 
 `ov serve` is where you watch the fleet, read the mail bus, and inspect
@@ -98,7 +98,7 @@ Every command supports `--json` where noted. Global flags: `-q`/`--quiet`, `--ti
 | Command | Description |
 |---------|-------------|
 | `ov init` | Initialize `.overstory/` and bootstrap os-eco tools (`--yes`, `--name`, `--tools`, `--skip-mulch`, `--skip-seeds`, `--skip-canopy`, `--skip-onboard`, `--json`) |
-| `ov sling <task-id>` | Spawn a worker agent (`--capability`, `--name`, `--spec`, `--files`, `--parent`, `--depth`, `--skip-scout`, `--skip-review`, `--max-agents`, `--dispatch-max-agents`, `--skip-task-check`, `--no-scout-check`, `--runtime`, `--base-branch`, `--profile`, `--headless`, `--no-headless`, `--json`) |
+| `ov sling <task-id>` | Spawn a worker agent (`--capability`, `--name`, `--spec`, `--files`, `--parent`, `--depth`, `--skip-scout`, `--skip-review`, `--max-agents`, `--dispatch-max-agents`, `--skip-task-check`, `--no-scout-check`, `--runtime`, `--base-branch`, `--profile`, `--headless`, `--no-headless`, `--recover`, `--json`) |
 | `ov stop <agent-name>` | Terminate a running agent (`--clean-worktree`, `--json`) |
 | `ov prime` | Load context for orchestrator/agent (`--agent`, `--compact`) |
 | `ov spec write <task-id>` | Write a task specification (`--body`) |
@@ -371,6 +371,21 @@ models:
 | `authTokenEnv` | string | Gateway only | Env var name holding auth token |
 
 ## Troubleshooting
+
+### Recovering a dead lead (or any agent that exited mid-task)
+
+If a lead exits without sending `merge_ready` (process termination, watchdog kill, manual `ov stop`) and the task was already closed, both `ov nudge` and `ov sling` would normally refuse to re-engage:
+
+- `ov nudge <name>` reports `No active session for agent "..." (state: completed)`. The agent's process is gone, so there's nothing to send keystrokes to.
+- `ov sling <task-id> --capability lead` reports `Task "..." is not workable (status: closed)`.
+
+To re-dispatch a fresh lead against the same task, pass `--recover`:
+
+```bash
+ov sling <task-id> --capability lead --recover --name <fresh-name>
+```
+
+`--recover` bypasses the workable-status check so the new lead can pick up where the dead one left off (the task remains closed; the new lead reads the spec and proceeds). The terminal-state nudge error itself includes a copy-paste hint to this exact form.
 
 ### Coordinator died during startup
 

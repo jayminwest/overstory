@@ -25,6 +25,7 @@ import {
 	getSharedWritableDirs,
 	inferDomainsFromFiles,
 	isRunningAsRoot,
+	isTaskWorkable,
 	parentHasScouts,
 	resolveUseHeadless,
 	shouldShowScoutWarning,
@@ -766,6 +767,25 @@ function makeLeadSession(
 ): { agentName: string; taskId: string; capability: string } {
 	return { agentName, taskId, capability };
 }
+
+describe("isTaskWorkable", () => {
+	test("accepts open and in_progress without recover", () => {
+		expect(isTaskWorkable("open", false)).toBe(true);
+		expect(isTaskWorkable("in_progress", false)).toBe(true);
+	});
+
+	test("rejects closed and other terminal statuses without recover", () => {
+		expect(isTaskWorkable("closed", false)).toBe(false);
+		expect(isTaskWorkable("cancelled", false)).toBe(false);
+		expect(isTaskWorkable("done", false)).toBe(false);
+	});
+
+	test("accepts any status when recover is true", () => {
+		expect(isTaskWorkable("closed", true)).toBe(true);
+		expect(isTaskWorkable("cancelled", true)).toBe(true);
+		expect(isTaskWorkable("open", true)).toBe(true);
+	});
+});
 
 describe("checkDuplicateLead", () => {
 	test("returns lead agent name when an active lead exists for the task", () => {

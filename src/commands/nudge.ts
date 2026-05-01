@@ -108,17 +108,35 @@ async function loadOrchestratorTmuxSession(projectRoot: string): Promise<string 
  * For regular agents, looks up the SessionStore.
  * For "orchestrator", falls back to the orchestrator-tmux.json registration
  * file written by `overstory prime`.
+ *
+ * Returns the tmux session name on success, or a structured `null` result that
+ * captures the terminal-state diagnosis so callers can surface a helpful
+ * recovery hint instead of a generic "no active session" error (overstory-629f).
  */
+type ResolveTargetResult =
+	| { kind: "found"; tmuxSession: string }
+	| { kind: "missing" }
+	| { kind: "terminal"; state: "completed" | "zombie"; capability: string; taskId: string };
+
 async function resolveTargetSession(
 	projectRoot: string,
 	agentName: string,
-): Promise<string | null> {
+): Promise<ResolveTargetResult> {
 	const overstoryDir = join(projectRoot, ".overstory");
 	const { store } = openSessionStore(overstoryDir);
+	let terminal: ResolveTargetResult | null = null;
 	try {
 		const session = store.getByName(agentName);
-		if (session && session.state !== "zombie" && session.state !== "completed") {
-			return session.tmuxSession;
+		if (session) {
+			if (session.state !== "zombie" && session.state !== "completed") {
+				return { kind: "found", tmuxSession: session.tmuxSession };
+			}
+			terminal = {
+				kind: "terminal",
+				state: session.state,
+				capability: session.capability,
+				taskId: session.taskId,
+			};
 		}
 	} finally {
 		store.close();
@@ -126,10 +144,32 @@ async function resolveTargetSession(
 
 	// Fallback for orchestrator: check orchestrator-tmux.json
 	if (agentName === "orchestrator") {
-		return await loadOrchestratorTmuxSession(projectRoot);
+		const orchestratorTmux = await loadOrchestratorTmuxSession(projectRoot);
+		if (orchestratorTmux !== null) {
+			return { kind: "found", tmuxSession: orchestratorTmux };
+		}
 	}
 
-	return null;
+	return terminal ?? { kind: "missing" };
+}
+
+/**
+ * Build the operator-facing failure reason when a nudge cannot find a live
+ * session. Terminal-state agents get a recovery hint pointing at
+ * `ov sling --recover`; missing agents keep the generic message. (overstory-629f)
+ */
+export function buildMissingSessionReason(
+	agentName: string,
+	resolution: ResolveTargetResult,
+): string {
+	if (resolution.kind === "terminal") {
+		return (
+			`No active session for agent "${agentName}" (state: ${resolution.state}). ` +
+			`The agent has exited; re-dispatch with ` +
+			`'ov sling ${resolution.taskId} --capability ${resolution.capability} --recover'.`
+		);
+	}
+	return `No active session for agent "${agentName}"`;
 }
 
 /**
@@ -493,11 +533,15 @@ export async function nudgeAgent(
 
 	if (result === undefined) {
 		// Tmux path: resolve session name from SessionStore / orchestrator-tmux.json
-		const tmuxSessionName = await resolveTargetSession(projectRoot, agentName);
+		const resolution = await resolveTargetSession(projectRoot, agentName);
 
-		if (!tmuxSessionName) {
-			result = { delivered: false, reason: `No active session for agent "${agentName}"` };
+		if (resolution.kind !== "found") {
+			result = {
+				delivered: false,
+				reason: buildMissingSessionReason(agentName, resolution),
+			};
 		} else {
+			const tmuxSessionName = resolution.tmuxSession;
 			// Verify tmux session is alive
 			const alive = await isSessionAlive(tmuxSessionName);
 			if (!alive) {

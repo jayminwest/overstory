@@ -105,20 +105,28 @@ describe("nudgeAgent", () => {
 		expect(result.reason).toContain("No active session");
 	});
 
-	test("returns error when agent is zombie", async () => {
-		writeSessionsToStore(tempDir, [makeSession({ state: "zombie" })]);
+	test("returns error with recovery hint when agent is zombie", async () => {
+		writeSessionsToStore(tempDir, [
+			makeSession({ state: "zombie", capability: "lead", taskId: "task-42" }),
+		]);
 		const { nudgeAgent } = await importNudge();
 		const result = await nudgeAgent(tempDir, "test-agent");
 		expect(result.delivered).toBe(false);
 		expect(result.reason).toContain("No active session");
+		expect(result.reason).toContain("state: zombie");
+		expect(result.reason).toContain("ov sling task-42 --capability lead --recover");
 	});
 
-	test("returns error when agent is completed", async () => {
-		writeSessionsToStore(tempDir, [makeSession({ state: "completed" })]);
+	test("returns error with recovery hint when agent is completed", async () => {
+		writeSessionsToStore(tempDir, [
+			makeSession({ state: "completed", capability: "lead", taskId: "task-42" }),
+		]);
 		const { nudgeAgent } = await importNudge();
 		const result = await nudgeAgent(tempDir, "test-agent");
 		expect(result.delivered).toBe(false);
 		expect(result.reason).toContain("No active session");
+		expect(result.reason).toContain("state: completed");
+		expect(result.reason).toContain("ov sling task-42 --capability lead --recover");
 	});
 
 	test("finds active agent in working state", async () => {

@@ -303,6 +303,10 @@ program
 		"--headless",
 		"Spawn through Bun.spawn (stream-json) instead of tmux. Requires runtime with buildDirectSpawn.",
 	)
+	.option(
+		"--recover",
+		"Allow dispatch against a task in any tracker status (e.g. closed). Use when a prior owner exited and the task needs a fresh agent.",
+	)
 	.option("--json", "Output result as JSON")
 	.action(async (taskId, opts) => {
 		await slingCommand(taskId, opts);

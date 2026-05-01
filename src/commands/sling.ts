@@ -157,6 +157,20 @@ export interface SlingOptions {
 	baseBranch?: string;
 	profile?: string;
 	headless?: boolean;
+	recover?: boolean;
+}
+
+const WORKABLE_STATUSES = ["open", "in_progress"] as const;
+
+/**
+ * Decide whether a task with the given tracker status can accept a fresh
+ * sling. Normal dispatch requires an `open` or `in_progress` task; passing
+ * `recover` accepts any status so a coordinator can re-dispatch against a
+ * task whose previous owner exited (e.g. closed by a dead lead). (overstory-629f)
+ */
+export function isTaskWorkable(status: string, recover: boolean): boolean {
+	if (recover) return true;
+	return (WORKABLE_STATUSES as readonly string[]).includes(status);
 }
 
 export interface AutoDispatchOptions {
@@ -529,6 +543,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 	const forceHierarchy = opts.forceHierarchy ?? false;
 	const skipScout = opts.skipScout ?? false;
 	const skipTaskCheck = opts.skipTaskCheck ?? false;
+	const recover = opts.recover ?? false;
 
 	if (Number.isNaN(depth) || depth < 0) {
 		throw new ValidationError("--depth must be a non-negative integer", {
@@ -779,11 +794,15 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				});
 			}
 
-			const workableStatuses = ["open", "in_progress"];
-			if (!workableStatuses.includes(issue.status)) {
+			if (!isTaskWorkable(issue.status, recover)) {
 				throw new ValidationError(
-					`Task "${taskId}" is not workable (status: ${issue.status}). Only open or in_progress issues can be assigned.`,
+					`Task "${taskId}" is not workable (status: ${issue.status}). Only open or in_progress issues can be assigned. Pass --recover to re-dispatch against a closed task.`,
 					{ field: "taskId", value: taskId },
+				);
+			}
+			if (recover && !(WORKABLE_STATUSES as readonly string[]).includes(issue.status)) {
+				process.stderr.write(
+					`Warning: --recover dispatching against task "${taskId}" with status "${issue.status}". Previous owner may have exited unexpectedly.\n`,
 				);
 			}
 		}
@@ -1030,13 +1049,6 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				};
 				store.upsert(session);
 
-				const runStore = createRunStore(join(overstoryDir, "sessions.db"));
-				try {
-					runStore.incrementAgentCount(runId);
-				} finally {
-					runStore.close();
-				}
-
 				// Drive the first user turn synchronously. runTurn manages spawn,
 				// stdin write+EOF, event drain, session_id capture, terminal-mail
 				// detection, and state transition.
@@ -1131,14 +1143,6 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				};
 
 				store.upsert(session);
-
-				// Increment agent count for the run
-				const runStore = createRunStore(join(overstoryDir, "sessions.db"));
-				try {
-					runStore.incrementAgentCount(runId);
-				} finally {
-					runStore.close();
-				}
 
 				// 13b. Give slow shells time to finish initializing before polling for TUI readiness.
 				const shellDelay = config.runtime?.shellInitDelayMs ?? 0;
