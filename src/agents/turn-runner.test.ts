@@ -1447,4 +1447,191 @@ describe("runTurn", () => {
 		// turn.pid must still be cleaned up regardless.
 		expect(existsSync(turnPidPathFor(ctx, "ss-fail"))).toBe(false);
 	});
+
+	// ---------- mid-turn lastActivity refresh (overstory-8e61) ----------
+	//
+	// The watchdog's design (src/watchdog/health.ts:242-243) documents that the
+	// runner advances `session.lastActivity` per parser event during a turn.
+	// Without that, a long-running turn looks stalled to the watchdog and the
+	// agent gets zombified mid-flight. These tests pin the per-event refresh
+	// behavior added inside the parser loop.
+
+	test("mid-turn refresh: lastActivity advances when interval=0 forces per-event refresh", async () => {
+		const startedAt = new Date(Date.now() - 60_000).toISOString();
+		seedSession(ctx.sessionsDbPath, {
+			agentName: "midturn-A",
+			state: "working",
+			startedAt,
+			lastActivity: startedAt,
+		});
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			emitFakeTurn(fake, { sessionId: "midturn-A-session" });
+			fake._exit(0);
+			return fake;
+		};
+
+		await runTurn({
+			...makeRunOpts(ctx, "midturn-A", { runtime, _spawnFn: spawnFn }),
+			lastActivityRefreshIntervalMs: 0,
+		});
+
+		const after = readSession(ctx.sessionsDbPath, "midturn-A");
+		expect(after?.lastActivity).not.toBe(startedAt);
+		expect(new Date(after?.lastActivity ?? 0).getTime()).toBeGreaterThan(
+			new Date(startedAt).getTime(),
+		);
+	});
+
+	test("mid-turn refresh: throttle gates updates by simulated time", async () => {
+		seedSession(ctx.sessionsDbPath, { agentName: "midturn-B", state: "working" });
+		const { runtime } = makeSpyRuntime();
+
+		// Controlled sim clock. `_now` is invoked many times during a turn (for
+		// startedAtMs, log timestamps, durationMs) — only the in-loop calls
+		// matter for the throttle. We advance simTime synchronously between
+		// pushes and yield to the parser between each push so the runner reads
+		// the simTime we set just prior. simTime starts well above the throttle
+		// interval so the first event fires (initial lastActivityRefreshMs=0).
+		let simTime = 5000;
+		const _now = (): Date => new Date(simTime);
+
+		let refreshes = 0;
+		const _onLastActivityRefresh = (): void => {
+			refreshes++;
+		};
+
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			(async () => {
+				const sessionId = "midturn-B-session";
+				// Use `system` lines because the claude parser does not batch
+				// them — every system line yields exactly one status event,
+				// driving one runner-loop iteration each. Assistant text would
+				// coalesce inside a flush window and defeat the per-event count.
+				const stamps = [5000, 5500, 6000, 6500, 7000, 7500];
+				for (let i = 0; i < stamps.length; i++) {
+					simTime = stamps[i] ?? 0;
+					fake._pushLine(
+						JSON.stringify({
+							type: "system",
+							subtype: i === 0 ? "init" : "progress",
+							session_id: sessionId,
+						}),
+					);
+					// Yield so the for-await loop body runs to completion against
+					// the simTime value we just set.
+					await Bun.sleep(20);
+				}
+				// Trailing result at the same simTime as the last chunk; with a
+				// 1000ms throttle and last refresh at simTime=7000, this event
+				// at simTime=7500 (delta=500) does not fire.
+				fake._pushLine(
+					JSON.stringify({
+						type: "result",
+						subtype: "success",
+						session_id: sessionId,
+						result: "done",
+						is_error: false,
+						duration_ms: 50,
+						num_turns: 1,
+					}),
+				);
+				await Bun.sleep(20);
+				fake._exit(0);
+			})();
+			return fake;
+		};
+
+		await runTurn({
+			...makeRunOpts(ctx, "midturn-B", { runtime, _spawnFn: spawnFn }),
+			lastActivityRefreshIntervalMs: 1000,
+			_now,
+			_onLastActivityRefresh,
+		});
+
+		// Stamps 5000, 6000, 7000 fire (gap >= 1000). Stamps 5500, 6500, 7500
+		// are throttled (gap = 500). The trailing result event at 7500 also
+		// throttles. Total expected = 3.
+		expect(refreshes).toBe(3);
+	});
+
+	test("mid-turn refresh: parser throw still leaves lastActivity advanced (overstory-8e61)", async () => {
+		// The end-of-turn `updateSessionLastActivity` (around turn-runner.ts:1112)
+		// does NOT fire when the parser iteration throws — the catch path
+		// rethrows before reaching the cleanup write. The mid-turn refresh
+		// covers this gap so a parser-error turn still leaves lastActivity
+		// fresh, mirroring the documented design at src/watchdog/health.ts:242-243.
+		const startedAt = new Date(Date.now() - 60_000).toISOString();
+		seedSession(ctx.sessionsDbPath, {
+			agentName: "midturn-C",
+			state: "working",
+			startedAt,
+			lastActivity: startedAt,
+		});
+
+		// Custom runtime: yield two valid events, then throw on the next read.
+		// Mirrors a malformed stream-json line arriving after some good events.
+		const base = new ClaudeRuntime();
+		let yielded = 0;
+		const yieldThenThrow: AsyncIterable<unknown> = {
+			[Symbol.asyncIterator]() {
+				return {
+					next(): Promise<IteratorResult<unknown>> {
+						if (yielded++ < 2) {
+							return Promise.resolve({
+								value: {
+									type: "assistant_message",
+									timestamp: new Date().toISOString(),
+								},
+								done: false,
+							});
+						}
+						return Promise.reject(new Error("synthetic stream-json parse error"));
+					},
+				};
+			},
+		};
+		const broken: AgentRuntime = {
+			...base,
+			id: base.id,
+			stability: base.stability,
+			instructionPath: base.instructionPath,
+			buildSpawnCommand: base.buildSpawnCommand.bind(base),
+			buildPrintCommand: base.buildPrintCommand.bind(base),
+			deployConfig: base.deployConfig.bind(base),
+			detectReady: base.detectReady.bind(base),
+			parseTranscript: base.parseTranscript.bind(base),
+			getTranscriptDir: base.getTranscriptDir.bind(base),
+			buildEnv: base.buildEnv.bind(base),
+			buildDirectSpawn: base.buildDirectSpawn.bind(base),
+			parseEvents: (() => yieldThenThrow) as unknown as AgentRuntime["parseEvents"],
+		};
+
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => fake;
+
+		let refreshes = 0;
+		await expect(
+			runTurn({
+				...makeRunOpts(ctx, "midturn-C", { runtime: broken, _spawnFn: spawnFn }),
+				lastActivityRefreshIntervalMs: 0,
+				_onLastActivityRefresh: () => {
+					refreshes++;
+				},
+			}),
+		).rejects.toThrow(/synthetic stream-json/);
+
+		// Mid-turn refresh fired for at least one of the two pre-throw events.
+		expect(refreshes).toBeGreaterThanOrEqual(1);
+
+		// And the persisted lastActivity reflects the mid-turn write — the
+		// end-of-turn write at line ~1112 was skipped by the parser-throw path.
+		const after = readSession(ctx.sessionsDbPath, "midturn-C");
+		expect(after?.lastActivity).not.toBe(startedAt);
+		expect(new Date(after?.lastActivity ?? 0).getTime()).toBeGreaterThan(
+			new Date(startedAt).getTime(),
+		);
+	});
 });
