@@ -147,6 +147,61 @@ describe("createWorktree", () => {
 			expect(wtErr.branchName).toBe("overstory/auth-login/bead-abc123");
 		}
 	});
+
+	test("rejects creation when target branch is already checked out elsewhere", async () => {
+		// Pre-check should fail-fast with a precise diagnostic before git
+		// worktree add runs, so the operator sees the actual cause rather
+		// than git's generic "already exists" error or, worse, a silently
+		// half-built worktree (overstory-6878).
+		const first = await createWorktree({
+			repoRoot: repoDir,
+			baseDir: worktreesDir,
+			agentName: "auth-login",
+			baseBranch: defaultBranch,
+			taskId: "bead-abc123",
+		});
+
+		try {
+			await createWorktree({
+				repoRoot: repoDir,
+				baseDir: worktreesDir,
+				agentName: "auth-login",
+				baseBranch: defaultBranch,
+				taskId: "bead-abc123",
+			});
+			expect(true).toBe(false);
+		} catch (err: unknown) {
+			expect(err).toBeInstanceOf(WorktreeError);
+			const wtErr = err as WorktreeError;
+			expect(wtErr.message).toContain("already checked out");
+			expect(wtErr.message).toContain(first.path);
+			expect(wtErr.branchName).toBe("overstory/auth-login/bead-abc123");
+		}
+
+		// The original worktree must remain intact — the pre-check rejected
+		// before any state-mutating git command ran.
+		expect(existsSync(first.path)).toBe(true);
+		const entries = await listWorktrees(repoDir);
+		expect(entries.some((e) => e.path === first.path)).toBe(true);
+	});
+
+	test("post-creation: new worktree is registered and contains tracked files", async () => {
+		const { path: wtPath } = await createWorktree({
+			repoRoot: repoDir,
+			baseDir: worktreesDir,
+			agentName: "auth-login",
+			baseBranch: defaultBranch,
+			taskId: "bead-files",
+		});
+
+		// Registration check — listWorktrees must include the new path
+		const entries = await listWorktrees(repoDir);
+		expect(entries.map((e) => e.path)).toContain(wtPath);
+
+		// File-presence check — git ls-files inside the worktree must be non-empty
+		const lsFiles = await git(wtPath, ["ls-files"]);
+		expect(lsFiles.trim().length).toBeGreaterThan(0);
+	});
 });
 
 describe("listWorktrees", () => {
