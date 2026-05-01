@@ -659,7 +659,7 @@ describe("stopCommand stop behavior", () => {
 		);
 	});
 
-	test("lead with malformed merge_ready payload skips it and emits valid subject (overstory-7291)", async () => {
+	test("lead with malformed merge_ready payload skips that message (overstory-7291)", async () => {
 		const session = makeAgentSession({
 			agentName: "lead-eta",
 			capability: "lead",
@@ -668,21 +668,40 @@ describe("stopCommand stop behavior", () => {
 		});
 		saveSessionsToDb([session]);
 
-		// Insert a merge_ready row directly via the store so we can write a
-		// payload that is not valid JSON. This bypasses sendProtocol's typed
-		// payload encoding to exercise buildLeadCompletedSubject's inner catch
-		// (the JSON.parse skip path).
+		// Insert two merge_ready rows directly via the store: one with a valid
+		// MergeReadyPayload, one with a non-JSON payload string. sendProtocol
+		// would JSON.stringify any payload, so it cannot produce a malformed
+		// row — the low-level store accepts the payload column verbatim. The
+		// loop must skip the malformed one (inner catch + continue) and use
+		// the valid one, yielding the single-branch subject variant.
 		const mailStore = createMailStore(join(overstoryDir, "mail.db"));
+		const validPayload: MergeReadyPayload = {
+			branch: "overstory/lead-eta/bead-99",
+			taskId: "bead-99",
+			agentName: "lead-eta",
+			filesModified: ["src/x.ts"],
+		};
 		mailStore.insert({
-			id: "msg-malformed-1",
+			id: "msg-valid",
 			from: "lead-eta",
 			to: "coordinator",
-			subject: "merge_ready: bogus",
+			subject: "merge_ready: bead-99",
 			body: "ready",
 			type: "merge_ready",
 			priority: "normal",
 			threadId: null,
-			payload: "{not valid json",
+			payload: JSON.stringify(validPayload),
+		});
+		mailStore.insert({
+			id: "msg-malformed",
+			from: "lead-eta",
+			to: "coordinator",
+			subject: "merge_ready: broken",
+			body: "ready",
+			type: "merge_ready",
+			priority: "normal",
+			threadId: null,
+			payload: "not-json{",
 		});
 		mailStore.close();
 
@@ -691,9 +710,9 @@ describe("stopCommand stop behavior", () => {
 
 		const markerPath = join(overstoryDir, "pending-nudges", "coordinator.json");
 		const marker = JSON.parse(await Bun.file(markerPath).text());
-		// One merge_ready was sent but its payload could not be parsed, so no
-		// branch was extracted — falls through to the branch-unknown variant.
-		expect(marker.subject).toBe("Lead lead-eta sent 1 merge_ready (branch unknown)");
+		expect(marker.subject).toBe(
+			"Lead lead-eta sent merge_ready for branch overstory/lead-eta/bead-99",
+		);
 	});
 
 	test("stopping a non-lead agent does NOT write lead_completed pending-nudge", async () => {
