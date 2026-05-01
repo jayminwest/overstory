@@ -149,9 +149,16 @@ export async function createSession(
 	// causes the session to die instantly. Single-quote wrapping with escaped
 	// single quotes prevents any intermediate shell from expanding variables
 	// before bash receives them. (GitHub #86)
-	const startupScript = exports.length > 0 ? `${exports.join(" && ")} && ${command}` : command;
-	const wrappedCommand =
-		exports.length > 0 ? `/bin/bash -c '${startupScript.replace(/'/g, "'\\''")}'` : command;
+	//
+	// The `exec` prefix replaces the bash wrapper with the spawned command
+	// so there is no separate wrapper PID to orphan if the tmux server dies
+	// externally. Without exec, bash receives SIGHUP on tmux teardown but its
+	// claude child gets reparented to init and continues running. With exec,
+	// the wrapper IS the command — SIGHUP is delivered directly to claude.
+	// (overstory-505d)
+	const startupScript =
+		exports.length > 0 ? `${exports.join(" && ")} && exec ${command}` : `exec ${command}`;
+	const wrappedCommand = `/bin/bash -c '${startupScript.replace(/'/g, "'\\''")}'`;
 
 	const { exitCode, stderr } = await runCommand(
 		tmuxCmd("new-session", "-d", "-s", name, "-c", cwd, wrappedCommand),

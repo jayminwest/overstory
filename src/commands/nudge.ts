@@ -24,12 +24,61 @@ import { getConnection } from "../runtimes/connections.ts";
 import { hasNudge } from "../runtimes/headless-connection.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, EventStore } from "../types.ts";
-import { isSessionAlive, sendKeys } from "../worktree/tmux.ts";
+import { capturePaneContent, isSessionAlive, sendKeys } from "../worktree/tmux.ts";
 
 const DEFAULT_MESSAGE = "Check your mail inbox for new messages.";
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
 const DEBOUNCE_MS = 500;
+
+/**
+ * Maximum total time (ms) to wait for a busy pane to become idle before
+ * giving up and reporting the nudge as deferred. Sized to ride out short
+ * tool calls without blocking long-running thinks.
+ */
+const IDLE_WAIT_MS = 3000;
+const IDLE_POLL_INTERVAL_MS = 250;
+
+/**
+ * Heuristic: does the captured pane content indicate the agent is mid-think?
+ *
+ * Claude Code's TUI shows "esc to interrupt" alongside the streaming token
+ * counter while a turn is in flight. The phrase is absent in idle state, when
+ * tool output is rendered, and on the trust dialog — so its presence is a
+ * reliable busy signal. Returns true when the agent appears busy and a nudge
+ * sent via tmux send-keys would be queued into the in-flight prompt instead
+ * of starting a fresh user turn. (overstory-8ff4)
+ */
+export function paneAppearsBusy(paneContent: string): boolean {
+	return paneContent.includes("esc to interrupt");
+}
+
+/**
+ * Wait briefly for a tmux pane to leave the mid-think state.
+ *
+ * Polls capture-pane until the busy heuristic clears or the deadline elapses.
+ * Returns true if the pane became idle, false if it remained busy or pane
+ * capture failed throughout. Capture failures count as "not idle" so the
+ * caller defers the nudge rather than blasting send-keys into an unknown
+ * state. (overstory-8ff4)
+ */
+async function waitForPaneIdle(
+	tmuxSession: string,
+	maxWaitMs: number = IDLE_WAIT_MS,
+	pollIntervalMs: number = IDLE_POLL_INTERVAL_MS,
+): Promise<boolean> {
+	const deadline = Date.now() + maxWaitMs;
+	while (true) {
+		const content = await capturePaneContent(tmuxSession, 20);
+		if (content !== null && !paneAppearsBusy(content)) {
+			return true;
+		}
+		if (Date.now() >= deadline) {
+			return false;
+		}
+		await Bun.sleep(pollIntervalMs);
+	}
+}
 
 /**
  * Load the orchestrator's registered tmux session name.
@@ -123,14 +172,32 @@ async function recordNudge(statePath: string, agentName: string): Promise<void> 
 	await Bun.write(statePath, `${JSON.stringify(state, null, "\t")}\n`);
 }
 
+/** Outcome of a tmux nudge attempt. */
+type SendNudgeResult =
+	| { kind: "delivered" }
+	| { kind: "deferred"; reason: string }
+	| { kind: "failed" };
+
 /**
  * Send a nudge to an agent's tmux session with retry logic.
  *
  * @param tmuxSession - The tmux session name
  * @param message - The text to send
- * @returns true if the nudge was delivered, false if all retries failed
+ * @returns delivered on success, deferred when the agent stays mid-think
+ *          beyond the idle window, failed when send-keys exhausts retries.
  */
-async function sendNudgeWithRetry(tmuxSession: string, message: string): Promise<boolean> {
+async function sendNudgeWithRetry(tmuxSession: string, message: string): Promise<SendNudgeResult> {
+	// Guard: never send-keys into a mid-think pane. Without this check, the
+	// nudge text is queued as input and corrupts the in-flight prompt.
+	// (overstory-8ff4)
+	const idle = await waitForPaneIdle(tmuxSession);
+	if (!idle) {
+		return {
+			kind: "deferred",
+			reason: "Agent is mid-think (esc-to-interrupt visible) — nudge deferred",
+		};
+	}
+
 	for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 		try {
 			await sendKeys(tmuxSession, message);
@@ -140,14 +207,14 @@ async function sendNudgeWithRetry(tmuxSession: string, message: string): Promise
 			// Same workaround as sling.ts and coordinator.ts.
 			await Bun.sleep(500);
 			await sendKeys(tmuxSession, "");
-			return true;
+			return { kind: "delivered" };
 		} catch {
 			if (attempt < MAX_RETRIES) {
 				await Bun.sleep(RETRY_DELAY_MS);
 			}
 		}
 	}
-	return false;
+	return { kind: "failed" };
 }
 
 /**
@@ -439,11 +506,15 @@ export async function nudgeAgent(
 					reason: `Tmux session "${tmuxSessionName}" is not alive`,
 				};
 			} else {
-				// Send with retry
-				const delivered = await sendNudgeWithRetry(tmuxSessionName, message);
-				if (delivered) {
+				// Send with retry — sendNudgeWithRetry waits for an idle pane
+				// before attempting send-keys (overstory-8ff4). It distinguishes
+				// "deferred" (agent mid-think) from "failed" (transient errors).
+				const sendResult = await sendNudgeWithRetry(tmuxSessionName, message);
+				if (sendResult.kind === "delivered") {
 					await recordNudge(statePath, agentName);
 					result = { delivered: true };
+				} else if (sendResult.kind === "deferred") {
+					result = { delivered: false, reason: sendResult.reason };
 				} else {
 					result = {
 						delivered: false,

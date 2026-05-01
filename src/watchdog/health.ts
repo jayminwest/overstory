@@ -215,8 +215,24 @@ export function evaluateHealth(
 
 	// === Headless path: PID is the primary liveness signal ===
 	if (isHeadlessSession(session)) {
-		// pid dead → zombie immediately (equivalent to ZFC Rule 1 for headless)
+		// pid dead: zombie OR completed-with-missed-signal.
+		// Distinguish by lastActivity age — recent activity means the agent
+		// crashed mid-work (true zombie); stale activity means it likely
+		// finished naturally and only the session-end hook didn't deliver
+		// (treat as completed). (overstory-e74b)
 		if (pidAlive === false) {
+			if (
+				elapsedMs > thresholds.staleMs &&
+				(session.state === "working" || session.state === "booting" || session.state === "stalled")
+			) {
+				return {
+					...base,
+					processAlive: false,
+					state: "completed",
+					action: "complete",
+					reconciliationNote: `ZFC: headless pid ${session.pid} dead + stale lastActivity (${Math.round(elapsedMs / 1000)}s ago) — assumed completed (missed session-end signal)`,
+				};
+			}
 			return {
 				...base,
 				processAlive: false,
@@ -244,9 +260,25 @@ export function evaluateHealth(
 
 	// === TUI/tmux path ===
 
-	// ZFC Rule 1: tmux dead → zombie immediately, regardless of recorded state.
-	// Observable state says the process is gone.
+	// ZFC Rule 1: tmux dead → zombie OR completed-with-missed-signal.
+	// Distinguish by lastActivity age — recent activity means the agent
+	// crashed mid-work (true zombie); stale activity means it likely
+	// finished naturally and only the session-end hook didn't deliver
+	// (treat as completed). (overstory-e74b)
 	if (!tmuxAlive) {
+		if (
+			elapsedMs > thresholds.staleMs &&
+			(session.state === "working" || session.state === "booting" || session.state === "stalled")
+		) {
+			return {
+				...base,
+				processAlive: false,
+				state: "completed",
+				action: "complete",
+				reconciliationNote: `ZFC: tmux dead + stale lastActivity (${Math.round(elapsedMs / 1000)}s ago) — assumed completed (missed session-end signal)`,
+			};
+		}
+
 		const note =
 			session.state === "working" || session.state === "booting"
 				? `ZFC: tmux dead but sessions.json says "${session.state}" — marking zombie (observable state wins)`
@@ -312,6 +344,16 @@ export function transitionState(currentState: AgentState, check: HealthCheck): A
 	// ZFC: investigate means signals conflict — hold state until reviewed
 	if (check.action === "investigate") {
 		return currentState;
+	}
+
+	// `complete` is a terminal classification triggered when observable state
+	// proves the agent finished naturally (missed session-end signal —
+	// overstory-e74b). It bypasses the forward-only STATE_ORDER guard because
+	// `completed` (order 2) sits before `stalled` (order 3) and would
+	// otherwise be blocked from advancing the recorded state. The matrix in
+	// SessionStore.tryTransitionState still gates the actual write.
+	if (check.action === "complete") {
+		return check.state;
 	}
 
 	const currentOrder = STATE_ORDER[currentState];

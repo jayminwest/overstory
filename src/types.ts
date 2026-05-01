@@ -495,7 +495,7 @@ export interface HealthCheck {
 	pidAlive: boolean | null; // null when pid is unavailable
 	lastActivity: string;
 	state: AgentState;
-	action: "none" | "escalate" | "terminate" | "investigate";
+	action: "none" | "escalate" | "terminate" | "investigate" | "complete";
 	/** Describes any conflict between observable state and recorded state. */
 	reconciliationNote: string | null;
 }

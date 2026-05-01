@@ -65,6 +65,32 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 	};
 }
 
+describe("paneAppearsBusy", () => {
+	test("flags Claude Code mid-think pane as busy", async () => {
+		const { paneAppearsBusy } = await import("./nudge.ts");
+		const sample = [
+			"╭───────────────────────────────────────────╮",
+			"│ ✻ Cooking… (5s · ↓ 0 tokens · esc to interrupt)",
+			"╰───────────────────────────────────────────╯",
+			"  ⏵⏵ bypass permissions on (alt+m to cycle)",
+		].join("\n");
+		expect(paneAppearsBusy(sample)).toBe(true);
+	});
+
+	test("treats idle pane (no esc-to-interrupt) as not busy", async () => {
+		const { paneAppearsBusy } = await import("./nudge.ts");
+		const sample = [
+			"$ ❯ ls",
+			"src/",
+			"╭───────────────────────────────────────────╮",
+			"│ > _                                       │",
+			"╰───────────────────────────────────────────╯",
+			"  ⏵⏵ bypass permissions on (alt+m to cycle)",
+		].join("\n");
+		expect(paneAppearsBusy(sample)).toBe(false);
+	});
+});
+
 describe("nudgeAgent", () => {
 	// We dynamically import to avoid circular issues
 	async function importNudge() {

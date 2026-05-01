@@ -852,6 +852,21 @@ export async function runDaemonTick(options: DaemonOptions): Promise<void> {
 				// Log the conflict but do NOT auto-kill.
 				// The onHealthCheck callback surfaces this to the operator.
 				// No state change — keep zombie until a human or higher-tier agent decides.
+			} else if (check.action === "complete") {
+				// ZFC fallback: tmux/pid is gone AND lastActivity is stale —
+				// the agent looks like it finished naturally and only the
+				// session-end hook missed (overstory-e74b). Mark completed
+				// without killing (process is already gone) and without
+				// notifying parents of death (this is not a crash).
+				const outcome = store.tryTransitionState(session.agentName, "completed");
+				if (outcome.ok) {
+					session.state = "completed";
+				} else if (outcome.reason === "illegal_transition") {
+					session.state = outcome.prev;
+				}
+				store.updateEscalation(session.agentName, 0, null);
+				session.escalationLevel = 0;
+				session.stalledSince = null;
 			} else if (check.action === "escalate") {
 				// Decision gate check: if the agent sent a decision_gate message, it is
 				// intentionally paused waiting for a human decision — not a stall.

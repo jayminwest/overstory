@@ -212,7 +212,9 @@ export async function checkConsistency(
 
 	// 8. Check for SessionStore entries with missing tmux sessions
 	const existingTmuxNames = new Set(tmuxSessions.map((s) => s.name));
-	const missingTmux = liveSessions.filter((s) => !existingTmuxNames.has(s.tmuxSession));
+	const missingTmux = liveSessions.filter(
+		(s) => s.tmuxSession.length > 0 && !existingTmuxNames.has(s.tmuxSession),
+	);
 
 	if (missingTmux.length > 0) {
 		checks.push({
@@ -229,6 +231,51 @@ export async function checkConsistency(
 			category: "consistency",
 			status: "pass",
 			message: "All SessionStore tmux sessions exist",
+		});
+	}
+
+	// 8b. Check for orphaned claude spawn PIDs (overstory-505d).
+	//
+	// An orphan is a session whose pid is still alive but should not be:
+	//   - the session reached a terminal state (completed/zombie) yet the
+	//     spawn didn't exit, or
+	//   - the tmux container is gone but the claude child survived (was
+	//     reparented to init when its bash wrapper got SIGHUP).
+	// Run `ov clean --all` to reap. Distinct from `dead-pids` (the inverse:
+	// session is live but its pid already died).
+	const orphanedSpawns: Array<{ session: AgentSession; reason: string }> = [];
+	for (const s of storeSessions) {
+		if (s.pid === null || !isProcessAliveFn(s.pid)) continue;
+		if (s.state === "completed" || s.state === "zombie") {
+			orphanedSpawns.push({
+				session: s,
+				reason: `state=${s.state} but pid ${s.pid} still alive`,
+			});
+			continue;
+		}
+		if (s.tmuxSession.length > 0 && !existingTmuxNames.has(s.tmuxSession)) {
+			orphanedSpawns.push({
+				session: s,
+				reason: `tmux session "${s.tmuxSession}" missing but pid ${s.pid} alive`,
+			});
+		}
+	}
+
+	if (orphanedSpawns.length > 0) {
+		checks.push({
+			name: "orphan-spawns",
+			category: "consistency",
+			status: "warn",
+			message: `Found ${orphanedSpawns.length} orphaned spawn process(es) — run "ov clean --all" to reap`,
+			details: orphanedSpawns.map(({ session, reason }) => `${session.agentName}: ${reason}`),
+			fixable: true,
+		});
+	} else {
+		checks.push({
+			name: "orphan-spawns",
+			category: "consistency",
+			status: "pass",
+			message: "No orphaned spawn processes detected",
 		});
 	}
 

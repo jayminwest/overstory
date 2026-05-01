@@ -124,6 +124,7 @@ async function logSyntheticSessionEndEvents(overstoryDir: string): Promise<numbe
 interface CleanResult {
 	sessionEndEventsLogged: number;
 	tmuxKilled: number;
+	orphanPidsReaped: number;
 	worktreesCleaned: number;
 	branchesDeleted: number;
 	mailWiped: boolean;
@@ -215,6 +216,45 @@ function loadRegisteredTmuxNames(overstoryDir: string): Set<string> | null {
 		// SessionStore is broken -- fall back to legacy behavior
 		return null;
 	}
+}
+
+/**
+ * Reap any spawn PIDs in sessions.db that survived tmux teardown.
+ *
+ * `killAllTmuxSessions` walks descendants of the live tmux pane PID and is
+ * sufficient for sessions whose tmux container is still up. This handles the
+ * leftover case: a stored pid that is still alive but its tmux session is
+ * gone (claude was reparented to init when its bash wrapper got SIGHUP) or
+ * the session is in a terminal state but the spawn never exited. Best-effort.
+ * (overstory-505d)
+ */
+async function reapOrphanedPids(overstoryDir: string): Promise<number> {
+	let reaped = 0;
+	try {
+		const dbPath = join(overstoryDir, "sessions.db");
+		const jsonPath = join(overstoryDir, "sessions.json");
+		if (!existsSync(dbPath) && !existsSync(jsonPath)) {
+			return 0;
+		}
+		const { store } = openSessionStore(overstoryDir);
+		try {
+			for (const session of store.getAll()) {
+				if (session.pid === null) continue;
+				if (!isProcessAlive(session.pid)) continue;
+				try {
+					await killProcessTree(session.pid);
+					reaped++;
+				} catch {
+					// Best effort
+				}
+			}
+		} finally {
+			store.close();
+		}
+	} catch {
+		// Best effort
+	}
+	return reaped;
 }
 
 /**
@@ -568,6 +608,7 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 	const result: CleanResult = {
 		sessionEndEventsLogged: 0,
 		tmuxKilled: 0,
+		orphanPidsReaped: 0,
 		worktreesCleaned: 0,
 		branchesDeleted: 0,
 		mailWiped: false,
@@ -607,6 +648,14 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 	// 2. Kill tmux sessions (must happen before worktree removal)
 	if (doWorktrees || all) {
 		result.tmuxKilled = await killAllTmuxSessions(overstoryDir, config.project.name);
+	}
+
+	// 2b. Reap any orphaned spawn PIDs that survived tmux teardown.
+	// Must run after killAllTmuxSessions (which collects descendants of live
+	// panes) but before sessions.db is wiped (we need pid records to find
+	// orphans). (overstory-505d)
+	if (doWorktrees || all) {
+		result.orphanPidsReaped = await reapOrphanedPids(overstoryDir);
 	}
 
 	// 3. Remove worktrees
@@ -669,6 +718,11 @@ export async function cleanCommand(opts: CleanOptions): Promise<void> {
 	}
 	if (result.tmuxKilled > 0) {
 		lines.push(`Killed ${result.tmuxKilled} tmux session${result.tmuxKilled === 1 ? "" : "s"}`);
+	}
+	if (result.orphanPidsReaped > 0) {
+		lines.push(
+			`Reaped ${result.orphanPidsReaped} orphaned spawn process${result.orphanPidsReaped === 1 ? "" : "es"}`,
+		);
 	}
 	if (result.worktreesCleaned > 0) {
 		lines.push(

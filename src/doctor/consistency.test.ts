@@ -410,6 +410,112 @@ describe("checkConsistency", () => {
 		expect(checks.find((c) => c.name === "missing-tmux")?.status).toBe("pass");
 	});
 
+	test("orphan-spawns: terminal state with live pid is flagged", async () => {
+		const dbPath = join(overstoryDir, "sessions.db");
+		const store = createSessionStore(dbPath);
+
+		store.upsert({
+			id: "session-1",
+			agentName: "orphaned-agent",
+			capability: "builder",
+			worktreePath: join(overstoryDir, "worktrees", "orphaned-agent"),
+			branchName: "overstory/orphaned-agent/test-123",
+			taskId: "test-123",
+			tmuxSession: "",
+			state: "completed",
+			pid: 4242,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+			transcriptPath: null,
+		});
+		store.close();
+
+		mockIsProcessAlive.mockReturnValue(true);
+		mockListSessions.mockResolvedValue([]);
+
+		const checks = await checkConsistency(config, overstoryDir, mockDeps);
+
+		const orphanCheck = checks.find((c) => c.name === "orphan-spawns");
+		expect(orphanCheck).toBeDefined();
+		expect(orphanCheck?.status).toBe("warn");
+		expect(orphanCheck?.message).toContain("1 orphaned spawn");
+		expect(orphanCheck?.details?.[0]).toContain("orphaned-agent");
+		expect(orphanCheck?.fixable).toBe(true);
+	});
+
+	test("orphan-spawns: tmux dead but pid alive is flagged", async () => {
+		const dbPath = join(overstoryDir, "sessions.db");
+		const store = createSessionStore(dbPath);
+
+		store.upsert({
+			id: "session-1",
+			agentName: "tmux-dead-agent",
+			capability: "builder",
+			worktreePath: join(overstoryDir, "worktrees", "tmux-dead-agent"),
+			branchName: "overstory/tmux-dead-agent/test-123",
+			taskId: "test-123",
+			tmuxSession: "overstory-testproject-tmux-dead-agent",
+			state: "working",
+			pid: 4242,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+			transcriptPath: null,
+		});
+		store.close();
+
+		mockIsProcessAlive.mockReturnValue(true);
+		// tmux server reports no matching session
+		mockListSessions.mockResolvedValue([]);
+
+		const checks = await checkConsistency(config, overstoryDir, mockDeps);
+
+		const orphanCheck = checks.find((c) => c.name === "orphan-spawns");
+		expect(orphanCheck?.status).toBe("warn");
+		expect(orphanCheck?.details?.[0]).toContain("tmux session");
+	});
+
+	test("orphan-spawns: passes when terminal-state pid is dead", async () => {
+		const dbPath = join(overstoryDir, "sessions.db");
+		const store = createSessionStore(dbPath);
+
+		store.upsert({
+			id: "session-1",
+			agentName: "clean-completed",
+			capability: "builder",
+			worktreePath: join(overstoryDir, "worktrees", "clean-completed"),
+			branchName: "overstory/clean-completed/test-123",
+			taskId: "test-123",
+			tmuxSession: "",
+			state: "completed",
+			pid: 4242,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+			transcriptPath: null,
+		});
+		store.close();
+
+		mockIsProcessAlive.mockReturnValue(false);
+
+		const checks = await checkConsistency(config, overstoryDir, mockDeps);
+
+		expect(checks.find((c) => c.name === "orphan-spawns")?.status).toBe("pass");
+	});
+
 	test("handles tmux not installed gracefully", async () => {
 		// Mock tmux listing to throw an error
 		mockListSessions.mockRejectedValue(new Error("tmux: command not found"));

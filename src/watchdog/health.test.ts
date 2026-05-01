@@ -103,6 +103,67 @@ describe("evaluateHealth", () => {
 		expect(check.reconciliationNote).toBeNull();
 	});
 
+	// --- ZFC Rule 1 fallback: tmux dead + stale lastActivity → completed ---
+
+	test("ZFC fallback: tmux dead + stale lastActivity (working) → complete (missed signal)", () => {
+		const staleActivity = new Date(Date.now() - 60_000).toISOString();
+		const session = makeSession({ state: "working", lastActivity: staleActivity });
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("completed");
+		expect(check.action).toBe("complete");
+		expect(check.tmuxAlive).toBe(false);
+		expect(check.processAlive).toBe(false);
+		expect(check.reconciliationNote).toContain("missed session-end signal");
+	});
+
+	test("ZFC fallback: tmux dead + stale lastActivity (stalled) → complete (missed signal)", () => {
+		const staleActivity = new Date(Date.now() - 90_000).toISOString();
+		const session = makeSession({ state: "stalled", lastActivity: staleActivity });
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("completed");
+		expect(check.action).toBe("complete");
+	});
+
+	test("ZFC: tmux dead + recent lastActivity → still zombie (true crash)", () => {
+		const recentActivity = new Date(Date.now() - 1_000).toISOString();
+		const session = makeSession({ state: "working", lastActivity: recentActivity });
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("zombie");
+		expect(check.action).toBe("terminate");
+	});
+
+	test("ZFC fallback (headless): pid dead + stale lastActivity → complete", () => {
+		const staleActivity = new Date(Date.now() - 60_000).toISOString();
+		const session = makeSession({
+			state: "working",
+			tmuxSession: "",
+			pid: DEAD_PID,
+			lastActivity: staleActivity,
+		});
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("completed");
+		expect(check.action).toBe("complete");
+		expect(check.reconciliationNote).toContain("missed session-end signal");
+	});
+
+	test("ZFC (headless): pid dead + recent lastActivity → still zombie", () => {
+		const recentActivity = new Date(Date.now() - 1_000).toISOString();
+		const session = makeSession({
+			state: "working",
+			tmuxSession: "",
+			pid: DEAD_PID,
+			lastActivity: recentActivity,
+		});
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("zombie");
+		expect(check.action).toBe("terminate");
+	});
+
 	// --- ZFC Rule 2: tmux alive + sessions.json says zombie → investigate ---
 
 	test("ZFC: tmux alive + sessions.json says zombie → investigate (don't auto-kill)", () => {

@@ -112,6 +112,9 @@ describe("createSession", () => {
 		const wrappedCmd = cmd[9] as string;
 		expect(wrappedCmd).toContain("echo hello");
 		expect(wrappedCmd).toContain("export PATH=");
+		// `exec` replaces the bash wrapper with the command so SIGHUP from a
+		// dying tmux server is delivered directly to claude (overstory-505d).
+		expect(wrappedCmd).toContain("exec echo hello");
 
 		const opts = tmuxCallArgs[1] as { cwd: string };
 		expect(opts.cwd).toBe("/work/dir");

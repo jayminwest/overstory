@@ -84,8 +84,112 @@ function updateLastActivity(projectRoot: string, agentName: string): void {
 }
 
 /**
+ * Maximum retry attempts for the session-end transition.
+ *
+ * The Stop hook is the only signal that turns sessions.db state from
+ * "working" to "completed" for headless legacy paths and tmux sessions.
+ * If it loses that signal due to a transient SQLite contention error
+ * (e.g. "database is locked" while the watchdog ticks against the same
+ * file), the row stays in "working" forever and the watchdog later
+ * promotes it to "zombie". Retrying with exponential backoff lets brief
+ * lock contention resolve before we give up. (overstory-e74b)
+ */
+const TRANSITION_MAX_ATTEMPTS = 5;
+const TRANSITION_BACKOFF_BASE_MS = 50;
+
+/**
+ * One attempt at the session-end state transition.
+ *
+ * Throws on transient failures (e.g. SQLite "database is locked") so the
+ * caller can retry. The body is the original logic from
+ * `transitionToCompleted`.
+ */
+function transitionToCompletedOnce(projectRoot: string, agentName: string): void {
+	const overstoryDir = join(projectRoot, ".overstory");
+	const { store } = openSessionStore(overstoryDir);
+	try {
+		const session = store.getByName(agentName);
+		if (session && isStopHookPersistentCapability(session.capability)) {
+			// Check if a persistent top-level agent self-exited by verifying the run
+			// is already completed.
+			// If `ov run complete` was called before session-end, the run status is 'completed'
+			// and we should transition the persistent session to completed too.
+			if (
+				(session.capability === "coordinator" || session.capability === "orchestrator") &&
+				session.runId
+			) {
+				const runStore = createRunStore(join(overstoryDir, "sessions.db"));
+				try {
+					const run = runStore.getRun(session.runId);
+					if (run && run.status === "completed") {
+						// Self-exit: the persistent agent called ov run complete before session ended
+						store.updateState(agentName, "completed");
+						store.updateLastActivity(agentName);
+						return;
+					}
+				} finally {
+					runStore.close();
+				}
+			}
+			// Normal persistent agent: only update activity, don't mark completed
+			store.updateLastActivity(agentName);
+			return;
+		}
+		store.updateState(agentName, "completed");
+		store.updateLastActivity(agentName);
+	} finally {
+		store.close();
+	}
+}
+
+/**
+ * Best-effort: log a session-end hook failure to events.db so it surfaces in
+ * `ov errors` and trace timelines. Swallows secondary errors (events.db may
+ * also be locked when the primary write failed).
+ */
+async function logHookFailure(
+	projectRoot: string,
+	agentName: string,
+	hookName: string,
+	error: unknown,
+	attempts: number,
+): Promise<void> {
+	try {
+		const eventsDbPath = join(projectRoot, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+		try {
+			eventStore.insert({
+				runId: null,
+				agentName,
+				sessionId: null,
+				eventType: "error",
+				toolName: null,
+				toolArgs: null,
+				toolDurationMs: null,
+				level: "error",
+				data: JSON.stringify({
+					hook: hookName,
+					attempts,
+					message: error instanceof Error ? error.message : String(error),
+				}),
+			});
+		} finally {
+			eventStore.close();
+		}
+	} catch {
+		// Non-fatal: events.db may also be unavailable when the primary write failed.
+	}
+}
+
+/**
  * Transition agent state to 'completed' in the SessionStore.
  * Called when session-end event fires.
+ *
+ * Retries on transient SQLite contention with exponential backoff
+ * (50/100/200/400/800ms). On persistent failure, records an `error` event
+ * to events.db so the missed signal shows up in observability tooling and
+ * the watchdog's stale-but-tmux-dead fallback can recognize it.
+ * (overstory-e74b)
  *
  * Skips the transition for capabilities in `STOP_HOOK_PERSISTENT_CAPABILITIES`
  * (coordinator, orchestrator, monitor, lead) whose Stop hook fires every model
@@ -94,46 +198,28 @@ function updateLastActivity(projectRoot: string, agentName: string): void {
  *
  * Non-fatal: silently ignores errors to avoid breaking hook execution.
  */
-function transitionToCompleted(projectRoot: string, agentName: string): void {
-	try {
-		const overstoryDir = join(projectRoot, ".overstory");
-		const { store } = openSessionStore(overstoryDir);
+async function transitionToCompleted(projectRoot: string, agentName: string): Promise<void> {
+	let lastError: unknown;
+	for (let attempt = 0; attempt < TRANSITION_MAX_ATTEMPTS; attempt++) {
 		try {
-			const session = store.getByName(agentName);
-			if (session && isStopHookPersistentCapability(session.capability)) {
-				// Check if a persistent top-level agent self-exited by verifying the run
-				// is already completed.
-				// If `ov run complete` was called before session-end, the run status is 'completed'
-				// and we should transition the persistent session to completed too.
-				if (
-					(session.capability === "coordinator" || session.capability === "orchestrator") &&
-					session.runId
-				) {
-					const runStore = createRunStore(join(overstoryDir, "sessions.db"));
-					try {
-						const run = runStore.getRun(session.runId);
-						if (run && run.status === "completed") {
-							// Self-exit: the persistent agent called ov run complete before session ended
-							store.updateState(agentName, "completed");
-							store.updateLastActivity(agentName);
-							return;
-						}
-					} finally {
-						runStore.close();
-					}
-				}
-				// Normal persistent agent: only update activity, don't mark completed
-				store.updateLastActivity(agentName);
-				return;
+			transitionToCompletedOnce(projectRoot, agentName);
+			return;
+		} catch (err) {
+			lastError = err;
+			if (attempt < TRANSITION_MAX_ATTEMPTS - 1) {
+				await Bun.sleep(TRANSITION_BACKOFF_BASE_MS * 2 ** attempt);
 			}
-			store.updateState(agentName, "completed");
-			store.updateLastActivity(agentName);
-		} finally {
-			store.close();
 		}
-	} catch {
-		// Non-fatal: don't break logging if session update fails
 	}
+
+	// All retries failed — surface the missed signal via events.db.
+	await logHookFailure(
+		projectRoot,
+		agentName,
+		"session-end:transitionToCompleted",
+		lastError,
+		TRANSITION_MAX_ATTEMPTS,
+	);
 }
 
 /**
@@ -629,8 +715,9 @@ async function runLog(opts: {
 		}
 		case "session-end":
 			logger.info("session.end", { agentName: opts.agent });
-			// Transition agent state to completed
-			transitionToCompleted(config.project.root, opts.agent);
+			// Transition agent state to completed (with retry/backoff and
+			// events.db fallback on persistent failure — overstory-e74b).
+			await transitionToCompleted(config.project.root, opts.agent);
 			// Look up agent session for identity update and metrics recording
 			{
 				const agentSession = getAgentSession(config.project.root, opts.agent);
