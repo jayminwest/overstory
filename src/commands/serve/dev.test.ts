@@ -91,7 +91,7 @@ describe("startDevServer", () => {
 		await dev.stop();
 	});
 
-	test("defaults apiPort to 8080 and apiHost to 127.0.0.1", async () => {
+	test("defaults apiPort to the ov serve default and apiHost to 127.0.0.1", async () => {
 		const handle = makeFakeHandle();
 		const { spawn, calls } = makeFakeSpawn(handle);
 
@@ -102,7 +102,7 @@ describe("startDevServer", () => {
 			log: () => {},
 		});
 
-		expect(calls[0]?.env?.OVERSTORY_API_PORT).toBe("8080");
+		expect(calls[0]?.env?.OVERSTORY_API_PORT).toBe("7321");
 		expect(calls[0]?.env?.OVERSTORY_API_HOST).toBe("127.0.0.1");
 
 		handle.resolveExit(0);

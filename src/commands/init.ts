@@ -960,7 +960,7 @@ export async function initCommand(opts: InitOptions): Promise<void> {
 
 	printSuccess("Initialized");
 	printHint("Next: run `ov hooks install` to enable Claude Code hooks.");
-	printHint("Then: `ov coordinator start` and `ov serve` — open http://localhost:8080");
+	printHint("Then: `ov coordinator start` and `ov serve` — open http://localhost:7321");
 	printHint(
 		"       (UI is the primary operator surface; pass `--no-headless` to ov sling for tmux attach)",
 	);

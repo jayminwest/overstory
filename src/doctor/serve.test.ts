@@ -83,7 +83,7 @@ describe("checkServe", () => {
 		const portCheck = checks.find((c) => c.name === "serve port");
 
 		expect(portCheck).toBeDefined();
-		// Server not running — should warn (or pass if something happens to be on 8080)
+		// Server not running — should warn (or pass if something happens to be on the default port)
 		expect(portCheck?.status === "warn" || portCheck?.status === "pass").toBe(true);
 	});
 

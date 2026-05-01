@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_SERVE_PORT } from "../commands/serve.ts";
 import type { DoctorCheck, DoctorCheckFn } from "./types.ts";
 
 /**
@@ -40,7 +41,7 @@ export const checkServe: DoctorCheckFn = async (config, _overstoryDir): Promise<
 	}
 
 	// Check 2: default port reachability (non-blocking probe)
-	const port = 8080;
+	const port = DEFAULT_SERVE_PORT;
 	const host = "127.0.0.1";
 	const reachable = await probePort(host, port);
 	if (reachable) {

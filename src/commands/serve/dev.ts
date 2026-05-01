@@ -6,6 +6,8 @@
  * server itself proxies /api/* and /ws back to the main `ov serve` process.
  */
 
+import { DEFAULT_SERVE_PORT } from "../serve.ts";
+
 export interface DevServerHandle {
 	port: number;
 	stop: () => Promise<void>;
@@ -74,7 +76,7 @@ export async function startDevServer(opts: StartDevServerOptions): Promise<DevSe
 
 	const env = buildEnv({
 		OVERSTORY_DEV_PORT: String(opts.port),
-		OVERSTORY_API_PORT: String(opts.apiPort ?? 8080),
+		OVERSTORY_API_PORT: String(opts.apiPort ?? DEFAULT_SERVE_PORT),
 		OVERSTORY_API_HOST: opts.apiHost ?? "127.0.0.1",
 	});
 

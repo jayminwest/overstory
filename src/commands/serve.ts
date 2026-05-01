@@ -30,6 +30,14 @@ import { type RestApiDeps, registerRestApi } from "./serve/rest.ts";
 import { serveStatic } from "./serve/static.ts";
 import { installBroadcaster } from "./serve/ws.ts";
 
+/**
+ * Default TCP port for `ov serve`. 8080 collides with Colima's SSH mux tunnel
+ * (and Tomcat/Jenkins/Docker dev proxies); the kernel routes to *:8080 vs.
+ * 127.0.0.1:8080 inconsistently, so users saw foreign error JSON instead of
+ * the overstory UI (overstory-eaba). 7321 is unassigned and easy to type.
+ */
+export const DEFAULT_SERVE_PORT = 7321;
+
 // === Extensible route registry ===
 
 /** Handler for /api/* routes. Return null to fall through to the next handler. */
@@ -146,7 +154,7 @@ export async function createServeServer(
 	const cwd = process.cwd();
 	const config = await _cfg(cwd);
 
-	const port = opts.port ?? 8080;
+	const port = opts.port ?? DEFAULT_SERVE_PORT;
 	const hostname = opts.host ?? "127.0.0.1";
 	const _resolveUiDist = deps._resolveUiDistPath ?? resolveUiDistPath;
 	const uiDistPath = _resolveUiDist(config.project.root);
@@ -508,7 +516,7 @@ export async function runServe(opts: ServeOptions, deps: ServeDeps = {}): Promis
 export function createServeCommand(): Command {
 	return new Command("serve")
 		.description("Start the HTTP server (static UI + /healthz + /api/* + /ws)")
-		.option("--port <n>", "TCP port to listen on", "8080")
+		.option("--port <n>", "TCP port to listen on", String(DEFAULT_SERVE_PORT))
 		.option("--host <addr>", "Host/address to bind", "127.0.0.1")
 		.option("--dev", "Also start the dev UI server with HMR + API/WS proxy")
 		.option("--dev-port <n>", "Dev UI port (only with --dev)", "3000")
@@ -521,7 +529,7 @@ export function createServeCommand(): Command {
 				devPort?: string;
 				json?: boolean;
 			}) => {
-				const port = opts.port !== undefined ? Number.parseInt(opts.port, 10) : 8080;
+				const port = opts.port !== undefined ? Number.parseInt(opts.port, 10) : DEFAULT_SERVE_PORT;
 				const devPort = opts.devPort !== undefined ? Number.parseInt(opts.devPort, 10) : 3000;
 				try {
 					if (Number.isNaN(port) || port < 1 || port > 65535) {
