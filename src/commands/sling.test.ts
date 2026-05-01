@@ -1210,6 +1210,7 @@ function makeAutoDispatchOpts(overrides?: Partial<AutoDispatchOptions>): AutoDis
 		capability: "builder",
 		specPath: "/path/to/spec.md",
 		parentAgent: "lead-alpha",
+		slingerName: null,
 		instructionPath: ".claude/CLAUDE.md",
 		...overrides,
 	};
@@ -1223,6 +1224,7 @@ describe("buildAutoDispatch", () => {
 			capability: "builder",
 			specPath: "/path/to/spec.md",
 			parentAgent: "lead-alpha",
+			slingerName: null,
 			instructionPath: ".claude/CLAUDE.md",
 		});
 		expect(dispatch.from).toBe("lead-alpha");
@@ -1238,6 +1240,7 @@ describe("buildAutoDispatch", () => {
 			capability: "lead",
 			specPath: null,
 			parentAgent: null,
+			slingerName: null,
 			instructionPath: ".claude/CLAUDE.md",
 		});
 		expect(dispatch.from).toBe("orchestrator");
@@ -1251,6 +1254,7 @@ describe("buildAutoDispatch", () => {
 			capability: "scout",
 			specPath: null,
 			parentAgent: "lead-alpha",
+			slingerName: null,
 			instructionPath: ".claude/CLAUDE.md",
 		});
 		expect(dispatch.body).toContain("scout");
@@ -1263,9 +1267,31 @@ describe("buildAutoDispatch", () => {
 			capability: "builder",
 			specPath: "/abs/path/to/spec.md",
 			parentAgent: "lead-alpha",
+			slingerName: null,
 			instructionPath: ".claude/CLAUDE.md",
 		});
 		expect(dispatch.body).toContain("/abs/path/to/spec.md");
+	});
+
+	test("slinger takes precedence over parent agent for from field", () => {
+		const dispatch = buildAutoDispatch(
+			makeAutoDispatchOpts({ slingerName: "coordinator", parentAgent: "lead-alpha" }),
+		);
+		expect(dispatch.from).toBe("coordinator");
+	});
+
+	test("slinger fills in when parent agent is null", () => {
+		const dispatch = buildAutoDispatch(
+			makeAutoDispatchOpts({ slingerName: "coordinator", parentAgent: null }),
+		);
+		expect(dispatch.from).toBe("coordinator");
+	});
+
+	test("falls back to orchestrator when both slinger and parent are null", () => {
+		const dispatch = buildAutoDispatch(
+			makeAutoDispatchOpts({ slingerName: null, parentAgent: null }),
+		);
+		expect(dispatch.from).toBe("orchestrator");
 	});
 
 	test("subject contains task ID", () => {

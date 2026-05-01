@@ -212,6 +212,12 @@ export interface AutoDispatchOptions {
 	capability: string;
 	specPath: string | null;
 	parentAgent: string | null;
+	/**
+	 * The agent who invoked `ov sling` (from `OVERSTORY_AGENT_NAME` env var);
+	 * takes precedence over `parentAgent` for the mail `from` field, since
+	 * `--parent` describes the new agent's hierarchical parent, not the slinger.
+	 */
+	slingerName: string | null;
 	instructionPath: string;
 }
 
@@ -228,7 +234,7 @@ export function buildAutoDispatch(opts: AutoDispatchOptions): {
 	subject: string;
 	body: string;
 } {
-	const from = opts.parentAgent ?? "orchestrator";
+	const from = opts.slingerName ?? opts.parentAgent ?? "orchestrator";
 	const specLine = opts.specPath
 		? `Spec file: ${opts.specPath}`
 		: "No spec file provided. Check your overlay for task details.";
@@ -974,12 +980,14 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 
 			// 9b. Send auto-dispatch mail so it exists when SessionStart hook fires.
 			// This eliminates the race where coordinator sends dispatch AFTER agent boots.
+			const slingerName = process.env.OVERSTORY_AGENT_NAME?.trim() || null;
 			const dispatch = buildAutoDispatch({
 				agentName: name,
 				taskId,
 				capability,
 				specPath: absoluteSpecPath,
 				parentAgent,
+				slingerName,
 				instructionPath: runtime.instructionPath,
 			});
 			const mailStore = createMailStore(join(overstoryDir, "mail.db"));
