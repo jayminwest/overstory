@@ -17,6 +17,7 @@ domains:
   - sessions
   - turn-runner
   - mail
+  - observability
 governance:
   max_entries: 100
   warn_entries: 150
