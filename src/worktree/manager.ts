@@ -41,6 +41,12 @@ async function runGit(
  * Creates a worktree at `{baseDir}/{agentName}` with a new branch
  * named `overstory/{agentName}/{taskId}` based on `baseBranch`.
  *
+ * After `git worktree add` returns, validates that the worktree is
+ * actually registered with git AND contains tracked files. If either
+ * check fails, rolls back and throws — sling has previously hit edge
+ * cases where the dir exists but git did not populate it (overstory-6878),
+ * trapping the agent in a non-worktree directory.
+ *
  * @returns The absolute worktree path and branch name.
  */
 export async function createWorktree(options: {
@@ -60,7 +66,45 @@ export async function createWorktree(options: {
 		branchName,
 	});
 
+	await validateWorktreeCreation({ repoRoot, worktreePath, branchName });
+
 	return { path: worktreePath, branch: branchName };
+}
+
+/**
+ * Verify that a freshly created worktree is registered with git and contains
+ * tracked files. Throws WorktreeError with a precise diagnostic on failure
+ * and rolls back the worktree + branch so callers don't leak state.
+ *
+ * Exported for direct testing of edge cases (empty base branches, racy
+ * cleanup) that are awkward to provoke through createWorktree end-to-end.
+ */
+export async function validateWorktreeCreation(opts: {
+	repoRoot: string;
+	worktreePath: string;
+	branchName: string;
+}): Promise<void> {
+	const { repoRoot, worktreePath, branchName } = opts;
+
+	const entries = await listWorktrees(repoRoot);
+	const registered = entries.some((entry) => entry.path === worktreePath);
+	if (!registered) {
+		await rollbackWorktree(repoRoot, worktreePath, branchName);
+		throw new WorktreeError(
+			`Worktree creation reported success but path is not registered with git: ${worktreePath}. Possible causes: pre-existing directory, branch already checked out elsewhere, or git worktree add failed silently.`,
+			{ worktreePath, branchName },
+		);
+	}
+
+	const lsFiles = await runGit(worktreePath, ["ls-files"], { worktreePath, branchName });
+	const fileCount = lsFiles.split("\n").filter((line) => line.length > 0).length;
+	if (fileCount === 0) {
+		await rollbackWorktree(repoRoot, worktreePath, branchName);
+		throw new WorktreeError(
+			`Worktree was registered but contains zero tracked files: ${worktreePath}. The base branch may be empty or the working tree was not populated.`,
+			{ worktreePath, branchName },
+		);
+	}
 }
 
 /**
