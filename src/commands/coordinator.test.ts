@@ -1601,6 +1601,131 @@ describe("watchdog integration", () => {
 			expect(output).toContain("--watchdog");
 			expect(output).toContain("watchdog");
 		});
+
+		test("start help text includes --accept-existing-watchdog flag", async () => {
+			const cmd = createCoordinatorCommand({});
+			for (const sub of cmd.commands) {
+				sub.exitOverride();
+			}
+			const output = await captureStdout(async () => {
+				await cmd.parseAsync(["start", "--help"], { from: "user" }).catch(() => {});
+			});
+			expect(output).toContain("--accept-existing-watchdog");
+		});
+	});
+
+	// overstory-3f0c: detect leftover watchdog from a previous session before
+	// spawning, so operators do not get unexpected watchdog supervision.
+	describe("preexisting watchdog detection", () => {
+		test("rejects start with no flags when watchdog is already running", async () => {
+			const { deps, watchdogCalls } = makeDeps({}, { running: true });
+			const originalSleep = Bun.sleep;
+			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+			try {
+				await expect(coordinatorCommand(["start", "--json"], deps)).rejects.toThrow(
+					ValidationError,
+				);
+			} finally {
+				Bun.sleep = originalSleep;
+			}
+
+			// Detection ran, but no spawn or auto-start happened.
+			expect(watchdogCalls?.isRunning).toBeGreaterThanOrEqual(1);
+			expect(watchdogCalls?.start).toBe(0);
+		});
+
+		test("error message names the offending flags so operator can act", async () => {
+			const { deps } = makeDeps({}, { running: true });
+			const originalSleep = Bun.sleep;
+			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+			try {
+				await coordinatorCommand(["start", "--json"], deps);
+				expect.unreachable("should have thrown");
+			} catch (err) {
+				expect(err).toBeInstanceOf(ValidationError);
+				const ve = err as ValidationError;
+				expect(ve.message).toContain("Watchdog");
+				expect(ve.message).toContain("--watchdog");
+				expect(ve.message).toContain("--accept-existing-watchdog");
+			} finally {
+				Bun.sleep = originalSleep;
+			}
+		});
+
+		test("--watchdog acknowledges preexisting daemon and does NOT double-start", async () => {
+			const { deps, watchdogCalls } = makeDeps({}, { running: true, startSuccess: true });
+			const originalSleep = Bun.sleep;
+			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+			let output: string;
+			try {
+				output = await captureStdout(() =>
+					coordinatorCommand(["start", "--watchdog", "--json"], deps),
+				);
+			} finally {
+				Bun.sleep = originalSleep;
+			}
+
+			expect(watchdogCalls?.start).toBe(0);
+			const parsed = JSON.parse(output) as Record<string, unknown>;
+			expect(parsed.watchdog).toBe(true);
+			expect(parsed.watchdogPreexisting).toBe(true);
+		});
+
+		test("--accept-existing-watchdog allows start without auto-managing the daemon", async () => {
+			const { deps, watchdogCalls } = makeDeps({}, { running: true });
+			const originalSleep = Bun.sleep;
+			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+			let output: string;
+			try {
+				output = await captureStdout(() =>
+					coordinatorCommand(["start", "--accept-existing-watchdog", "--json"], deps),
+				);
+			} finally {
+				Bun.sleep = originalSleep;
+			}
+
+			expect(watchdogCalls?.start).toBe(0);
+			const parsed = JSON.parse(output) as Record<string, unknown>;
+			expect(parsed.watchdog).toBe(true);
+			expect(parsed.watchdogPreexisting).toBe(true);
+		});
+
+		test("watchdogPreexisting:false in JSON when no daemon was running", async () => {
+			const { deps } = makeDeps({}, { running: false });
+			const originalSleep = Bun.sleep;
+			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+			let output: string;
+			try {
+				output = await captureStdout(() => coordinatorCommand(["start", "--json"], deps));
+			} finally {
+				Bun.sleep = originalSleep;
+			}
+
+			const parsed = JSON.parse(output) as Record<string, unknown>;
+			expect(parsed.watchdogPreexisting).toBe(false);
+			expect(parsed.watchdog).toBe(false);
+		});
+
+		test("orchestrator inherits the same preexisting-watchdog detection", async () => {
+			const { deps, watchdogCalls } = makeDeps({}, { running: true });
+			const originalSleep = Bun.sleep;
+			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
+
+			try {
+				await expect(orchestratorCommand(["start", "--json"], deps)).rejects.toThrow(
+					ValidationError,
+				);
+			} finally {
+				Bun.sleep = originalSleep;
+			}
+
+			expect(watchdogCalls?.start).toBe(0);
+		});
 	});
 });
 
