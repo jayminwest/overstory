@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { AgentError } from "../errors.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
@@ -2658,15 +2658,31 @@ describe("getLeadCloseGateGuards", () => {
 	});
 });
 
+// CI runners don't have a global `ov` binary on PATH, so the lead close-gate
+// script (which calls `ov mail list ...`) can't count seeded mails. Build a
+// shim that execs the project's own src/index.ts via bun, and return its dir
+// to prepend to PATH inside spawned shells.
+async function createOvShim(parentDir: string): Promise<string> {
+	const binDir = join(parentDir, ".bin");
+	await mkdir(binDir, { recursive: true });
+	const ovSrc = resolve(import.meta.dir, "..", "index.ts");
+	const shim = `#!/bin/sh\nexec ${process.execPath} ${JSON.stringify(ovSrc)} "$@"\n`;
+	const ovShim = join(binDir, "ov");
+	await writeFile(ovShim, shim);
+	await chmod(ovShim, 0o755);
+	return binDir;
+}
+
 describe("lead close-gate behavioral tests", () => {
 	let tempDir: string;
 	let dbPath: string;
+	let ovBinDir: string;
 
 	beforeEach(async () => {
 		tempDir = await mkdtemp(join(tmpdir(), "overstory-lead-gate-test-"));
-		const { mkdir } = await import("node:fs/promises");
 		await mkdir(join(tempDir, ".overstory"), { recursive: true });
 		dbPath = join(tempDir, ".overstory", "mail.db");
+		ovBinDir = await createOvShim(tempDir);
 	});
 
 	afterEach(async () => {
@@ -2700,6 +2716,7 @@ describe("lead close-gate behavioral tests", () => {
 		const script = guards[0]?.hooks[0]?.command ?? "";
 		const input = JSON.stringify({ command: opts.command });
 		const env = { ...process.env } as Record<string, string>;
+		env.PATH = `${ovBinDir}:${env.PATH ?? ""}`;
 		if (opts.agentName === null) {
 			delete env.OVERSTORY_AGENT_NAME;
 		} else if (opts.agentName !== undefined) {
@@ -2842,12 +2859,13 @@ describe("lead close-gate behavioral tests", () => {
 describe("lead close-gate merge-ancestor check (overstory-da9b)", () => {
 	let repoDir: string;
 	let defaultBranch: string;
+	let ovBinDir: string;
 
 	beforeEach(async () => {
 		repoDir = await createTempGitRepo();
 		defaultBranch = await getDefaultBranch(repoDir);
-		const { mkdir } = await import("node:fs/promises");
 		await mkdir(join(repoDir, ".overstory"), { recursive: true });
+		ovBinDir = await createOvShim(repoDir);
 		// Pre-seed merge_ready so the lead clears the count checks and the script
 		// reaches the new merge-ancestor logic.
 		const dbPath = join(repoDir, ".overstory", "mail.db");
@@ -2878,6 +2896,7 @@ describe("lead close-gate merge-ancestor check (overstory-da9b)", () => {
 		const script = guards[0]?.hooks[0]?.command ?? "";
 		const input = JSON.stringify({ command: "sd close my-task" });
 		const env = { ...process.env } as Record<string, string>;
+		env.PATH = `${ovBinDir}:${env.PATH ?? ""}`;
 		env.OVERSTORY_AGENT_NAME = "lead-x";
 		env.OVERSTORY_TASK_ID = "my-task";
 		if (opts.worktreePath === null) {
