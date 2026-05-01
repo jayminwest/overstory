@@ -84,6 +84,7 @@ export interface StatusData {
 	worktrees: Array<{ path: string; branch: string; head: string }>;
 	tmuxSessions: Array<{ name: string; pid: number }>;
 	unreadMailCount: number;
+	unreadMailScope: string;
 	mergeQueueCount: number;
 	recentMetricsCount: number;
 	verboseDetails?: Record<string, VerboseAgentDetail>;
@@ -228,6 +229,7 @@ export async function gatherStatus(
 			worktrees,
 			tmuxSessions,
 			unreadMailCount,
+			unreadMailScope: agentName,
 			mergeQueueCount,
 			recentMetricsCount,
 			verboseDetails,
@@ -293,7 +295,9 @@ export function printStatus(data: StatusData): void {
 	w("\n");
 
 	// Mail
-	w(`Mail: ${data.unreadMailCount} unread\n`);
+	// Scope is per-agent (the orchestrator by default). Differs from `ov mail list
+	// --unread` (system-wide) and `ov mail check` (per-agent, marks as read).
+	w(`Mail: ${data.unreadMailCount} unread (to ${data.unreadMailScope})\n`);
 
 	// Merge queue
 	w(`Merge queue: ${data.mergeQueueCount} pending\n`);

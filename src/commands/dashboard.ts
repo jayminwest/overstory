@@ -434,6 +434,7 @@ async function loadDashboardData(
 		worktrees,
 		tmuxSessions,
 		unreadMailCount,
+		unreadMailScope: "orchestrator",
 		mergeQueueCount,
 		recentMetricsCount,
 	};

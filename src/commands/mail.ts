@@ -768,8 +768,8 @@ export async function mailCommand(args: string[]): Promise<void> {
 
 	program
 		.command("check")
-		.description("Check inbox (unread messages)")
-		.option("--agent <name>", "Agent name")
+		.description("Check inbox for one agent and mark unread as read (per-agent scope)")
+		.option("--agent <name>", "Agent name (default: orchestrator)")
 		.option("--inject", "Inject format for hook context")
 		.option("--json", "Output as JSON")
 		.option("--debounce <ms>", "Debounce interval in milliseconds")
@@ -780,11 +780,11 @@ export async function mailCommand(args: string[]): Promise<void> {
 
 	program
 		.command("list")
-		.description("List messages with filters")
+		.description("List messages with filters (system-wide unless --to/--agent given)")
 		.option("--from <name>", "Filter by sender")
-		.option("--to <name>", "Filter by recipient")
+		.option("--to <name>", "Filter by recipient (scopes to one agent)")
 		.option("--agent <name>", "Alias for --to (filter by recipient)")
-		.option("--unread", "Show only unread messages")
+		.option("--unread", "Show only unread messages (does NOT mark them read)")
 		.option("--type <type>", "Filter by message type")
 		.option("--json", "Output as JSON")
 		.exitOverride()

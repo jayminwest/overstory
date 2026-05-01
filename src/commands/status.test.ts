@@ -51,6 +51,7 @@ function makeStatusData(overrides: Partial<StatusData> = {}): StatusData {
 		worktrees: [],
 		tmuxSessions: [{ name: "overstory-test-builder", pid: 12345 }],
 		unreadMailCount: 0,
+		unreadMailScope: "orchestrator",
 		mergeQueueCount: 0,
 		recentMetricsCount: 0,
 		...overrides,
@@ -88,6 +89,12 @@ describe("printStatus", () => {
 		expect(out).not.toContain("Worktree:");
 		expect(out).not.toContain("Logs:");
 		expect(out).not.toContain("Mail sent:");
+	});
+
+	test("Mail line names the scope agent so per-agent scope is unambiguous", () => {
+		const data = makeStatusData({ unreadMailCount: 3, unreadMailScope: "lead-1" });
+		printStatus(data);
+		expect(stripAnsi(output())).toContain("Mail: 3 unread (to lead-1)");
 	});
 
 	test("verbose: shows worktree path, logs dir, and mail timestamps", () => {
@@ -208,6 +215,7 @@ describe("--verbose --json", () => {
 			worktrees: [],
 			tmuxSessions: [],
 			unreadMailCount: 0,
+			unreadMailScope: "orchestrator",
 			mergeQueueCount: 0,
 			recentMetricsCount: 0,
 			verboseDetails: { agent: detail },
@@ -226,6 +234,7 @@ describe("--verbose --json", () => {
 			worktrees: [],
 			tmuxSessions: [],
 			unreadMailCount: 0,
+			unreadMailScope: "orchestrator",
 			mergeQueueCount: 0,
 			recentMetricsCount: 0,
 		};
