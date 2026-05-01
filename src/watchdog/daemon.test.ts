@@ -531,6 +531,123 @@ describe("daemon tick", () => {
 		expect(reloaded[0]?.stalledSince).toBeNull();
 	});
 
+	// Regression tests for overstory-74ce: killAgent() must never call
+	// tmux.killSession("") for headless agents — an empty `-t` argument is
+	// prefix-matched and would wildcard-kill the entire overstory tmux server.
+
+	test("spawn-per-turn agent at level 3 termination does NOT call tmux.killSession", async () => {
+		const nudgeIntervalMs = 60_000;
+		const stalledSince = new Date(Date.now() - 4 * nudgeIntervalMs).toISOString();
+		const staleActivity = new Date(Date.now() - THRESHOLDS.staleThresholdMs * 2).toISOString();
+
+		// Spawn-per-turn worker between turns: tmuxSession === "" AND pid === null.
+		// Before the fix, killAgent fell through to tmux.killSession("") which
+		// prefix-matches every session in the overstory tmux server.
+		const session = makeSession({
+			agentName: "spawn-per-turn-doomed",
+			tmuxSession: "",
+			pid: null,
+			state: "stalled",
+			lastActivity: staleActivity,
+			escalationLevel: 2,
+			stalledSince,
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		// No tmux sessions registered — emulates production where the spawn-per-turn
+		// agent has no named session.
+		const tmuxMock = tmuxWithLiveness({});
+
+		await runDaemonTick({
+			root: tempRoot,
+			...THRESHOLDS,
+			nudgeIntervalMs,
+			tier1Enabled: false,
+			_tmux: tmuxMock,
+			_triage: triageAlways("extend"),
+			_nudge: nudgeTracker().nudge,
+			_eventStore: null,
+			_recordFailure: async () => {},
+			_getConnection: () => undefined,
+			_removeConnection: () => {},
+			_tailerRegistry: new Map(),
+			_findLatestStdoutLog: async () => null,
+		});
+
+		// Critical assertion: no wildcard kill attempt. tmuxMock.killed must be empty.
+		expect(tmuxMock.killed).toHaveLength(0);
+
+		// The session is still transitioned to zombie — termination semantics are preserved,
+		// just without the wildcard tmux kill.
+		const reloaded = readSessionsFromStore(tempRoot);
+		expect(reloaded[0]?.state).toBe("zombie");
+		expect(reloaded[0]?.escalationLevel).toBe(0);
+		expect(reloaded[0]?.stalledSince).toBeNull();
+	});
+
+	test("long-lived headless agent at level 3 termination kills pid tree, not tmux", async () => {
+		const nudgeIntervalMs = 60_000;
+		const stalledSince = new Date(Date.now() - 4 * nudgeIntervalMs).toISOString();
+		const staleActivity = new Date(Date.now() - THRESHOLDS.staleThresholdMs * 2).toISOString();
+
+		// Long-lived headless capability (e.g. coordinator/orchestrator/monitor):
+		// tmuxSession === "" AND pid !== null. The PID tree should be killed; tmux
+		// must not be touched.
+		const session = makeSession({
+			agentName: "headless-long-lived-doomed",
+			tmuxSession: "",
+			pid: process.pid, // alive PID — health eval won't short-circuit to direct terminate
+			state: "stalled",
+			lastActivity: staleActivity,
+			escalationLevel: 2,
+			stalledSince,
+		});
+
+		writeSessionsToStore(tempRoot, [session]);
+
+		const killedPids: number[] = [];
+		const procMock = {
+			isAlive: (pid: number) => {
+				try {
+					process.kill(pid, 0);
+					return true;
+				} catch {
+					return false;
+				}
+			},
+			killTree: async (pid: number) => {
+				killedPids.push(pid);
+			},
+		};
+
+		const tmuxMock = tmuxWithLiveness({});
+
+		await runDaemonTick({
+			root: tempRoot,
+			...THRESHOLDS,
+			nudgeIntervalMs,
+			tier1Enabled: false,
+			_tmux: tmuxMock,
+			_triage: triageAlways("extend"),
+			_nudge: nudgeTracker().nudge,
+			_process: procMock,
+			_eventStore: null,
+			_recordFailure: async () => {},
+			_getConnection: () => undefined,
+			_removeConnection: () => {},
+			_tailerRegistry: new Map(),
+			_findLatestStdoutLog: async () => null,
+		});
+
+		// PID tree was killed; tmux.killSession was never called.
+		expect(killedPids).toContain(process.pid);
+		expect(tmuxMock.killed).toHaveLength(0);
+
+		const reloaded = readSessionsFromStore(tempRoot);
+		expect(reloaded[0]?.state).toBe("zombie");
+	});
+
 	test("triage retry sends nudge with recovery message", async () => {
 		const staleActivity = new Date(Date.now() - 60_000).toISOString();
 		const stalledSince = new Date(Date.now() - 130_000).toISOString();

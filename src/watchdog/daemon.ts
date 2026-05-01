@@ -487,12 +487,17 @@ export function startDaemon(options: DaemonOptions & { intervalMs: number }): { 
  * Prefers runtime-agnostic `conn.abort()` when a RuntimeConnection is registered.
  * If abort() succeeds, returns immediately — no PID/tmux kill needed.
  * If abort() throws (e.g. process already exited), falls through to the
- * defense-in-depth path: PID kill for headless agents, tmux kill for TUI agents.
+ * defense-in-depth path below.
  *
- * Headless agents without a connection (tmuxSession === "" && pid !== null) are
- * killed via PID process tree. TUI agents are killed via their named tmux session
- * (only if tmuxAlive). This prevents the blast-radius bug where killSession("")
- * with tmux prefix matching would kill ALL tmux sessions.
+ * Branching after abort:
+ *   - tmuxSession === "" (headless): never call tmux.killSession — an empty `-t`
+ *     prefix-matches every session in the tmux server, wildcard-killing the entire
+ *     overstory swarm (overstory-74ce). Branch by pid:
+ *       - pid !== null  → kill the process tree (long-lived headless capability).
+ *       - pid === null  → no-op (spawn-per-turn agent between turns; the in-flight
+ *         process, if any, was already handled by the abort/connection path).
+ *   - tmuxSession !== "" (TUI): kill the named tmux session, but only when
+ *     `tmuxAlive` to avoid spurious "session not found" errors.
  */
 async function killAgent(ctx: {
 	session: AgentSession;
@@ -503,7 +508,6 @@ async function killAgent(ctx: {
 	removeConnection: (name: string) => void;
 }): Promise<void> {
 	const { session, tmuxAlive, tmux, process: proc, getConnection, removeConnection } = ctx;
-	const isHeadless = session.tmuxSession === "" && session.pid !== null;
 
 	// Prefer runtime-agnostic abort() when a connection is registered.
 	const conn = getConnection(session.agentName);
@@ -522,13 +526,24 @@ async function killAgent(ctx: {
 		// abort() threw — fall through to PID/tmux kill below as defense-in-depth
 	}
 
-	if (isHeadless && session.pid !== null) {
-		try {
-			await proc.killTree(session.pid);
-		} catch {
-			// Already exited — not an error
+	// Headless agents (no tmux session) must never reach tmux.killSession.
+	// An empty `-t` argument is prefix-matched and would kill every overstory
+	// tmux session in the server (overstory-74ce).
+	if (session.tmuxSession === "") {
+		if (session.pid !== null) {
+			try {
+				await proc.killTree(session.pid);
+			} catch {
+				// Already exited — not an error
+			}
 		}
-	} else if (tmuxAlive) {
+		// pid === null: spawn-per-turn agent between turns. Any in-flight process
+		// was handled by abort/connection above. No-op — next dispatch will spawn fresh.
+		return;
+	}
+
+	// Named tmux session path (TUI agents).
+	if (tmuxAlive) {
 		try {
 			await tmux.killSession(session.tmuxSession);
 		} catch {
