@@ -20,6 +20,7 @@ import {
 	loadGroups,
 	printGroupProgress,
 	removeFromGroup,
+	resolveGroup,
 } from "./group.ts";
 
 let tempDir: string;
@@ -379,3 +380,96 @@ describe("printGroupProgress", () => {
 		expect(output).toContain("2026-01-15T10:00:00.000Z");
 	});
 });
+
+// -- resolveGroup --
+
+describe("resolveGroup", () => {
+	test("resolves by exact UUID", () => {
+		const a = makeGroup({ id: "group-aaaaaaaa", name: "alpha" });
+		const b = makeGroup({ id: "group-bbbbbbbb", name: "beta" });
+		expect(resolveGroup([a, b], "group-aaaaaaaa")).toBe(a);
+	});
+
+	test("resolves by unique name", () => {
+		const a = makeGroup({ id: "group-aaaaaaaa", name: "alpha" });
+		const b = makeGroup({ id: "group-bbbbbbbb", name: "beta" });
+		expect(resolveGroup([a, b], "beta")).toBe(b);
+	});
+
+	test("ID match wins when name === some-other-group's-id", () => {
+		const a = makeGroup({ id: "group-aaaaaaaa", name: "group-bbbbbbbb" });
+		const b = makeGroup({ id: "group-bbbbbbbb", name: "beta" });
+		expect(resolveGroup([a, b], "group-bbbbbbbb")).toBe(b);
+	});
+
+	test("name match prefers the active group when others are completed", () => {
+		const old = makeGroup({ id: "group-aaaaaaaa", name: "dup", status: "completed" });
+		const live = makeGroup({ id: "group-bbbbbbbb", name: "dup", status: "active" });
+		expect(resolveGroup([old, live], "dup")).toBe(live);
+	});
+
+	test("ambiguous when multiple active groups share a name", () => {
+		const x = makeGroup({ id: "group-aaaaaaaa", name: "dup", status: "active" });
+		const y = makeGroup({ id: "group-bbbbbbbb", name: "dup", status: "active" });
+		expect(() => resolveGroup([x, y], "dup")).toThrow(GroupError);
+		try {
+			resolveGroup([x, y], "dup");
+		} catch (err) {
+			expect(err).toBeInstanceOf(GroupError);
+			const message = (err as GroupError).message;
+			expect(message).toContain("ambiguous");
+			expect(message).toContain("group-aaaaaaaa");
+			expect(message).toContain("group-bbbbbbbb");
+		}
+	});
+
+	test("ambiguous when zero active groups share the name", () => {
+		const x = makeGroup({ id: "group-aaaaaaaa", name: "dup", status: "completed" });
+		const y = makeGroup({ id: "group-bbbbbbbb", name: "dup", status: "completed" });
+		expect(() => resolveGroup([x, y], "dup")).toThrow(GroupError);
+	});
+
+	test("throws not-found for unknown identifier", () => {
+		const a = makeGroup({ id: "group-aaaaaaaa", name: "alpha" });
+		expect(() => resolveGroup([a], "nope")).toThrow(/not found/);
+	});
+});
+
+// -- name-or-id lookup in addToGroup / removeFromGroup --
+
+describe("name-or-id lookup", () => {
+	test("addToGroup resolves by name", async () => {
+		const group = makeGroup({ id: "group-aaaaaaaa", name: "alpha", memberIssueIds: ["i1"] });
+		await writeGroups([group]);
+		const tracker = stubTrackerOk();
+		const updated = await addToGroup(tempDir, "alpha", ["i2"], false, tracker);
+		expect(updated.id).toBe("group-aaaaaaaa");
+		expect(updated.memberIssueIds).toEqual(["i1", "i2"]);
+	});
+
+	test("removeFromGroup resolves by name", async () => {
+		const group = makeGroup({ id: "group-aaaaaaaa", name: "alpha", memberIssueIds: ["i1", "i2"] });
+		await writeGroups([group]);
+		const updated = await removeFromGroup(tempDir, "alpha", ["i2"]);
+		expect(updated.id).toBe("group-aaaaaaaa");
+		expect(updated.memberIssueIds).toEqual(["i1"]);
+	});
+});
+
+function stubTrackerOk(): import("../tracker/types.ts").TrackerClient {
+	return {
+		ready: async () => [],
+		show: async (id: string): Promise<TrackerIssue> => ({
+			id,
+			title: id,
+			status: "open",
+			priority: 2,
+			type: "task",
+		}),
+		create: async () => "stub-id",
+		claim: async () => undefined,
+		close: async () => undefined,
+		list: async () => [],
+		sync: async () => undefined,
+	};
+}

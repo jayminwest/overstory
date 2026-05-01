@@ -483,9 +483,9 @@ ov merge                         Merge agent branches into canonical
 ```
 ov group <sub>                  Batch coordination
   create '<name>' <id1> [id2...]         Create a new task group
-  status [group-id]                      Show progress for one or all groups
-  add <group-id> <id1> [id2...]          Add issues to a group
-  remove <group-id> <id1> [id2...]       Remove issues from a group
+  status [group-id-or-name]              Show progress for one or all groups
+  add <group-id-or-name> <id1> [id2...]  Add issues to a group
+  remove <group-id-or-name> <id1> [...]  Remove issues from a group
   list                                   List all groups (summary)
   --json  --skip-validation              JSON output / skip beads checks
 ```
@@ -615,7 +615,7 @@ ov clean                         Wipe runtime state (nuclear cleanup)
   --json                                 JSON output
 
 ov serve                         HTTP + WebSocket surface for the web UI
-  --port <n>                             Port (default: 8080)
+  --port <n>                             Port (default: 7321)
   --host <addr>                          Bind host (default: 127.0.0.1)
   --json                                 JSON output
   Routes: /healthz, /api/runs, /api/agents, /api/events, /api/mail,

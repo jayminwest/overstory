@@ -80,6 +80,44 @@ function generateGroupId(): string {
 }
 
 /**
+ * Resolve a group by ID or name.
+ *
+ * Names are not enforced unique by `createGroup`, so live `groups.json` files
+ * contain duplicate names — a naive name lookup would silently pick the wrong
+ * group. Resolution precedence:
+ *   1. Exact ID match wins (UUIDs are unambiguous).
+ *   2. Otherwise filter by name. If exactly one match, return it.
+ *   3. If multiple name matches, prefer a single `active` one. If still
+ *      ambiguous, throw with the matching IDs so the caller can disambiguate
+ *      by passing the UUID.
+ *
+ * @internal Exported for testing.
+ */
+export function resolveGroup(groups: TaskGroup[], identifier: string): TaskGroup {
+	const byId = groups.find((g) => g.id === identifier);
+	if (byId) return byId;
+
+	const byName = groups.filter((g) => g.name === identifier);
+	if (byName.length === 1) {
+		const only = byName[0];
+		if (only) return only;
+	}
+	if (byName.length > 1) {
+		const active = byName.filter((g) => g.status === "active");
+		if (active.length === 1) {
+			const only = active[0];
+			if (only) return only;
+		}
+		const ids = byName.map((g) => g.id).join(", ");
+		throw new GroupError(
+			`Group name "${identifier}" is ambiguous (matches: ${ids}). Use the group ID.`,
+			{ groupId: identifier },
+		);
+	}
+	throw new GroupError(`Group "${identifier}" not found`, { groupId: identifier });
+}
+
+/**
  * Create a new task group.
  * @internal Exported for testing.
  */
@@ -140,16 +178,13 @@ export async function addToGroup(
 	}
 
 	const groups = await loadGroups(projectRoot);
-	const group = groups.find((g) => g.id === groupId);
-	if (!group) {
-		throw new GroupError(`Group "${groupId}" not found`, { groupId });
-	}
+	const group = resolveGroup(groups, groupId);
 
 	// Check for duplicates against existing members
 	for (const id of issueIds) {
 		if (group.memberIssueIds.includes(id)) {
-			throw new GroupError(`Issue "${id}" is already a member of group "${groupId}"`, {
-				groupId,
+			throw new GroupError(`Issue "${id}" is already a member of group "${group.id}"`, {
+				groupId: group.id,
 			});
 		}
 	}
@@ -187,16 +222,13 @@ export async function removeFromGroup(
 	}
 
 	const groups = await loadGroups(projectRoot);
-	const group = groups.find((g) => g.id === groupId);
-	if (!group) {
-		throw new GroupError(`Group "${groupId}" not found`, { groupId });
-	}
+	const group = resolveGroup(groups, groupId);
 
 	// Validate all issues are members
 	for (const id of issueIds) {
 		if (!group.memberIssueIds.includes(id)) {
-			throw new GroupError(`Issue "${id}" is not a member of group "${groupId}"`, {
-				groupId,
+			throw new GroupError(`Issue "${id}" is not a member of group "${group.id}"`, {
+				groupId: group.id,
 			});
 		}
 	}
@@ -204,7 +236,7 @@ export async function removeFromGroup(
 	// Check that removal won't empty the group
 	const remaining = group.memberIssueIds.filter((id) => !issueIds.includes(id));
 	if (remaining.length === 0) {
-		throw new GroupError("Cannot remove all issues from a group", { groupId });
+		throw new GroupError("Cannot remove all issues from a group", { groupId: group.id });
 	}
 
 	group.memberIssueIds = remaining;
@@ -347,7 +379,7 @@ export function createGroupCommand(): Command {
 	cmd
 		.command("status")
 		.description("Show progress for one or all groups")
-		.argument("[group-id]", "Group ID (optional, shows all if omitted)")
+		.argument("[group-id-or-name]", "Group ID or name (optional, shows all if omitted)")
 		.option("--json", "Output as JSON")
 		.option("--skip-validation", "Skip task validation (for offline use)")
 		.action(
@@ -361,10 +393,7 @@ export function createGroupCommand(): Command {
 				const groups = await loadGroups(projectRoot);
 
 				if (groupId) {
-					const group = groups.find((g) => g.id === groupId);
-					if (!group) {
-						throw new GroupError(`Group "${groupId}" not found`, { groupId });
-					}
+					const group = resolveGroup(groups, groupId);
 					const progress = await getGroupProgress(projectRoot, group, groups, tracker);
 					if (json) {
 						jsonOutput("group status", { ...progress });
@@ -401,7 +430,7 @@ export function createGroupCommand(): Command {
 	cmd
 		.command("add")
 		.description("Add issues to a group")
-		.argument("<group-id>", "Group ID")
+		.argument("<group-id-or-name>", "Group ID or name")
 		.argument("<ids...>", "Issue IDs to add")
 		.option("--json", "Output as JSON")
 		.option("--skip-validation", "Skip task validation (for offline use)")
@@ -437,7 +466,7 @@ export function createGroupCommand(): Command {
 	cmd
 		.command("remove")
 		.description("Remove issues from a group")
-		.argument("<group-id>", "Group ID")
+		.argument("<group-id-or-name>", "Group ID or name")
 		.argument("<ids...>", "Issue IDs to remove")
 		.option("--json", "Output as JSON")
 		.action(async (groupId: string, ids: string[], opts: { json?: boolean }) => {
