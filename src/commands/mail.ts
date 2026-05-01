@@ -7,7 +7,7 @@
  */
 
 import { join } from "node:path";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { resolveProjectRoot } from "../config.ts";
 import { MailError, ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
@@ -826,5 +826,23 @@ export async function mailCommand(args: string[]): Promise<void> {
 			handlePurge(opts, root);
 		});
 
-	await program.parseAsync(["node", "overstory-mail", ...args]);
+	try {
+		await program.parseAsync(["node", "overstory-mail", ...args]);
+	} catch (err) {
+		// `exitOverride()` turns Commander's help paths into thrown
+		// CommanderErrors after the help text was already written to stdout.
+		// Swallow both the explicit `--help` path (commander.helpDisplayed,
+		// exitCode 0) and the missing-subcommand path (commander.help,
+		// exitCode 1) — the user got what they asked for.
+		if (
+			err instanceof CommanderError &&
+			(err.code === "commander.helpDisplayed" || err.code === "commander.help")
+		) {
+			if (err.exitCode !== 0) {
+				process.exitCode = err.exitCode;
+			}
+			return;
+		}
+		throw err;
+	}
 }

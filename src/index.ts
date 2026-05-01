@@ -206,9 +206,12 @@ program
 		},
 	});
 
-// Apply global flags before any command action runs
-program.hook("preAction", (thisCmd) => {
-	const opts = thisCmd.optsWithGlobals();
+// Apply global flags before any command action runs.
+// `actionCommand` is the deepest command whose action is about to run (e.g.
+// `coordinator start`); reading `optsWithGlobals()` on it walks up through
+// every parent so subcommand-level `--project` flags are also seen.
+program.hook("preAction", (_thisCmd, actionCommand) => {
+	const opts = actionCommand.optsWithGlobals();
 	if (opts.quiet) {
 		setQuiet(true);
 	}
@@ -227,8 +230,9 @@ program.hook("preAction", (thisCmd) => {
 		timingStart = performance.now();
 	}
 });
-program.hook("postAction", () => {
-	if (program.opts().timing && timingStart !== undefined) {
+program.hook("postAction", (_thisCmd, actionCommand) => {
+	const opts = actionCommand.optsWithGlobals();
+	if (opts.timing && timingStart !== undefined) {
 		const elapsed = performance.now() - timingStart;
 		const formatted =
 			elapsed < 1000 ? `${Math.round(elapsed)}ms` : `${(elapsed / 1000).toFixed(2)}s`;
@@ -366,6 +370,7 @@ program
 program
 	.command("mail")
 	.description("Mail system (send/check/list/read/reply)")
+	.helpOption(false)
 	.allowUnknownOption()
 	.allowExcessArguments()
 	.action(async (_opts, cmd) => {
@@ -428,6 +433,37 @@ program.addCommand(createMetricsCommand());
 program.addCommand(createUpdateCommand());
 
 program.addCommand(createUpgradeCommand());
+
+// Propagate root-level globals to every (sub)command so they can appear before
+// or after the command name. With `enablePositionalOptions()`, options declared
+// on the root program are not accepted after a subcommand name; copying them
+// onto each command lets `ov status --project /path` work the same as
+// `ov --project /path status`. Skips the delegated `mail`/`nudge`/`logs`/`trace`
+// commands, which use `allowUnknownOption()` and forward args to an inner
+// Commander parser. The preAction hook reads `actionCommand.optsWithGlobals()`,
+// so it sees these regardless of which level they were parsed at.
+const DELEGATED_COMMANDS = new Set(["mail", "nudge", "logs", "trace"]);
+const PROPAGATED_GLOBALS: ReadonlyArray<readonly [string, string]> = [
+	["--project <path>", "Target project root (overrides auto-detection)"],
+	["-q, --quiet", "Suppress non-error output"],
+	["--timing", "Print command execution time to stderr"],
+];
+function propagateGlobalOptions(cmd: Command): void {
+	for (const sub of cmd.commands) {
+		if (sub === cmd) continue;
+		if (!DELEGATED_COMMANDS.has(sub.name())) {
+			for (const [flag, desc] of PROPAGATED_GLOBALS) {
+				const long = flag.split(/[\s,]+/).find((p) => p.startsWith("--"));
+				const alreadyDeclared = sub.options.some((o) => o.long === long);
+				if (!alreadyDeclared) {
+					sub.option(flag, desc);
+				}
+			}
+		}
+		propagateGlobalOptions(sub);
+	}
+}
+propagateGlobalOptions(program);
 
 // Handle unknown commands with Levenshtein fuzzy-match suggestions
 program.on("command:*", (operands) => {
