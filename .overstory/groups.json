@@ -1067,8 +1067,21 @@
 			"overstory-5337",
 			"overstory-84f4"
 		],
-		"status": "active",
+		"status": "completed",
 		"createdAt": "2026-04-29T20:56:38.318Z",
+		"completedAt": "2026-05-01T00:00:08.326Z"
+	},
+	{
+		"id": "group-59e2ae98",
+		"name": "reliability-batch-b",
+		"memberIssueIds": [
+			"overstory-e130",
+			"overstory-87bf",
+			"overstory-14c0",
+			"overstory-41fe"
+		],
+		"status": "active",
+		"createdAt": "2026-05-01T00:01:15.899Z",
 		"completedAt": null
 	}
 ]
