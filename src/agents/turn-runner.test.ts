@@ -1006,6 +1006,169 @@ describe("runTurn", () => {
 		}
 	});
 
+	// --- Resume-path parent-notify (overstory-de3c) ---
+	//
+	// The witnessed bug: a spawn-per-turn worker that survived a first-turn
+	// parser stall (worker_died emitted, state→zombie) was re-dispatched by its
+	// parent via `ov sling --recover`. The resumed turn ran, then transitioned
+	// to zombie SILENTLY — no second worker_died mail was ever sent. The lead
+	// blocked forever.
+	//
+	// These tests pin down whether the runner itself is responsible. Each seeds
+	// `claudeSessionId` so the runner exercises the --resume code path, and
+	// asserts that worker_died is still emitted on stall / abort / clean-exit-
+	// without-terminal-mail. If these PASS the runner is exonerated and the
+	// fix is upstream (sling.ts re-spawn upsert dropping parentAgent — H1).
+
+	test("resume-stall: parser stall on a resumed session still emits worker_died (overstory-de3c)", async () => {
+		seedSession(ctx.sessionsDbPath, {
+			agentName: "child-resume-stall",
+			state: "working",
+			parentAgent: "lead-r",
+			taskId: "task-de3c-stall",
+			claudeSessionId: "prior-session",
+		});
+		const { runtime, spawnCalls } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			// Emit nothing — the resumed turn parser-stalls.
+			return fake;
+		};
+
+		const sharedMail = createMailStore(ctx.mailDbPath);
+		try {
+			const result = await runTurn({
+				...makeRunOpts(ctx, "child-resume-stall", {
+					runtime,
+					_spawnFn: spawnFn,
+				}),
+				_mailStore: sharedMail,
+				eventStallTimeoutMs: 50,
+				sigkillDelayMs: 25,
+			});
+
+			expect(result.stallAborted).toBe(true);
+			expect(result.finalState).toBe("zombie");
+
+			// The runtime received the prior session id (resume path exercised).
+			expect(spawnCalls[0]?.resumeSessionId).toBe("prior-session");
+
+			const inbox = sharedMail.getAll({ to: "lead-r", type: "worker_died" });
+			expect(inbox.length).toBe(1);
+			const payload = JSON.parse(inbox[0]?.payload ?? "{}") as {
+				terminatedBy?: string;
+				reason?: string;
+				agentName?: string;
+			};
+			expect(payload.terminatedBy).toBe("runner");
+			expect(payload.reason).toContain("stalled");
+			expect(payload.agentName).toBe("child-resume-stall");
+		} finally {
+			sharedMail.close();
+		}
+	});
+
+	test("resume-abort: operator abort on a resumed session still emits worker_died (overstory-de3c)", async () => {
+		seedSession(ctx.sessionsDbPath, {
+			agentName: "child-resume-abort",
+			state: "working",
+			parentAgent: "lead-r",
+			taskId: "task-de3c-abort",
+			claudeSessionId: "prior-session",
+		});
+		const { runtime, spawnCalls } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const ac = new AbortController();
+		const spawnFn: TurnSpawnFn = () => {
+			fake._pushLine(
+				JSON.stringify({
+					type: "system",
+					subtype: "init",
+					session_id: "prior-session",
+				}),
+			);
+			return fake;
+		};
+
+		const sharedMail = createMailStore(ctx.mailDbPath);
+		try {
+			const runPromise = runTurn({
+				...makeRunOpts(ctx, "child-resume-abort", {
+					runtime,
+					_spawnFn: spawnFn,
+					abortSignal: ac.signal,
+					sigkillDelayMs: 25,
+				}),
+				_mailStore: sharedMail,
+			});
+			await Bun.sleep(60);
+			ac.abort();
+			const result = await runPromise;
+
+			expect(result.finalState).toBe("zombie");
+			expect(spawnCalls[0]?.resumeSessionId).toBe("prior-session");
+
+			const inbox = sharedMail.getAll({ to: "lead-r", type: "worker_died" });
+			expect(inbox.length).toBe(1);
+			const payload = JSON.parse(inbox[0]?.payload ?? "{}") as {
+				terminatedBy?: string;
+				reason?: string;
+				agentName?: string;
+			};
+			expect(payload.terminatedBy).toBe("runner");
+			expect(payload.reason).toContain("Aborted");
+			expect(payload.agentName).toBe("child-resume-abort");
+		} finally {
+			sharedMail.close();
+		}
+	});
+
+	test("resume-terminalMailMissing: clean exit on a resumed session still emits worker_died (overstory-de3c)", async () => {
+		seedSession(ctx.sessionsDbPath, {
+			agentName: "child-resume-noop",
+			state: "working",
+			parentAgent: "lead-r",
+			taskId: "task-de3c-noop",
+			claudeSessionId: "prior-session",
+		});
+		const { runtime, spawnCalls } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			emitFakeTurn(fake, { sessionId: "prior-session", isError: false });
+			fake._exit(0);
+			return fake;
+		};
+
+		const sharedMail = createMailStore(ctx.mailDbPath);
+		try {
+			const result = await runTurn({
+				...makeRunOpts(ctx, "child-resume-noop", {
+					runtime,
+					_spawnFn: spawnFn,
+				}),
+				_mailStore: sharedMail,
+			});
+
+			expect(result.cleanResult).toBe(true);
+			expect(result.terminalMailMissing).toBe(true);
+			expect(result.finalState).toBe("completed");
+			expect(spawnCalls[0]?.resumeSessionId).toBe("prior-session");
+
+			const inbox = sharedMail.getAll({ to: "lead-r", type: "worker_died" });
+			expect(inbox.length).toBe(1);
+			const payload = JSON.parse(inbox[0]?.payload ?? "{}") as {
+				terminatedBy?: string;
+				reason?: string;
+				agentName?: string;
+			};
+			expect(payload.terminatedBy).toBe("runner");
+			expect(payload.reason).toContain("Clean exit without terminal mail");
+			expect(payload.agentName).toBe("child-resume-noop");
+		} finally {
+			sharedMail.close();
+		}
+	});
+
 	test("terminalMailMissing: emits worker_died to parent (overstory-4159)", async () => {
 		// Silent-no-op: claude exits cleanly but never sends worker_done. The
 		// lead would otherwise block forever waiting for a terminal mail.

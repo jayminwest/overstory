@@ -27,6 +27,7 @@ import {
 	isRunningAsRoot,
 	isTaskWorkable,
 	parentHasScouts,
+	resolveParentAgent,
 	resolveUseHeadless,
 	shouldShowScoutWarning,
 	validateHierarchy,
@@ -784,6 +785,48 @@ describe("isTaskWorkable", () => {
 		expect(isTaskWorkable("closed", true)).toBe(true);
 		expect(isTaskWorkable("cancelled", true)).toBe(true);
 		expect(isTaskWorkable("open", true)).toBe(true);
+	});
+});
+
+// --- resolveParentAgent (overstory-de3c) ---
+//
+// Witnessed bug: a coordinator/lead recovered a zombie spawn-per-turn worker
+// via `ov sling --recover --name <existing>` without threading `--parent`.
+// The pre-fix `parentAgent = opts.parent ?? null` overwrote the prior
+// `parent_agent` row to null on upsert, so the runner could not emit
+// `worker_died` on a resumed-turn parser stall — the lead waited forever.
+// The fix: when --parent is not explicitly passed, fall back to the prior
+// session row's parentAgent. Explicit caller intent (any string, including
+// empty) always wins.
+describe("resolveParentAgent", () => {
+	test("case A: explicit --parent wins over prior session linkage", () => {
+		const existing = { parentAgent: "old-lead" };
+		expect(resolveParentAgent("new-lead", existing)).toBe("new-lead");
+	});
+
+	test("case B: --parent omitted preserves prior session's parentAgent on re-spawn", () => {
+		// THE REGRESSION CHECK. Pre-fix this returned null, severing the link
+		// the runner needs to emit worker_died (overstory-de3c).
+		const existing = { parentAgent: "lead-r" };
+		expect(resolveParentAgent(undefined, existing)).toBe("lead-r");
+	});
+
+	test("--parent omitted with no prior session yields null (fresh agent)", () => {
+		expect(resolveParentAgent(undefined, null)).toBeNull();
+	});
+
+	test("--parent omitted with prior session whose parent is null yields null", () => {
+		// A coordinator-spawned root agent has parentAgent=null. Re-spawn must
+		// not synthesize a parent.
+		const existing = { parentAgent: null };
+		expect(resolveParentAgent(undefined, existing)).toBeNull();
+	});
+
+	test("explicit --parent='' (empty string) is honored — caller intent wins", () => {
+		// Empty string is `defined` but `null`-y; we honor it as caller intent
+		// rather than silently falling back to the prior linkage.
+		const existing = { parentAgent: "lead-r" };
+		expect(resolveParentAgent("", existing)).toBe("");
 	});
 });
 
