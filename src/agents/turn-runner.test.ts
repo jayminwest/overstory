@@ -1797,4 +1797,101 @@ describe("runTurn", () => {
 			new Date(startedAt).getTime(),
 		);
 	});
+
+	test("Bash mail-poll detector: warns + records custom event without suppressing tool_use (overstory-c92c)", async () => {
+		// Defense-in-depth: the lead.md prompt forbids Bash mail polling
+		// (overstory-fa84). When a future overlay or contributed agent
+		// reintroduces the pattern, the runner must surface it via the
+		// runner diagnostic sink AND a `mail_poll_detected` event in
+		// events.db, while still recording the original tool_use event
+		// so downstream observability is unaffected.
+		seedSession(ctx.sessionsDbPath, { agentName: "polled", state: "working" });
+		const { runtime } = makeSpyRuntime();
+
+		const fake = makeFakeProc();
+		const sessionId = "polled-session";
+		const pollCommand = "until ov mail list; do sleep 1; done";
+		const spawnFn: TurnSpawnFn = () => {
+			fake._pushLine(
+				JSON.stringify({
+					type: "system",
+					subtype: "init",
+					session_id: sessionId,
+					model: "claude-test",
+				}),
+			);
+			fake._pushLine(
+				JSON.stringify({
+					type: "assistant",
+					session_id: sessionId,
+					message: {
+						role: "assistant",
+						model: "claude-test",
+						content: [
+							{
+								type: "tool_use",
+								id: "toolu_poll_1",
+								name: "Bash",
+								input: { command: pollCommand },
+							},
+						],
+					},
+				}),
+			);
+			emitFakeTurn(fake, { sessionId });
+			fake._exit(0);
+			return fake;
+		};
+
+		const logs: Array<{ level: string; message: string }> = [];
+		const logger: RunnerLogger = (level, message) => {
+			logs.push({ level, message });
+		};
+
+		const result = await runTurn(
+			makeRunOpts(ctx, "polled", { runtime, _spawnFn: spawnFn, _logWarning: logger }),
+		);
+
+		expect(result.exitCode).toBe(0);
+
+		// Warning was emitted via the runner diagnostic sink (warn level,
+		// message includes "mail-poll").
+		const pollWarn = logs.find((l) => l.level === "warn" && l.message.includes("mail-poll"));
+		expect(pollWarn).toBeDefined();
+
+		const eventStore = createEventStore(ctx.eventsDbPath);
+		try {
+			const events = eventStore.getByAgent("polled");
+
+			// `mail_poll_detected` custom event landed in events.db with the
+			// full (untruncated) command and the matched reason.
+			const detectedEvent = events.find((e) => {
+				if (e.eventType !== "custom" || e.level !== "warn" || !e.data) return false;
+				try {
+					const parsed = JSON.parse(e.data) as { type?: string };
+					return parsed.type === "mail_poll_detected";
+				} catch {
+					return false;
+				}
+			});
+			expect(detectedEvent).toBeDefined();
+			const payload = JSON.parse(detectedEvent?.data ?? "{}") as {
+				type: string;
+				reason: string;
+				command: string;
+			};
+			expect(payload.reason).toBe("until ov mail loop");
+			expect(payload.command).toBe(pollCommand);
+
+			// Regression guard: the original Bash tool_use event MUST still
+			// be recorded — the warning emits IN ADDITION to (not in place
+			// of) the normal recordAgentEvent call.
+			const toolUseEvent = events.find(
+				(e) => e.eventType === "tool_start" && e.toolName === "Bash",
+			);
+			expect(toolUseEvent).toBeDefined();
+		} finally {
+			eventStore.close();
+		}
+	});
 });
