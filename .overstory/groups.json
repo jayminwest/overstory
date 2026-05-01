@@ -1094,5 +1094,16 @@
 		"status": "active",
 		"createdAt": "2026-05-01T15:22:06.886Z",
 		"completedAt": null
+	},
+	{
+		"id": "group-88067f3e",
+		"name": "watchdog-and-zombie-fix",
+		"memberIssueIds": [
+			"overstory-74ce",
+			"overstory-de3c"
+		],
+		"status": "active",
+		"createdAt": "2026-05-01T20:45:55.068Z",
+		"completedAt": null
 	}
 ]
