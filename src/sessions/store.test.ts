@@ -1019,11 +1019,29 @@ describe("RunStore", () => {
 			expect(result).toBeNull();
 		});
 
-		test("creates a run with explicit agentCount", () => {
+		test("agent count is derived from sessions in the same run", () => {
 			runStore.createRun(makeRun({ agentCount: 5 }));
+			// `agentCount` no longer reflects the column; it's a live count of
+			// sessions whose `run_id` matches. With no sessions, count is 0.
+			expect(runStore.getRun("run-2026-02-13T10:00:00.000Z")?.agentCount).toBe(0);
 
-			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
-			expect(result?.agentCount).toBe(5);
+			store.upsert(
+				makeSession({
+					id: "s-1",
+					agentName: "a-1",
+					runId: "run-2026-02-13T10:00:00.000Z",
+				}),
+			);
+			expect(runStore.getRun("run-2026-02-13T10:00:00.000Z")?.agentCount).toBe(1);
+
+			store.upsert(
+				makeSession({
+					id: "s-2",
+					agentName: "a-2",
+					runId: "run-2026-02-13T10:00:00.000Z",
+				}),
+			);
+			expect(runStore.getRun("run-2026-02-13T10:00:00.000Z")?.agentCount).toBe(2);
 		});
 
 		test("creates a run with null coordinatorSessionId", () => {
@@ -1182,33 +1200,24 @@ describe("RunStore", () => {
 	});
 
 	// === incrementAgentCount ===
+	//
+	// Retained as a no-op for API compatibility. `agentCount` is now derived
+	// from the sessions table at read time (overstory-8e69), so calls have no
+	// effect on what `getRun` returns.
 
 	describe("incrementAgentCount", () => {
-		test("increments agent count by 1", () => {
+		test("is a no-op — agent count comes from sessions, not the column", () => {
 			runStore.createRun(makeRun());
 
 			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
-			let result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
-			expect(result?.agentCount).toBe(1);
-
-			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
-			result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
-			expect(result?.agentCount).toBe(2);
-		});
-
-		test("is a no-op for nonexistent run (does not throw)", () => {
-			// Should not throw
-			runStore.incrementAgentCount("nonexistent-run");
-		});
-
-		test("does not affect other run fields", () => {
-			runStore.createRun(makeRun());
 			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
 
 			const result = runStore.getRun("run-2026-02-13T10:00:00.000Z");
-			expect(result?.status).toBe("active");
-			expect(result?.completedAt).toBeNull();
-			expect(result?.coordinatorSessionId).toBe("coord-session-001");
+			expect(result?.agentCount).toBe(0);
+		});
+
+		test("is safe to call for a nonexistent run (does not throw)", () => {
+			runStore.incrementAgentCount("nonexistent-run");
 		});
 	});
 
@@ -1246,9 +1255,15 @@ describe("RunStore", () => {
 
 		test("preserves agent count when completing", () => {
 			runStore.createRun(makeRun());
-			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
-			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
-			runStore.incrementAgentCount("run-2026-02-13T10:00:00.000Z");
+			for (let i = 0; i < 3; i++) {
+				store.upsert(
+					makeSession({
+						id: `s-${i}`,
+						agentName: `a-${i}`,
+						runId: "run-2026-02-13T10:00:00.000Z",
+					}),
+				);
+			}
 
 			runStore.completeRun("run-2026-02-13T10:00:00.000Z", "completed");
 
@@ -1448,6 +1463,15 @@ describe("RunStore", () => {
 			};
 
 			runStore.createRun(run);
+			for (let i = 0; i < 7; i++) {
+				store.upsert(
+					makeSession({
+						id: `s-rt-${i}`,
+						agentName: `a-rt-${i}`,
+						runId: "run-roundtrip-test",
+					}),
+				);
+			}
 			const result = runStore.getRun("run-roundtrip-test");
 
 			expect(result).not.toBeNull();

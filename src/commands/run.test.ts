@@ -214,7 +214,7 @@ describe("complete run", () => {
 describe("show run details", () => {
 	test("fetches run and its agents from stores", () => {
 		const runId = "run-2026-02-13T10:00:00.000Z";
-		runStore.createRun(makeRun({ agentCount: 2 }));
+		runStore.createRun(makeRun());
 
 		sessionStore.upsert(
 			makeSession({
@@ -237,11 +237,47 @@ describe("show run details", () => {
 
 		const run = runStore.getRun(runId);
 		expect(run).not.toBeNull();
+		// agentCount is derived from sessions in the same run.
 		expect(run?.agentCount).toBe(2);
 
 		const agents = sessionStore.getByRun(runId);
 		expect(agents).toHaveLength(2);
 		expect(agents.map((a) => a.agentName).sort()).toEqual(["builder-1", "scout-1"]);
+	});
+
+	test("agent count includes coordinator session in the same run (overstory-8e69)", () => {
+		const runId = "run-2026-02-13T10:00:00.000Z";
+		runStore.createRun(makeRun());
+
+		// Coordinator + two children — all sharing the same run_id.
+		sessionStore.upsert(
+			makeSession({
+				agentName: "coordinator",
+				id: "s-coord",
+				runId,
+				capability: "coordinator",
+				state: "working",
+			}),
+		);
+		sessionStore.upsert(makeSession({ agentName: "lead-1", id: "s-1", runId, capability: "lead" }));
+		sessionStore.upsert(
+			makeSession({ agentName: "builder-1", id: "s-2", runId, capability: "builder" }),
+		);
+
+		const run = runStore.getRun(runId);
+		expect(run?.agentCount).toBe(3);
+		expect(sessionStore.getByRun(runId)).toHaveLength(3);
+	});
+
+	test("agent count drops when a session is removed", () => {
+		const runId = "run-2026-02-13T10:00:00.000Z";
+		runStore.createRun(makeRun());
+		sessionStore.upsert(makeSession({ agentName: "a", id: "s-1", runId }));
+		sessionStore.upsert(makeSession({ agentName: "b", id: "s-2", runId }));
+		expect(runStore.getRun(runId)?.agentCount).toBe(2);
+
+		sessionStore.remove("a");
+		expect(runStore.getRun(runId)?.agentCount).toBe(1);
 	});
 
 	test("returns null for missing run", () => {
@@ -356,17 +392,17 @@ describe("duration formatting", () => {
 
 describe("multiple runs lifecycle", () => {
 	test("create, use, complete multiple runs sequentially", async () => {
-		// Run 1
+		// Run 1: two sessions, then completed.
 		runStore.createRun(makeRun({ id: "run-1", startedAt: "2026-02-13T08:00:00.000Z" }));
 		await writeCurrentRun("run-1");
-		runStore.incrementAgentCount("run-1");
-		runStore.incrementAgentCount("run-1");
+		sessionStore.upsert(makeSession({ agentName: "r1-a", id: "s-r1-1", runId: "run-1" }));
+		sessionStore.upsert(makeSession({ agentName: "r1-b", id: "s-r1-2", runId: "run-1" }));
 		runStore.completeRun("run-1", "completed");
 
-		// Run 2
+		// Run 2: one session, still active.
 		runStore.createRun(makeRun({ id: "run-2", startedAt: "2026-02-13T12:00:00.000Z" }));
 		await writeCurrentRun("run-2");
-		runStore.incrementAgentCount("run-2");
+		sessionStore.upsert(makeSession({ agentName: "r2-a", id: "s-r2-1", runId: "run-2" }));
 
 		// Verify state
 		const currentRunId = await readCurrentRunFile();
@@ -394,7 +430,7 @@ describe("edge cases", () => {
 
 	test("show run with agents from different capabilities", () => {
 		const runId = "run-2026-02-13T10:00:00.000Z";
-		runStore.createRun(makeRun({ agentCount: 3 }));
+		runStore.createRun(makeRun());
 
 		const capabilities = ["builder", "scout", "reviewer"];
 		for (let i = 0; i < capabilities.length; i++) {

@@ -624,7 +624,12 @@ export function createRunStore(dbPath: string): RunStore {
 	db.exec("PRAGMA synchronous = NORMAL");
 	db.exec("PRAGMA busy_timeout = 5000");
 
-	// Create schema (idempotent — safe if SessionStore already created these)
+	// Create schema (idempotent — safe if SessionStore already created these).
+	// `agent_count` is derived from the sessions table at read time, so the
+	// sessions table must exist when the run-read statements are prepared
+	// — even if the caller only opens a RunStore and never opens a SessionStore.
+	db.exec(CREATE_TABLE);
+	db.exec(CREATE_INDEXES);
 	db.exec(CREATE_RUNS_TABLE);
 
 	// Migrate: add coordinator_name column BEFORE creating indexes that reference it.
@@ -650,24 +655,33 @@ export function createRunStore(dbPath: string): RunStore {
 		VALUES ($id, $started_at, $completed_at, $agent_count, $coordinator_session_id, $coordinator_name, $status)
 	`);
 
+	// `agent_count` is derived from the sessions table at read time rather than
+	// read from the column. The cached column value drifted because only sling
+	// incremented it — coordinator startup never did, so for every run with a
+	// coordinator the count was off by one (overstory-8e69). Sourcing from
+	// sessions makes the count match `SELECT * FROM sessions WHERE run_id = ?`
+	// and removes the writer/reader asymmetry. The column is still written so
+	// older overstory binaries pointed at the same db can keep functioning.
+	const RUN_COLUMNS = `
+		id, started_at, completed_at,
+		(SELECT COUNT(*) FROM sessions WHERE sessions.run_id = runs.id) AS agent_count,
+		coordinator_session_id, coordinator_name, status
+	`;
+
 	const getRunStmt = db.prepare<RunRow, { $id: string }>(`
-		SELECT * FROM runs WHERE id = $id
+		SELECT ${RUN_COLUMNS} FROM runs WHERE id = $id
 	`);
 
 	const getActiveRunStmt = db.prepare<RunRow, Record<string, never>>(`
-		SELECT * FROM runs WHERE status = 'active'
+		SELECT ${RUN_COLUMNS} FROM runs WHERE status = 'active'
 		ORDER BY started_at DESC
 		LIMIT 1
 	`);
 
 	const getActiveRunForCoordinatorStmt = db.prepare<RunRow, { $coordinator_name: string }>(`
-		SELECT * FROM runs WHERE status = 'active' AND coordinator_name = $coordinator_name
+		SELECT ${RUN_COLUMNS} FROM runs WHERE status = 'active' AND coordinator_name = $coordinator_name
 		ORDER BY started_at DESC
 		LIMIT 1
-	`);
-
-	const incrementAgentCountStmt = db.prepare<void, { $id: string }>(`
-		UPDATE runs SET agent_count = agent_count + 1 WHERE id = $id
 	`);
 
 	const completeRunStmt = db.prepare<
@@ -716,15 +730,15 @@ export function createRunStore(dbPath: string): RunStore {
 
 			const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 			const limitClause = opts?.limit !== undefined ? `LIMIT ${opts.limit}` : "";
-			const query = `SELECT * FROM runs ${whereClause} ORDER BY started_at DESC ${limitClause}`;
+			const query = `SELECT ${RUN_COLUMNS} FROM runs ${whereClause} ORDER BY started_at DESC ${limitClause}`;
 
 			const rows = db.prepare<RunRow, Record<string, string | number>>(query).all(params);
 			return rows.map(rowToRun);
 		},
 
-		incrementAgentCount(runId: string): void {
-			incrementAgentCountStmt.run({ $id: runId });
-		},
+		// Kept for API stability but a no-op: `agent_count` is now derived from
+		// the sessions table on every read (see RUN_COLUMNS above).
+		incrementAgentCount(_runId: string): void {},
 
 		completeRun(runId: string, status: "completed" | "failed"): void {
 			completeRunStmt.run({
