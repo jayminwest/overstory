@@ -634,6 +634,87 @@ describe("stopCommand stop behavior", () => {
 		);
 	});
 
+	test("lead falls back to historical subject when mail store cannot be opened (overstory-7291)", async () => {
+		const session = makeAgentSession({
+			agentName: "lead-zeta",
+			capability: "lead",
+			state: "working",
+			tmuxSession: "overstory-lead-zeta",
+		});
+		saveSessionsToDb([session]);
+
+		// Make mail.db un-openable by creating a directory at that path. SQLite
+		// cannot open a directory as a database, so createMailStore() throws and
+		// buildLeadCompletedSubject hits its outer-catch fallback.
+		const mailDbPath = join(overstoryDir, "mail.db");
+		await mkdir(mailDbPath, { recursive: true });
+
+		const { deps } = makeDeps({ [session.tmuxSession]: true });
+		await stopCommand("lead-zeta", {}, deps);
+
+		const markerPath = join(overstoryDir, "pending-nudges", "coordinator.json");
+		const marker = JSON.parse(await Bun.file(markerPath).text());
+		expect(marker.subject).toBe(
+			"Lead lead-zeta completed — check mail for merge_ready/worker_done",
+		);
+	});
+
+	test("lead with malformed merge_ready payload skips that message (overstory-7291)", async () => {
+		const session = makeAgentSession({
+			agentName: "lead-eta",
+			capability: "lead",
+			state: "working",
+			tmuxSession: "overstory-lead-eta",
+		});
+		saveSessionsToDb([session]);
+
+		// Insert two merge_ready rows directly via the store: one with a valid
+		// MergeReadyPayload, one with a non-JSON payload string. sendProtocol
+		// would JSON.stringify any payload, so it cannot produce a malformed
+		// row — the low-level store accepts the payload column verbatim. The
+		// loop must skip the malformed one (inner catch + continue) and use
+		// the valid one, yielding the single-branch subject variant.
+		const mailStore = createMailStore(join(overstoryDir, "mail.db"));
+		const validPayload: MergeReadyPayload = {
+			branch: "overstory/lead-eta/bead-99",
+			taskId: "bead-99",
+			agentName: "lead-eta",
+			filesModified: ["src/x.ts"],
+		};
+		mailStore.insert({
+			id: "msg-valid",
+			from: "lead-eta",
+			to: "coordinator",
+			subject: "merge_ready: bead-99",
+			body: "ready",
+			type: "merge_ready",
+			priority: "normal",
+			threadId: null,
+			payload: JSON.stringify(validPayload),
+		});
+		mailStore.insert({
+			id: "msg-malformed",
+			from: "lead-eta",
+			to: "coordinator",
+			subject: "merge_ready: broken",
+			body: "ready",
+			type: "merge_ready",
+			priority: "normal",
+			threadId: null,
+			payload: "not-json{",
+		});
+		mailStore.close();
+
+		const { deps } = makeDeps({ [session.tmuxSession]: true });
+		await stopCommand("lead-eta", {}, deps);
+
+		const markerPath = join(overstoryDir, "pending-nudges", "coordinator.json");
+		const marker = JSON.parse(await Bun.file(markerPath).text());
+		expect(marker.subject).toBe(
+			"Lead lead-eta sent merge_ready for branch overstory/lead-eta/bead-99",
+		);
+	});
+
 	test("stopping a non-lead agent does NOT write lead_completed pending-nudge", async () => {
 		const session = makeAgentSession({ state: "working", capability: "builder" });
 		saveSessionsToDb([session]);
