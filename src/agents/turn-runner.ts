@@ -125,6 +125,25 @@ export interface RunTurnOpts {
 	 * Set to `0` to disable (test injection / explicit opt-out only).
 	 */
 	eventStallTimeoutMs?: number;
+	/**
+	 * Throttle (ms) for refreshing `session.lastActivity` while events stream
+	 * from the parser loop. Default `2000` (every 2s). The watchdog at
+	 * `src/watchdog/health.ts:242-243` documents its design as: "the
+	 * turn-runner updates [lastActivity] on every parser event during a turn,
+	 * and the watchdog refreshes it from events.db between turns" — so the
+	 * runner must drive lastActivity itself or a long turn looks stalled and
+	 * gets zombified mid-flight (overstory-8e61).
+	 *
+	 * Set to `0` to refresh on every event (test injection / explicit opt-out).
+	 */
+	lastActivityRefreshIntervalMs?: number;
+	/**
+	 * Test injection: invoked each time the parser loop fires a mid-turn
+	 * `lastActivity` refresh (after the throttle gate, before/after the
+	 * SessionStore write). Used by tests to count refresh attempts directly
+	 * rather than inferring from observable timestamps (overstory-8e61).
+	 */
+	_onLastActivityRefresh?: () => void;
 }
 
 export interface TurnResult {
@@ -945,9 +964,28 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 				},
 			});
 
+			// Mid-turn `lastActivity` refresh (overstory-8e61). The watchdog at
+			// `src/watchdog/health.ts:242-243` documents that the runner advances
+			// lastActivity per parser event; without this the row stayed at
+			// `startedAt` for the whole turn and long turns got zombified live.
+			const lastActivityRefreshIntervalMs = opts.lastActivityRefreshIntervalMs ?? 2000;
+			let lastActivityRefreshMs = 0; // first event always refreshes
+
 			for await (const event of parser) {
 				armStallTimer();
 				observedAnyEvent = true;
+
+				// Keep `session.lastActivity` advancing while events flow so the
+				// watchdog does not zombify a live agent mid-turn — see
+				// `src/watchdog/health.ts:242-243` and overstory-8e61.
+				const nowMs = now().getTime();
+				if (nowMs - lastActivityRefreshMs >= lastActivityRefreshIntervalMs) {
+					lastActivityRefreshMs = nowMs;
+					updateSessionLastActivity(sessionsDbPath, agentName, (err) =>
+						runnerLog("warn", "failed to refresh lastActivity mid-turn", err),
+					);
+					opts._onLastActivityRefresh?.();
+				}
 
 				if (!bootedToWorking && initialState === "booting") {
 					bootedToWorking = true;
