@@ -1102,8 +1102,19 @@
 			"overstory-74ce",
 			"overstory-de3c"
 		],
-		"status": "active",
+		"status": "completed",
 		"createdAt": "2026-05-01T20:45:55.068Z",
+		"completedAt": "2026-05-01T21:25:08.878Z"
+	},
+	{
+		"id": "group-be62f6b4",
+		"name": "sling-and-lead-poll-fix",
+		"memberIssueIds": [
+			"overstory-fa84",
+			"overstory-6878"
+		],
+		"status": "active",
+		"createdAt": "2026-05-01T21:26:39.093Z",
 		"completedAt": null
 	}
 ]
