@@ -1113,8 +1113,19 @@
 			"overstory-fa84",
 			"overstory-6878"
 		],
-		"status": "active",
+		"status": "completed",
 		"createdAt": "2026-05-01T21:26:39.093Z",
+		"completedAt": "2026-05-01T21:42:47.010Z"
+	},
+	{
+		"id": "group-0f170996",
+		"name": "watchdog-detect-and-from-fix",
+		"memberIssueIds": [
+			"overstory-3f0c",
+			"overstory-235f"
+		],
+		"status": "active",
+		"createdAt": "2026-05-01T21:43:32.083Z",
 		"completedAt": null
 	}
 ]
