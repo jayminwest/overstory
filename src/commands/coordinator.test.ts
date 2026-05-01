@@ -1616,46 +1616,44 @@ describe("watchdog integration", () => {
 
 	// overstory-3f0c: detect leftover watchdog from a previous session before
 	// spawning, so operators do not get unexpected watchdog supervision.
-	describe("preexisting watchdog detection", () => {
-		test("rejects start with no flags when watchdog is already running", async () => {
-			const { deps, watchdogCalls } = makeDeps({}, { running: true });
-			const originalSleep = Bun.sleep;
-			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
-
-			try {
-				await expect(coordinatorCommand(["start", "--json"], deps)).rejects.toThrow(
-					ValidationError,
-				);
-			} finally {
-				Bun.sleep = originalSleep;
-			}
-
-			// Detection ran, but no spawn or auto-start happened.
-			expect(watchdogCalls?.isRunning).toBeGreaterThanOrEqual(1);
-			expect(watchdogCalls?.start).toBe(0);
-		});
-
-		test("error message names the offending flags so operator can act", async () => {
-			const { deps } = makeDeps({}, { running: true });
+	describe("orphan watchdog detection (overstory-3f0c)", () => {
+		// (a) start (no --watchdog) + isRunning=true -> throws AgentError with PID
+		// and mention of --accept-existing-watchdog in the message
+		test("rejects start with AgentError when no flag passed and watchdog already running", async () => {
+			const { deps, watchdogCalls } = makeDeps({}, { running: true, startSuccess: true });
 			const originalSleep = Bun.sleep;
 			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
 
 			try {
 				await coordinatorCommand(["start", "--json"], deps);
-				expect.unreachable("should have thrown");
+				expect.unreachable("should have thrown AgentError");
 			} catch (err) {
-				expect(err).toBeInstanceOf(ValidationError);
-				const ve = err as ValidationError;
-				expect(ve.message).toContain("Watchdog");
-				expect(ve.message).toContain("--watchdog");
-				expect(ve.message).toContain("--accept-existing-watchdog");
+				expect(err).toBeInstanceOf(AgentError);
+				const ae = err as AgentError;
+				expect(ae.message).toContain("Watchdog daemon");
+				// PID is unavailable from the fake watchdog (no PID file written),
+				// so the message reports "unknown PID" — but it must reference the
+				// concept and the suppress flag explicitly.
+				expect(ae.message).toMatch(/PID/);
+				expect(ae.message).toContain("--accept-existing-watchdog");
+				expect(ae.message).toContain("--watchdog");
+				expect(ae.message).toContain("ov watch --kill-others");
 			} finally {
 				Bun.sleep = originalSleep;
 			}
+
+			// Detection ran but auto-start did NOT — the throw fired first.
+			expect(watchdogCalls?.isRunning).toBeGreaterThanOrEqual(1);
+			expect(watchdogCalls?.start).toBe(0);
 		});
 
-		test("--watchdog acknowledges preexisting daemon and does NOT double-start", async () => {
-			const { deps, watchdogCalls } = makeDeps({}, { running: true, startSuccess: true });
+		// (b) start --watchdog + isRunning=true -> does NOT throw;
+		//     watchdog.start() is still called once
+		test("--watchdog with already-running daemon does NOT throw and still calls start()", async () => {
+			const { deps, watchdogCalls } = makeDeps(
+				{},
+				{ running: true, startSuccess: false }, // startSuccess:false simulates the no-op-when-already-running return
+			);
 			const originalSleep = Bun.sleep;
 			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
 
@@ -1668,14 +1666,17 @@ describe("watchdog integration", () => {
 				Bun.sleep = originalSleep;
 			}
 
-			expect(watchdogCalls?.start).toBe(0);
+			expect(watchdogCalls?.start).toBe(1);
 			const parsed = JSON.parse(output) as Record<string, unknown>;
+			// reused-daemon sentinel keeps watchdog truthy in the JSON output
 			expect(parsed.watchdog).toBe(true);
 			expect(parsed.watchdogPreexisting).toBe(true);
 		});
 
-		test("--accept-existing-watchdog allows start without auto-managing the daemon", async () => {
-			const { deps, watchdogCalls } = makeDeps({}, { running: true });
+		// (c) start --accept-existing-watchdog + isRunning=true -> does NOT throw;
+		//     coordinator starts normally; watchdog.start() is NOT called
+		test("--accept-existing-watchdog allows start without calling watchdog.start()", async () => {
+			const { deps, watchdogCalls } = makeDeps({}, { running: true, startSuccess: true });
 			const originalSleep = Bun.sleep;
 			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
 
@@ -1694,8 +1695,10 @@ describe("watchdog integration", () => {
 			expect(parsed.watchdogPreexisting).toBe(true);
 		});
 
-		test("watchdogPreexisting:false in JSON when no daemon was running", async () => {
-			const { deps } = makeDeps({}, { running: false });
+		// (d) start (no --watchdog) + isRunning=false -> no error, no start
+		// (regression — preserves the original "no flag, no daemon activity" path)
+		test("no flag + watchdog not running: starts normally without calling start()", async () => {
+			const { deps, watchdogCalls } = makeDeps({}, { running: false, startSuccess: true });
 			const originalSleep = Bun.sleep;
 			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
 
@@ -1706,20 +1709,19 @@ describe("watchdog integration", () => {
 				Bun.sleep = originalSleep;
 			}
 
+			expect(watchdogCalls?.start).toBe(0);
 			const parsed = JSON.parse(output) as Record<string, unknown>;
-			expect(parsed.watchdogPreexisting).toBe(false);
 			expect(parsed.watchdog).toBe(false);
+			expect(parsed.watchdogPreexisting).toBe(false);
 		});
 
-		test("orchestrator inherits the same preexisting-watchdog detection", async () => {
+		test("orchestrator inherits the same orphan-watchdog detection", async () => {
 			const { deps, watchdogCalls } = makeDeps({}, { running: true });
 			const originalSleep = Bun.sleep;
 			Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
 
 			try {
-				await expect(orchestratorCommand(["start", "--json"], deps)).rejects.toThrow(
-					ValidationError,
-				);
+				await expect(orchestratorCommand(["start", "--json"], deps)).rejects.toThrow(AgentError);
 			} finally {
 				Bun.sleep = originalSleep;
 			}

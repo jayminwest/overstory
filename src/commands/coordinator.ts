@@ -421,13 +421,16 @@ export async function startCoordinatorSession(
 	// supervise this coordinator with policy decided by the original invocation,
 	// not the current one. This prevents "I didn't run --watchdog, why is the
 	// watchdog killing things?" surprises.
-	const watchdogPreexisting = await watchdog.isRunning();
-	if (watchdogPreexisting && !watchdogFlag && !acceptExistingWatchdogFlag) {
+	const watchdogAlreadyRunning = await watchdog.isRunning();
+	if (watchdogAlreadyRunning && !watchdogFlag && !acceptExistingWatchdogFlag) {
 		const existingPid = await readWatchdogPid(projectRoot);
-		const pidLabel = existingPid !== null ? ` (PID ${existingPid})` : "";
-		throw new ValidationError(
-			`Watchdog daemon${pidLabel} is already running from a previous session — it will supervise this coordinator. Pass --watchdog to acknowledge (no double-start), --accept-existing-watchdog to continue without auto-managing it, or stop it first${existingPid !== null ? ` (kill ${existingPid})` : ""}.`,
-			{ field: "watchdog" },
+		const pidLabel = existingPid !== null ? `PID ${existingPid}` : "unknown PID";
+		throw new AgentError(
+			`Watchdog daemon (${pidLabel}) is already running from a previous session. ` +
+				`It will supervise this ${displayName.toLowerCase()} run and may take escalation actions you did not opt into. ` +
+				`To proceed: pass --watchdog to acknowledge, pass --accept-existing-watchdog to suppress this check, ` +
+				`or run 'ov watch --kill-others' (or remove .overstory/watchdog.pid) first.`,
+			{ agentName: coordinatorName },
 		);
 	}
 
@@ -608,26 +611,27 @@ export async function startCoordinatorSession(
 			store.upsert(session);
 
 			// Auto-start watchdog / monitor (same as tmux path).
-			let watchdogActive = false;
-			if (watchdogPreexisting) {
-				// A daemon from a previous session is supervising us. Either
-				// --watchdog or --accept-existing-watchdog was passed (otherwise
-				// the preflight check above would have thrown). Do not double-start.
-				const existingPid = await readWatchdogPid(projectRoot);
-				watchdogActive = true;
-				if (!json) {
-					printHint(
-						`Watchdog already running${existingPid !== null ? ` (PID ${existingPid})` : ""}`,
-					);
-				}
-			} else if (watchdogFlag) {
+			let watchdogPid: number | undefined;
+			if (watchdogFlag) {
 				const watchdogResult = await watchdog.start();
 				if (watchdogResult) {
-					watchdogActive = true;
+					watchdogPid = watchdogResult.pid;
 					if (!json) printHint("Watchdog started");
+				} else if (watchdogAlreadyRunning) {
+					// createDefaultWatchdog.start() returns null when an existing PID
+					// is alive — that's a no-op success, not a failure. Reuse the
+					// existing daemon. Sentinel value keeps `watchdogPid !== undefined`
+					// truthy in the JSON output.
+					watchdogPid = -1;
+					if (!json) printHint("Watchdog already running, reusing existing daemon");
 				} else {
 					if (!json) printWarning("Watchdog failed to start");
 				}
+			} else if (watchdogAlreadyRunning && acceptExistingWatchdogFlag) {
+				// --accept-existing-watchdog without --watchdog: surface that an
+				// existing daemon is supervising this run, but do not call start().
+				watchdogPid = -1;
+				if (!json) printHint("Watchdog already running, reusing existing daemon");
 			}
 			let monitorPid: number | undefined;
 			if (monitorFlag) {
@@ -651,8 +655,8 @@ export async function startCoordinatorSession(
 				projectRoot,
 				pid: headlessProc.pid,
 				headless: true,
-				watchdog: watchdogActive,
-				watchdogPreexisting,
+				watchdog: watchdogPid !== undefined,
+				watchdogPreexisting: watchdogAlreadyRunning,
 				monitor: monitorFlag ? monitorPid !== undefined : false,
 			};
 
@@ -792,24 +796,28 @@ export async function startCoordinatorSession(
 			await tmux.sendKeys(tmuxSession, "");
 		}
 
-		// Auto-start watchdog if --watchdog flag is present, unless one is
-		// already running (in which case --watchdog or --accept-existing-watchdog
-		// has already acknowledged it via the preflight check above).
-		let watchdogActive = false;
-		if (watchdogPreexisting) {
-			const existingPid = await readWatchdogPid(projectRoot);
-			watchdogActive = true;
-			if (!json) {
-				printHint(`Watchdog already running${existingPid !== null ? ` (PID ${existingPid})` : ""}`);
-			}
-		} else if (watchdogFlag) {
+		// Auto-start watchdog if --watchdog flag is present.
+		let watchdogPid: number | undefined;
+		if (watchdogFlag) {
 			const watchdogResult = await watchdog.start();
 			if (watchdogResult) {
-				watchdogActive = true;
+				watchdogPid = watchdogResult.pid;
 				if (!json) printHint("Watchdog started");
+			} else if (watchdogAlreadyRunning) {
+				// createDefaultWatchdog.start() returns null when an existing PID
+				// is alive — that's a no-op success, not a failure. Reuse the
+				// existing daemon. Sentinel value keeps `watchdogPid !== undefined`
+				// truthy in the JSON output.
+				watchdogPid = -1;
+				if (!json) printHint("Watchdog already running, reusing existing daemon");
 			} else {
 				if (!json) printWarning("Watchdog failed to start");
 			}
+		} else if (watchdogAlreadyRunning && acceptExistingWatchdogFlag) {
+			// --accept-existing-watchdog without --watchdog: surface that an
+			// existing daemon is supervising this run, but do not call start().
+			watchdogPid = -1;
+			if (!json) printHint("Watchdog already running, reusing existing daemon");
 		}
 
 		// Auto-start monitor if --monitor flag is present and tier2 is enabled
@@ -834,8 +842,8 @@ export async function startCoordinatorSession(
 			tmuxSession,
 			projectRoot,
 			pid,
-			watchdog: watchdogActive,
-			watchdogPreexisting,
+			watchdog: watchdogPid !== undefined,
+			watchdogPreexisting: watchdogAlreadyRunning,
 			monitor: monitorFlag ? monitorPid !== undefined : false,
 		};
 
