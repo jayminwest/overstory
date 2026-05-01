@@ -15,9 +15,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { AgentError, ValidationError } from "../errors.ts";
+import { createMailClient } from "../mail/client.ts";
+import { createMailStore } from "../mail/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
-import type { AgentSession } from "../types.ts";
+import type { AgentSession, MergeReadyPayload } from "../types.ts";
 import { type StopDeps, stopCommand } from "./stop.ts";
 
 // --- Fake Git (for branch deletion) ---
@@ -498,6 +500,138 @@ describe("stopCommand stop behavior", () => {
 		expect(marker.subject).toContain("lead-alpha");
 		expect(marker.messageId).toContain("auto-nudge-lead-alpha-");
 		expect(marker.createdAt).toBeDefined();
+	});
+
+	test("lead exiting without merge_ready gets 'no merge_ready sent' subject (overstory-41fe)", async () => {
+		const session = makeAgentSession({
+			agentName: "lead-beta",
+			capability: "lead",
+			state: "working",
+			tmuxSession: "overstory-lead-beta",
+		});
+		saveSessionsToDb([session]);
+
+		const { deps } = makeDeps({ [session.tmuxSession]: true });
+		await stopCommand("lead-beta", {}, deps);
+
+		const markerPath = join(overstoryDir, "pending-nudges", "coordinator.json");
+		const marker = JSON.parse(await Bun.file(markerPath).text());
+		expect(marker.subject).toBe(
+			"Lead lead-beta exited — no merge_ready sent, needs coordinator follow-up",
+		);
+	});
+
+	test("lead with one merge_ready gets branch-specific subject (overstory-41fe)", async () => {
+		const session = makeAgentSession({
+			agentName: "lead-gamma",
+			capability: "lead",
+			state: "working",
+			tmuxSession: "overstory-lead-gamma",
+		});
+		saveSessionsToDb([session]);
+
+		// Seed mail.db with a merge_ready message from this lead
+		const mailStore = createMailStore(join(overstoryDir, "mail.db"));
+		const mailClient = createMailClient(mailStore);
+		const payload: MergeReadyPayload = {
+			branch: "overstory/lead-gamma/bead-42",
+			taskId: "bead-42",
+			agentName: "lead-gamma",
+			filesModified: ["src/foo.ts"],
+		};
+		mailClient.sendProtocol({
+			from: "lead-gamma",
+			to: "coordinator",
+			subject: "merge_ready: bead-42",
+			body: "ready",
+			type: "merge_ready",
+			payload,
+		});
+		mailClient.close();
+
+		const { deps } = makeDeps({ [session.tmuxSession]: true });
+		await stopCommand("lead-gamma", {}, deps);
+
+		const markerPath = join(overstoryDir, "pending-nudges", "coordinator.json");
+		const marker = JSON.parse(await Bun.file(markerPath).text());
+		expect(marker.subject).toBe(
+			"Lead lead-gamma sent merge_ready for branch overstory/lead-gamma/bead-42",
+		);
+	});
+
+	test("lead with multiple merge_ready messages lists all unique branches (overstory-41fe)", async () => {
+		const session = makeAgentSession({
+			agentName: "lead-delta",
+			capability: "lead",
+			state: "working",
+			tmuxSession: "overstory-lead-delta",
+		});
+		saveSessionsToDb([session]);
+
+		const mailStore = createMailStore(join(overstoryDir, "mail.db"));
+		const mailClient = createMailClient(mailStore);
+		for (const branch of ["overstory/worker-a/t1", "overstory/worker-b/t2"]) {
+			mailClient.sendProtocol({
+				from: "lead-delta",
+				to: "coordinator",
+				subject: `merge_ready: ${branch}`,
+				body: "ready",
+				type: "merge_ready",
+				payload: {
+					branch,
+					taskId: branch.split("/")[2] ?? "unknown",
+					agentName: "lead-delta",
+					filesModified: [],
+				},
+			});
+		}
+		mailClient.close();
+
+		const { deps } = makeDeps({ [session.tmuxSession]: true });
+		await stopCommand("lead-delta", {}, deps);
+
+		const markerPath = join(overstoryDir, "pending-nudges", "coordinator.json");
+		const marker = JSON.parse(await Bun.file(markerPath).text());
+		expect(marker.subject).toContain("Lead lead-delta sent 2 merge_ready");
+		expect(marker.subject).toContain("overstory/worker-a/t1");
+		expect(marker.subject).toContain("overstory/worker-b/t2");
+	});
+
+	test("merge_ready messages from other agents do not influence the subject (overstory-41fe)", async () => {
+		const session = makeAgentSession({
+			agentName: "lead-eps",
+			capability: "lead",
+			state: "working",
+			tmuxSession: "overstory-lead-eps",
+		});
+		saveSessionsToDb([session]);
+
+		// A *different* lead has merge_ready in the same mail.db — should be ignored
+		const mailStore = createMailStore(join(overstoryDir, "mail.db"));
+		const mailClient = createMailClient(mailStore);
+		mailClient.sendProtocol({
+			from: "some-other-lead",
+			to: "coordinator",
+			subject: "merge_ready: x",
+			body: "ready",
+			type: "merge_ready",
+			payload: {
+				branch: "overstory/other/x",
+				taskId: "x",
+				agentName: "some-other-lead",
+				filesModified: [],
+			},
+		});
+		mailClient.close();
+
+		const { deps } = makeDeps({ [session.tmuxSession]: true });
+		await stopCommand("lead-eps", {}, deps);
+
+		const markerPath = join(overstoryDir, "pending-nudges", "coordinator.json");
+		const marker = JSON.parse(await Bun.file(markerPath).text());
+		expect(marker.subject).toBe(
+			"Lead lead-eps exited — no merge_ready sent, needs coordinator follow-up",
+		);
 	});
 
 	test("stopping a non-lead agent does NOT write lead_completed pending-nudge", async () => {

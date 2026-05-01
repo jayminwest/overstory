@@ -18,7 +18,9 @@ import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { printSuccess, printWarning } from "../logging/color.ts";
+import { createMailStore } from "../mail/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
+import type { MergeReadyPayload } from "../types.ts";
 import { readPidFile } from "../utils/pid.ts";
 import { removeWorktree } from "../worktree/manager.ts";
 import { isProcessAlive, isSessionAlive, killProcessTree, killSession } from "../worktree/tmux.ts";
@@ -49,6 +51,56 @@ export interface StopDeps {
 	_git?: {
 		deleteBranch: (repoRoot: string, branch: string) => Promise<boolean>;
 	};
+}
+
+/**
+ * Build the lead_completed nudge subject based on whether the lead actually sent
+ * merge_ready before exiting (overstory-41fe). The merge_ready close-gate
+ * (commit 3e21338) prevents leads from running `sd close` without it, but a
+ * lead can still exit (process termination, watchdog kill, manual `ov stop`)
+ * without ever having sent one. The coordinator's surfacing of this nudge
+ * needs to distinguish those two cases.
+ */
+function buildLeadCompletedSubject(agentName: string, mailDbPath: string): string {
+	let mergeReadyBranches: string[] = [];
+	let mergeReadyCount = 0;
+	try {
+		const store = createMailStore(mailDbPath);
+		try {
+			const messages = store.getAll({ from: agentName, type: "merge_ready" });
+			mergeReadyCount = messages.length;
+			for (const msg of messages) {
+				if (msg.payload === null) continue;
+				try {
+					const parsed = JSON.parse(msg.payload) as Partial<MergeReadyPayload>;
+					if (typeof parsed.branch === "string" && parsed.branch.length > 0) {
+						mergeReadyBranches.push(parsed.branch);
+					}
+				} catch {
+					// Skip messages with unparseable payloads
+				}
+			}
+		} finally {
+			store.close();
+		}
+	} catch {
+		// If the mail store can't be opened (corrupt db, permissions), fall back
+		// to the historical ambiguous phrasing rather than blocking the stop.
+		return `Lead ${agentName} completed — check mail for merge_ready/worker_done`;
+	}
+
+	if (mergeReadyCount === 0) {
+		return `Lead ${agentName} exited — no merge_ready sent, needs coordinator follow-up`;
+	}
+	// Dedupe in case a lead resent merge_ready for the same branch
+	mergeReadyBranches = Array.from(new Set(mergeReadyBranches));
+	if (mergeReadyBranches.length === 0) {
+		return `Lead ${agentName} sent ${mergeReadyCount} merge_ready (branch unknown)`;
+	}
+	if (mergeReadyBranches.length === 1) {
+		return `Lead ${agentName} sent merge_ready for branch ${mergeReadyBranches[0]}`;
+	}
+	return `Lead ${agentName} sent ${mergeReadyBranches.length} merge_ready (branches: ${mergeReadyBranches.join(", ")})`;
 }
 
 /** Delete a git branch (best-effort, non-fatal). */
@@ -170,6 +222,8 @@ export async function stopCommand(
 			// (overstory-49a7).
 			if (session.capability === "lead") {
 				try {
+					const mailDbPath = join(overstoryDir, "mail.db");
+					const subject = buildLeadCompletedSubject(agentName, mailDbPath);
 					const nudgesDir = join(overstoryDir, "pending-nudges");
 					const { mkdir } = await import("node:fs/promises");
 					await mkdir(nudgesDir, { recursive: true });
@@ -177,7 +231,7 @@ export async function stopCommand(
 					const marker = {
 						from: agentName,
 						reason: "lead_completed",
-						subject: `Lead ${agentName} completed — check mail for merge_ready/worker_done`,
+						subject,
 						messageId: `auto-nudge-${agentName}-${Date.now()}`,
 						createdAt: new Date().toISOString(),
 					};
