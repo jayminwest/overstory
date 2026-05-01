@@ -1124,8 +1124,19 @@
 			"overstory-3f0c",
 			"overstory-235f"
 		],
-		"status": "active",
+		"status": "completed",
 		"createdAt": "2026-05-01T21:43:32.083Z",
+		"completedAt": "2026-05-01T22:07:33.846Z"
+	},
+	{
+		"id": "group-24bec854",
+		"name": "low-pri-cleanup",
+		"memberIssueIds": [
+			"overstory-7291",
+			"overstory-c92c"
+		],
+		"status": "active",
+		"createdAt": "2026-05-01T22:08:18.592Z",
 		"completedAt": null
 	}
 ]
