@@ -37,6 +37,7 @@ import type {
 	WorkerDiedPayload,
 } from "../types.ts";
 import { terminalMailTypesFor } from "./capabilities.ts";
+import { detectMailPollPattern } from "./mail-poll-detect.ts";
 import { acquireTurnLock } from "./turn-lock.ts";
 
 /** Subprocess shape required by `runTurn`. Compatible with `Bun.spawn`. */
@@ -1004,6 +1005,51 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 
 				if (event.type === "result") {
 					cleanResult = event.isError !== true;
+				}
+
+				// Defense-in-depth (overstory-c92c): detect Bash mail-poll patterns
+				// the lead.md prompt forbids (overstory-fa84). Warn-only — emit a
+				// custom event before the original tool_use so observability tools
+				// see the warning ahead of the offending call. Wrapped in try/catch
+				// so detection failure cannot break the turn.
+				if (event.type === "tool_use" && event.name === "Bash") {
+					try {
+						const input =
+							typeof event.input === "object" && event.input !== null
+								? (event.input as Record<string, unknown>)
+								: null;
+						const command = input?.command;
+						const detection = detectMailPollPattern(command);
+						if (detection.matched) {
+							const cmdStr = typeof command === "string" ? command : "";
+							const truncated = cmdStr.length > 200 ? `${cmdStr.slice(0, 200)}…` : cmdStr;
+							runnerLog(
+								"warn",
+								`detected mail-poll pattern in Bash command (${detection.reason}): ${truncated}`,
+							);
+							try {
+								eventStore.insert({
+									runId,
+									agentName,
+									sessionId: newSessionId,
+									eventType: "custom",
+									toolName: null,
+									toolArgs: null,
+									toolDurationMs: null,
+									level: "warn",
+									data: JSON.stringify({
+										type: "mail_poll_detected",
+										reason: detection.reason,
+										command: cmdStr,
+									}),
+								});
+							} catch (insertErr) {
+								runnerLog("warn", "failed to insert mail_poll_detected event", insertErr);
+							}
+						}
+					} catch (detectErr) {
+						runnerLog("warn", "mail-poll detector threw", detectErr);
+					}
 				}
 
 				try {
