@@ -1322,6 +1322,120 @@ describe("mailCommand", () => {
 			expect(stderrOutput).toBe("");
 		});
 	});
+
+	describe("terminal-state recipient rejection (overstory-f5be)", () => {
+		async function seedRecipient(name: string, state: "working" | "completed" | "zombie") {
+			const { createSessionStore } = await import("../sessions/store.ts");
+			const sessionsDbPath = join(tempDir, ".overstory", "sessions.db");
+			const sessionStore = createSessionStore(sessionsDbPath);
+			sessionStore.upsert({
+				id: `session-${name}`,
+				agentName: name,
+				capability: "builder",
+				worktreePath: `/worktrees/${name}`,
+				branchName: name,
+				taskId: "bead-x",
+				tmuxSession: `overstory-test-${name}`,
+				state,
+				pid: 99999,
+				parentAgent: "orchestrator",
+				depth: 1,
+				runId: "run-001",
+				startedAt: new Date().toISOString(),
+				lastActivity: new Date().toISOString(),
+				escalationLevel: 0,
+				stalledSince: null,
+				transcriptPath: null,
+			});
+			sessionStore.close();
+		}
+
+		test("rejects send to recipient in completed state", async () => {
+			await seedRecipient("dead-builder", "completed");
+
+			let caught: unknown;
+			try {
+				await mailCommand([
+					"send",
+					"--to",
+					"dead-builder",
+					"--subject",
+					"Hello",
+					"--body",
+					"Are you there?",
+				]);
+			} catch (err) {
+				caught = err;
+			}
+
+			expect(caught).toBeDefined();
+			expect((caught as Error).name).toBe("MailError");
+			expect((caught as Error).message).toContain("dead-builder");
+			expect((caught as Error).message).toContain("completed");
+
+			// Confirm no message was inserted
+			const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+			const client = createMailClient(store);
+			const messages = client.list({ to: "dead-builder" });
+			expect(messages.length).toBe(0);
+			client.close();
+		});
+
+		test("rejects send to recipient in zombie state", async () => {
+			await seedRecipient("crashed-builder", "zombie");
+
+			let caught: unknown;
+			try {
+				await mailCommand([
+					"send",
+					"--to",
+					"crashed-builder",
+					"--subject",
+					"Status?",
+					"--body",
+					"Ping",
+				]);
+			} catch (err) {
+				caught = err;
+			}
+
+			expect(caught).toBeDefined();
+			expect((caught as Error).name).toBe("MailError");
+			expect((caught as Error).message).toContain("zombie");
+		});
+
+		test("allows send when recipient has no session row (e.g. orchestrator)", async () => {
+			// No session seeded for "orchestrator" — the existing beforeEach
+			// only inserts mail rows, not session rows.
+			await mailCommand([
+				"send",
+				"--to",
+				"orchestrator",
+				"--subject",
+				"Hello",
+				"--body",
+				"Top-level role",
+			]);
+
+			const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+			const client = createMailClient(store);
+			const messages = client.list({ to: "orchestrator" });
+			expect(messages.length).toBeGreaterThanOrEqual(1);
+			client.close();
+		});
+
+		test("allows send to active (working) recipient", async () => {
+			await seedRecipient("live-builder", "working");
+
+			await mailCommand(["send", "--to", "live-builder", "--subject", "Hello", "--body", "Active"]);
+
+			const store = createMailStore(join(tempDir, ".overstory", "mail.db"));
+			const client = createMailClient(store);
+			const messages = client.list({ to: "live-builder" });
+			expect(messages.length).toBe(1);
+			client.close();
+		});
+	});
 });
 
 describe("shouldAutoNudge", () => {

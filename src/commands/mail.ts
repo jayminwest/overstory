@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import { Command } from "commander";
 import { resolveProjectRoot } from "../config.ts";
-import { ValidationError } from "../errors.ts";
+import { MailError, ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { jsonOutput } from "../json.ts";
 import { accent, printHint, printSuccess } from "../logging/color.ts";
@@ -401,6 +401,30 @@ async function handleSend(opts: SendOpts, cwd: string): Promise<void> {
 			}
 
 			return; // Early return — broadcast handled
+		} finally {
+			sessionStore.close();
+		}
+	}
+
+	// Reject sends to agents in a terminal state (completed/zombie).
+	// `installMailInjectors` reaps the per-agent dispatch loop the moment a
+	// session lands in a terminal state (serve.ts:378), so any mail addressed
+	// after that point would sit unread forever with no way to surface it.
+	// Sessions with no row at all (orchestrator, coordinator, operator roles)
+	// fall through — we only know about agents tracked in SessionStore.
+	// Group addresses already skip terminal agents via `getActive()`.
+	{
+		const overstoryDir = join(cwd, ".overstory");
+		const { store: sessionStore } = openSessionStore(overstoryDir);
+		try {
+			const recipient = sessionStore.getByName(to);
+			if (recipient && (recipient.state === "completed" || recipient.state === "zombie")) {
+				throw new MailError(
+					`Recipient "${to}" is in terminal state (${recipient.state}); message not sent. ` +
+						`The agent is no longer running, so this message would never be delivered.`,
+					{ agentName: to },
+				);
+			}
 		} finally {
 			sessionStore.close();
 		}
