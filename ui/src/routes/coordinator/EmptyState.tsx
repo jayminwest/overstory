@@ -36,10 +36,18 @@ export function EmptyState({ onSelect, onStartNewRun, isStopped }: EmptyStatePro
 			/>
 			<div className="grid gap-3 w-full max-w-3xl sm:grid-cols-3">
 				{STARTER_PROMPTS.map((p) => (
-					<button key={p.text} type="button" onClick={() => onSelect(p.text)} className="text-left">
+					<button
+						key={p.text}
+						type="button"
+						aria-label={p.text}
+						onClick={() => onSelect(p.text)}
+						className="text-left"
+					>
 						<Card className="py-5 gap-3 h-full transition-colors hover:bg-accent hover:border-accent-foreground/20">
 							<CardContent className="px-5 flex flex-col gap-3">
-								<span className="text-2xl leading-none">{p.icon}</span>
+								<span aria-hidden="true" role="img" className="text-2xl leading-none">
+									{p.icon}
+								</span>
 								<span className="text-sm leading-relaxed">{p.text}</span>
 							</CardContent>
 						</Card>
