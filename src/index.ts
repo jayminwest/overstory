@@ -287,6 +287,10 @@ program
 	.option("--name <name>", "Unique agent name (auto-generated if omitted)")
 	.option("--spec <path>", "Path to task spec file")
 	.option("--files <list>", "Exclusive file scope (comma-separated)")
+	.option(
+		"--siblings <names>",
+		"Comma-separated names of parallel sibling agents that may share file scope. Renders rebase-before-merge_ready guidance into the overlay.",
+	)
 	.option("--parent <agent>", "Parent agent for hierarchy tracking")
 	.option("--depth <n>", "Current hierarchy depth", "0")
 	.option("--skip-scout", "Skip scout phase for lead agents")

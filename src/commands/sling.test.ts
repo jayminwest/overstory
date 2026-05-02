@@ -27,6 +27,7 @@ import {
 	isRunningAsRoot,
 	isTaskWorkable,
 	parentHasScouts,
+	parseSiblings,
 	resolveParentAgent,
 	resolveUseHeadless,
 	shouldShowScoutWarning,
@@ -1544,5 +1545,39 @@ describe("resolveUseHeadless", () => {
 
 	test("sapling + flag:false returns true (statically headless wins over flag)", () => {
 		expect(resolveUseHeadless(saplingLike, false, baseConfig)).toBe(true);
+	});
+});
+
+describe("parseSiblings (overstory-f76a)", () => {
+	test("undefined input returns empty array", () => {
+		expect(parseSiblings(undefined)).toEqual([]);
+	});
+
+	test("empty string returns empty array", () => {
+		expect(parseSiblings("")).toEqual([]);
+	});
+
+	test("single name returns one-element array", () => {
+		expect(parseSiblings("sibling-a")).toEqual(["sibling-a"]);
+	});
+
+	test("comma-separated names are split and trimmed", () => {
+		expect(parseSiblings("sibling-a, sibling-b ,sibling-c")).toEqual([
+			"sibling-a",
+			"sibling-b",
+			"sibling-c",
+		]);
+	});
+
+	test("blank entries between commas are dropped", () => {
+		expect(parseSiblings("sibling-a,,sibling-b, ,sibling-c")).toEqual([
+			"sibling-a",
+			"sibling-b",
+			"sibling-c",
+		]);
+	});
+
+	test("whitespace-only input returns empty array", () => {
+		expect(parseSiblings("   ")).toEqual([]);
 	});
 });

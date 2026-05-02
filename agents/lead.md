@@ -363,3 +363,14 @@ Good decomposition follows these principles:
    ```
 
 Sending the terminal `worker_done` IS your exit. Your process terminates after the turn ends; do not spawn additional workers, send more mail, or run other commands afterward. The lead's job is over once `merge_ready` signals are sent, the task is closed, and the terminal `worker_done` is delivered.
+
+### Rebase before merge_ready when siblings exist
+
+When your overlay's "Parallel Siblings" section lists sibling agents, those leads share file scope with you. BEFORE sending `merge_ready` to the coordinator:
+
+1. `git fetch origin main:main`
+2. `git rebase main`
+3. Re-run quality gates AFTER the rebase ({{QUALITY_GATE_INLINE}}).
+4. If the rebase introduces conflicts you cannot cleanly resolve, escalate to the coordinator with `--type error`.
+
+Reason: parallel leads branch off pre-merge `main`; whichever merges second carries a stale base and risks reverting sibling work. mx-ddc26a / mx-c0c122 document the prior incidents.

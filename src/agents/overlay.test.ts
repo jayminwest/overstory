@@ -10,6 +10,7 @@ import {
 	formatQualityGatesCapabilities,
 	formatQualityGatesInline,
 	formatQualityGatesSteps,
+	formatSiblings,
 	generateOverlay,
 	isCanonicalRoot,
 	writeOverlay,
@@ -998,5 +999,60 @@ describe("quality gate placeholders in base definitions", () => {
 		expect(output).toContain("ruff check .");
 		expect(output).not.toContain("bun test");
 		expect(output).not.toContain("{{QUALITY_GATE");
+	});
+});
+
+describe("formatSiblings (overstory-f76a)", () => {
+	test("empty siblings array → empty string", () => {
+		const config = makeConfig({ siblings: [] });
+		expect(formatSiblings(config)).toBe("");
+	});
+
+	test("missing siblings field → empty string", () => {
+		const config = makeConfig();
+		expect(formatSiblings(config)).toBe("");
+	});
+
+	test("one sibling → markdown with the name and rebase guidance", () => {
+		const config = makeConfig({ siblings: ["sibling-a"] });
+		const out = formatSiblings(config);
+		expect(out).toContain("## Parallel Siblings");
+		expect(out).toContain("- sibling-a");
+		expect(out).toContain("git fetch origin main:main");
+		expect(out).toContain("git rebase main");
+		expect(out).toContain("merge_ready");
+	});
+
+	test("multiple siblings render every name as a bullet", () => {
+		const config = makeConfig({ siblings: ["sibling-a", "sibling-b", "sibling-c"] });
+		const out = formatSiblings(config);
+		expect(out).toContain("- sibling-a");
+		expect(out).toContain("- sibling-b");
+		expect(out).toContain("- sibling-c");
+	});
+});
+
+describe("generateOverlay siblings wiring (overstory-f76a)", () => {
+	test("siblings field renders Parallel Siblings section in overlay", async () => {
+		const config = makeConfig({ siblings: ["sibling-a", "sibling-b"] });
+		const output = await generateOverlay(config);
+		expect(output).toContain("## Parallel Siblings");
+		expect(output).toContain("- sibling-a");
+		expect(output).toContain("- sibling-b");
+		expect(output).toContain("git rebase main");
+		expect(output).not.toContain("{{SIBLINGS}}");
+	});
+
+	test("no siblings → overlay omits Parallel Siblings section", async () => {
+		const config = makeConfig();
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("## Parallel Siblings");
+		expect(output).not.toContain("{{SIBLINGS}}");
+	});
+
+	test("empty siblings array → overlay omits Parallel Siblings section", async () => {
+		const config = makeConfig({ siblings: [] });
+		const output = await generateOverlay(config);
+		expect(output).not.toContain("## Parallel Siblings");
 	});
 });

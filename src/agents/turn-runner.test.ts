@@ -1895,3 +1895,316 @@ describe("runTurn", () => {
 		}
 	});
 });
+
+describe("runTurn scope-violation observability (overstory-9f4d)", () => {
+	let ctx: Ctx;
+
+	beforeEach(async () => {
+		const overstoryDir = await mkdtemp(join(tmpdir(), "overstory-scope-test-"));
+		ctx = {
+			overstoryDir,
+			worktreePath: overstoryDir,
+			projectRoot: overstoryDir,
+			mailDbPath: join(overstoryDir, "mail.db"),
+			eventsDbPath: join(overstoryDir, "events.db"),
+			sessionsDbPath: join(overstoryDir, "sessions.db"),
+		};
+		_resetInProcessLocks();
+	});
+
+	afterEach(async () => {
+		_resetInProcessLocks();
+		await rm(ctx.overstoryDir, { recursive: true, force: true });
+	});
+
+	async function writeOverlayWithScope(scope: string[]): Promise<void> {
+		const dir = join(ctx.worktreePath, ".claude");
+		const { mkdir: mkdirP, writeFile } = await import("node:fs/promises");
+		await mkdirP(dir, { recursive: true });
+		const body = [
+			"## File Scope (exclusive ownership)",
+			"",
+			...scope.map((p) => `- \`${p}\``),
+			"",
+			"## Expertise",
+			"",
+			"none",
+		].join("\n");
+		await writeFile(join(dir, "CLAUDE.md"), body);
+	}
+
+	test("builder scope violation without justification emits warn log + scope_violation event", async () => {
+		seedSession(ctx.sessionsDbPath, { agentName: "violator", state: "working" });
+		await writeOverlayWithScope(["src/agents/in-scope.ts"]);
+
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			(async () => {
+				await Bun.sleep(20);
+				const s = createMailStore(ctx.mailDbPath);
+				try {
+					createMailClient(s).sendProtocol({
+						from: "violator",
+						to: "lead",
+						subject: "Worker done",
+						body: "ok",
+						type: "worker_done",
+						priority: "normal",
+						payload: {
+							taskId: "t",
+							branch: "b",
+							exitCode: 0,
+							filesModified: ["src/other.ts"],
+						},
+					});
+				} finally {
+					s.close();
+				}
+				emitFakeTurn(fake, { sessionId: "violator-session" });
+				fake._exit(0);
+			})();
+			return fake;
+		};
+
+		const logs: Array<{ level: string; message: string }> = [];
+		const logger: RunnerLogger = (level, message) => {
+			logs.push({ level, message });
+		};
+
+		const result = await runTurn({
+			...makeRunOpts(ctx, "violator", {
+				runtime,
+				_spawnFn: spawnFn,
+				_logWarning: logger,
+			}),
+			_scopeDetect: () => ({
+				violations: ["src/other.ts"],
+				expansionReasons: [],
+			}),
+		});
+
+		expect(result.terminalMailObserved).toBe(true);
+		expect(result.finalState).toBe("completed");
+
+		const warnLog = logs.find(
+			(l) => l.level === "warn" && l.message.includes("outside declared FILE_SCOPE"),
+		);
+		expect(warnLog).toBeDefined();
+		expect(warnLog?.message).toContain("src/other.ts");
+
+		const eventStore = createEventStore(ctx.eventsDbPath);
+		try {
+			const events = eventStore.getByAgent("violator");
+			const violationEvent = events.find((e) => {
+				if (e.eventType !== "custom" || e.level !== "warn" || !e.data) return false;
+				try {
+					const parsed = JSON.parse(e.data) as { type?: string };
+					return parsed.type === "scope_violation";
+				} catch {
+					return false;
+				}
+			});
+			expect(violationEvent).toBeDefined();
+			const payload = JSON.parse(violationEvent?.data ?? "{}") as {
+				type: string;
+				violations: string[];
+				fileScope: string[];
+			};
+			expect(payload.violations).toEqual(["src/other.ts"]);
+			expect(payload.fileScope).toEqual(["src/agents/in-scope.ts"]);
+		} finally {
+			eventStore.close();
+		}
+	});
+
+	test("expansion_reason in commit log suppresses the warning", async () => {
+		seedSession(ctx.sessionsDbPath, { agentName: "justified", state: "working" });
+		await writeOverlayWithScope(["src/agents/in-scope.ts"]);
+
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			(async () => {
+				await Bun.sleep(20);
+				const s = createMailStore(ctx.mailDbPath);
+				try {
+					createMailClient(s).sendProtocol({
+						from: "justified",
+						to: "lead",
+						subject: "Worker done",
+						body: "ok",
+						type: "worker_done",
+						priority: "normal",
+						payload: {
+							taskId: "t",
+							branch: "b",
+							exitCode: 0,
+							filesModified: ["src/other.ts"],
+						},
+					});
+				} finally {
+					s.close();
+				}
+				emitFakeTurn(fake, { sessionId: "justified-session" });
+				fake._exit(0);
+			})();
+			return fake;
+		};
+
+		const logs: Array<{ level: string; message: string }> = [];
+		const logger: RunnerLogger = (level, message) => {
+			logs.push({ level, message });
+		};
+
+		const result = await runTurn({
+			...makeRunOpts(ctx, "justified", {
+				runtime,
+				_spawnFn: spawnFn,
+				_logWarning: logger,
+			}),
+			_scopeDetect: () => ({
+				violations: ["src/other.ts"],
+				expansionReasons: ["needed shared type"],
+			}),
+		});
+
+		expect(result.terminalMailObserved).toBe(true);
+
+		const warnLog = logs.find(
+			(l) => l.level === "warn" && l.message.includes("outside declared FILE_SCOPE"),
+		);
+		expect(warnLog).toBeUndefined();
+
+		const eventStore = createEventStore(ctx.eventsDbPath);
+		try {
+			const events = eventStore.getByAgent("justified");
+			const violationEvent = events.find((e) => e.data?.includes("scope_violation") ?? false);
+			expect(violationEvent).toBeUndefined();
+		} finally {
+			eventStore.close();
+		}
+	});
+
+	test("prior scope_expansion mail suppresses the warning", async () => {
+		seedSession(ctx.sessionsDbPath, { agentName: "premail", state: "working" });
+		await writeOverlayWithScope(["src/agents/in-scope.ts"]);
+
+		// Pre-seed: a scope_expansion-prefixed mail from this agent.
+		{
+			const s = createMailStore(ctx.mailDbPath);
+			try {
+				createMailClient(s).send({
+					from: "premail",
+					to: "lead",
+					subject: "scope_expansion: needed shared type",
+					body: "heads up",
+					type: "status",
+					priority: "normal",
+				});
+			} finally {
+				s.close();
+			}
+		}
+
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			(async () => {
+				await Bun.sleep(20);
+				const s = createMailStore(ctx.mailDbPath);
+				try {
+					createMailClient(s).sendProtocol({
+						from: "premail",
+						to: "lead",
+						subject: "Worker done",
+						body: "ok",
+						type: "worker_done",
+						priority: "normal",
+						payload: {
+							taskId: "t",
+							branch: "b",
+							exitCode: 0,
+							filesModified: ["src/other.ts"],
+						},
+					});
+				} finally {
+					s.close();
+				}
+				emitFakeTurn(fake, { sessionId: "premail-session" });
+				fake._exit(0);
+			})();
+			return fake;
+		};
+
+		const logs: Array<{ level: string; message: string }> = [];
+		const logger: RunnerLogger = (level, message) => {
+			logs.push({ level, message });
+		};
+
+		await runTurn({
+			...makeRunOpts(ctx, "premail", {
+				runtime,
+				_spawnFn: spawnFn,
+				_logWarning: logger,
+			}),
+			_scopeDetect: () => ({
+				violations: ["src/other.ts"],
+				expansionReasons: [],
+			}),
+		});
+
+		const warnLog = logs.find(
+			(l) => l.level === "warn" && l.message.includes("outside declared FILE_SCOPE"),
+		);
+		expect(warnLog).toBeUndefined();
+	});
+
+	test("scout capability skips scope detection", async () => {
+		seedSession(ctx.sessionsDbPath, {
+			agentName: "scout-x",
+			capability: "scout",
+			state: "working",
+		});
+		await writeOverlayWithScope(["src/agents/in-scope.ts"]);
+
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			(async () => {
+				await Bun.sleep(20);
+				const s = createMailStore(ctx.mailDbPath);
+				try {
+					createMailClient(s).send({
+						from: "scout-x",
+						to: "lead",
+						subject: "Done",
+						body: "ok",
+						type: "result",
+						priority: "normal",
+					});
+				} finally {
+					s.close();
+				}
+				emitFakeTurn(fake, { sessionId: "scout-x-session" });
+				fake._exit(0);
+			})();
+			return fake;
+		};
+
+		let detectCalled = false;
+		await runTurn({
+			...makeRunOpts(ctx, "scout-x", {
+				runtime,
+				_spawnFn: spawnFn,
+				capability: "scout",
+			}),
+			_scopeDetect: () => {
+				detectCalled = true;
+				return { violations: [], expansionReasons: [] };
+			},
+		});
+
+		expect(detectCalled).toBe(false);
+	});
+});

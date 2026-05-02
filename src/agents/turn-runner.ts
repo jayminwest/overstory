@@ -23,6 +23,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { extractFileScope } from "../commands/agents.ts";
 import { AgentError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { filterToolArgs } from "../events/tool-filter.ts";
@@ -38,6 +39,12 @@ import type {
 } from "../types.ts";
 import { terminalMailTypesFor } from "./capabilities.ts";
 import { detectMailPollPattern } from "./mail-poll-detect.ts";
+import {
+	type DetectScopeViolationOpts,
+	detectScopeViolation as defaultDetectScopeViolation,
+	IMPLEMENTATION_CAPABILITIES,
+	type ScopeViolationResult,
+} from "./scope-detect.ts";
 import { acquireTurnLock } from "./turn-lock.ts";
 
 /** Subprocess shape required by `runTurn`. Compatible with `Bun.spawn`. */
@@ -145,6 +152,13 @@ export interface RunTurnOpts {
 	 * rather than inferring from observable timestamps (overstory-8e61).
 	 */
 	_onLastActivityRefresh?: () => void;
+	/**
+	 * Test injection: replaces the real `detectScopeViolation` from
+	 * `scope-detect.ts`. Tests pass a stubbed runner via the wrapper so they
+	 * can drive the scope-violation observability path without spawning git
+	 * (overstory-9f4d). Defaults to the real implementation.
+	 */
+	_scopeDetect?: (opts: DetectScopeViolationOpts) => ScopeViolationResult;
 }
 
 export interface TurnResult {
@@ -297,6 +311,38 @@ function checkTerminalMailSince(
 		});
 		const row = stmt.get(params);
 		return row !== null;
+	} catch {
+		return false;
+	} finally {
+		try {
+			db.close();
+		} catch {
+			// best-effort
+		}
+	}
+}
+
+/**
+ * Check whether the agent has previously sent a `scope_expansion`-prefixed
+ * status mail (overstory-9f4d). When such a mail exists, the runner suppresses
+ * the soft scope-violation warning — the lead has already been informed.
+ *
+ * Soft signal — every failure (DB unavailable, missing table, etc.) returns
+ * false so observability never breaks the runner.
+ */
+function hasScopeExpansionMail(mailDbPath: string, agentName: string): boolean {
+	let db: Database;
+	try {
+		db = new Database(mailDbPath);
+	} catch {
+		return false;
+	}
+	try {
+		db.exec("PRAGMA busy_timeout = 5000");
+		const stmt = db.prepare<{ c: number }, { $a: string }>(
+			"SELECT 1 AS c FROM messages WHERE from_agent = $a AND subject LIKE 'scope_expansion%' LIMIT 1",
+		);
+		return stmt.get({ $a: agentName }) !== null;
 	} catch {
 		return false;
 	} finally {
@@ -1115,6 +1161,70 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 			capability,
 			snapshotTs,
 		);
+
+		// Soft scope-violation observability (overstory-9f4d). Builders sometimes
+		// expand beyond their declared FILE_SCOPE; the lead needs a way to spot it
+		// during merge verification. Surface a warn-level event into events.db
+		// when the worker's modified files exceed FILE_SCOPE without an
+		// `expansion_reason:` justification (commit body OR prior scope_expansion
+		// mail). This is advisory — never aborts the turn, never blocks the
+		// completed transition. All errors are swallowed.
+		//
+		// TODO: baseRef is hard-coded to "main"; a future improvement could
+		// resolve the actual session-branch.txt for projects whose canonical
+		// branch differs.
+		if (terminalMailObserved && IMPLEMENTATION_CAPABILITIES.has(capability)) {
+			try {
+				const fileScope = await extractFileScope(worktreePath, runtime.instructionPath);
+				if (fileScope.length > 0) {
+					const detectFn = opts._scopeDetect ?? defaultDetectScopeViolation;
+					const { violations, expansionReasons } = detectFn({
+						worktreePath,
+						baseRef: "main",
+						fileScope,
+					});
+					if (violations.length > 0 && expansionReasons.length === 0) {
+						const justified = hasScopeExpansionMail(mailDbPath, agentName);
+						if (!justified) {
+							runnerLog(
+								"warn",
+								`agent modified ${violations.length} file(s) outside declared FILE_SCOPE without justification: ${violations.join(", ")}. To suppress, include 'expansion_reason: <why>' in your last commit message OR send a scope_expansion mail to your lead.`,
+							);
+							try {
+								const evStore = createEventStore(eventsDbPath);
+								try {
+									evStore.insert({
+										runId,
+										agentName,
+										sessionId: newSessionId,
+										eventType: "custom",
+										toolName: null,
+										toolArgs: null,
+										toolDurationMs: null,
+										level: "warn",
+										data: JSON.stringify({
+											type: "scope_violation",
+											violations,
+											fileScope,
+										}),
+									});
+								} finally {
+									try {
+										evStore.close();
+									} catch {
+										// best-effort
+									}
+								}
+							} catch {
+								// observability must never break the runner
+							}
+						}
+					}
+				}
+			} catch {
+				// scope detection is advisory — swallow all errors
+			}
+		}
 
 		const resumeMismatch =
 			priorSessionId !== null && newSessionId !== null && newSessionId !== priorSessionId;

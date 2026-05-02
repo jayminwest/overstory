@@ -158,6 +158,27 @@ export interface SlingOptions {
 	profile?: string;
 	headless?: boolean;
 	recover?: boolean;
+	/**
+	 * Comma-separated list of sibling agent names dispatched in parallel that
+	 * may share file scope with this agent (overstory-f76a). Plumbed through
+	 * to `OverlayConfig.siblings` so the overlay renders rebase-before-merge_ready
+	 * guidance.
+	 */
+	siblings?: string;
+}
+
+/**
+ * Parse the `--siblings <names>` argument into a normalized string array.
+ * Trims whitespace, drops empty entries. Empty / undefined input → `[]`.
+ *
+ * Exported for unit-testing.
+ */
+export function parseSiblings(raw: string | undefined): string[] {
+	if (!raw) return [];
+	return raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
 }
 
 const WORKABLE_STATUSES = ["open", "in_progress"] as const;
@@ -655,6 +676,8 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				.filter((f) => f.length > 0)
 		: [];
 
+	const siblings = parseSiblings(opts.siblings);
+
 	// 1. Load config
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
@@ -955,6 +978,7 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 				trackerCli: trackerCliName(resolvedBackend),
 				trackerName: resolvedBackend,
 				instructionPath: runtime.instructionPath,
+				siblings,
 			};
 
 			await writeOverlay(worktreePath, overlayConfig, config.project.root, runtime.instructionPath);

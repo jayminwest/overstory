@@ -34,6 +34,38 @@ function getTemplatePath(): string {
 }
 
 /**
+ * Format the parallel-siblings section (overstory-f76a). Returns empty string
+ * when no siblings are configured. When set, renders a markdown section that
+ * names each sibling and instructs the agent to rebase onto `main` BEFORE
+ * sending `merge_ready`. Reason: parallel leads branch off pre-merge `main`;
+ * whichever merges second carries a stale base and risks reverting sibling
+ * work (mx-c0c122 stale-base-revert).
+ *
+ * Exported for unit-testing.
+ */
+export function formatSiblings(config: OverlayConfig): string {
+	const siblings = config.siblings;
+	if (!siblings || siblings.length === 0) return "";
+
+	const bullets = siblings.map((name) => `- ${name}`).join("\n");
+	return [
+		"## Parallel Siblings",
+		"",
+		"The coordinator has dispatched the following sibling agents in parallel that may share file scope with you:",
+		"",
+		bullets,
+		"",
+		"**CRITICAL**: rebase your branch onto the latest `main` BEFORE sending `merge_ready`, then re-run quality gates AFTER the rebase. Sibling work may have landed on `main` while you were working — sending `merge_ready` from a stale base risks reverting their changes (mx-c0c122 stale-base-revert).",
+		"",
+		"```bash",
+		"git fetch origin main:main",
+		"git rebase main",
+		"# re-run quality gates here, then signal merge_ready",
+		"```",
+	].join("\n");
+}
+
+/**
  * Format the file scope list as a markdown bullet list.
  * Returns a human-readable fallback if no files are scoped.
  */
@@ -361,6 +393,7 @@ export async function generateOverlay(config: OverlayConfig): Promise<string> {
 		"{{SPEC_INSTRUCTION}}": specInstruction,
 		"{{SKIP_SCOUT}}": config.skipScout ? SKIP_SCOUT_SECTION : "",
 		"{{DISPATCH_OVERRIDES}}": formatDispatchOverrides(config),
+		"{{SIBLINGS}}": formatSiblings(config),
 		"{{BASE_DEFINITION}}": config.baseDefinition,
 		"{{PROFILE_INSTRUCTIONS}}": formatProfile(config.profileContent),
 		"{{QUALITY_GATE_INLINE}}": formatQualityGatesInline(config.qualityGates),

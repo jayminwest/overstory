@@ -446,6 +446,13 @@ export interface OverlayConfig {
 	qualityGates?: QualityGate[];
 	/** Relative path to the instruction file within the worktree (runtime-specific). Defaults to .claude/CLAUDE.md. */
 	instructionPath?: string;
+	/**
+	 * Names of sibling agents dispatched in parallel that may share file scope
+	 * with this agent. When set, the overlay renders a "Parallel Siblings"
+	 * section with rebase-before-merge_ready guidance (overstory-f76a). Empty
+	 * or unset → no overlay section.
+	 */
+	siblings?: string[];
 }
 
 // === Merge Queue ===
