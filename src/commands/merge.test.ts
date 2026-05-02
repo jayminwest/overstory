@@ -708,6 +708,124 @@ merge:
 		});
 	});
 
+	describe("--dry-run conflict prediction", () => {
+		test("--dry-run --json includes prediction.wouldRequireAgent for contentful-canonical conflict", async () => {
+			await setupProject(repoDir, defaultBranch);
+
+			// Build a real contentful-canonical conflict on src/shared.ts.
+			await commitFile(repoDir, "src/shared.ts", "shared base\n");
+			const branchName = "overstory/builder/bead-predict-1";
+			await runGitInDir(repoDir, ["checkout", "-b", branchName]);
+			await commitFile(repoDir, "src/shared.ts", "feature side\n");
+			await runGitInDir(repoDir, ["checkout", defaultBranch]);
+			await commitFile(repoDir, "src/shared.ts", "main side\n");
+
+			let output = "";
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (chunk: unknown): boolean => {
+				output += String(chunk);
+				return true;
+			};
+
+			try {
+				await mergeCommand({ branch: branchName, dryRun: true, json: true });
+			} finally {
+				process.stdout.write = originalWrite;
+			}
+
+			const parsed = JSON.parse(output);
+			expect(parsed.prediction).toBeDefined();
+			expect(parsed.prediction.wouldRequireAgent).toBe(true);
+			expect(parsed.prediction.predictedTier).toBe("ai-resolve");
+			expect(parsed.prediction.conflictFiles).toContain("src/shared.ts");
+			expect(typeof parsed.prediction.reason).toBe("string");
+
+			// Existing dry-run fields must still be present.
+			expect(parsed.branchName).toBe(branchName);
+			expect(parsed.status).toBe("pending");
+		});
+
+		test("--dry-run --json reports clean-merge prediction for non-conflicting branch", async () => {
+			await setupProject(repoDir, defaultBranch);
+			const branchName = "overstory/builder/bead-predict-2";
+			await createCleanFeatureBranch(repoDir, branchName);
+
+			let output = "";
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (chunk: unknown): boolean => {
+				output += String(chunk);
+				return true;
+			};
+
+			try {
+				await mergeCommand({ branch: branchName, dryRun: true, json: true });
+			} finally {
+				process.stdout.write = originalWrite;
+			}
+
+			const parsed = JSON.parse(output);
+			expect(parsed.prediction.predictedTier).toBe("clean-merge");
+			expect(parsed.prediction.wouldRequireAgent).toBe(false);
+			expect(parsed.prediction.conflictFiles).toEqual([]);
+		});
+
+		test("--all --dry-run --json attaches prediction to each entry", async () => {
+			await setupProject(repoDir, defaultBranch);
+			const cleanBranch = "overstory/builder/bead-predict-all-clean";
+			await createCleanFeatureBranch(repoDir, cleanBranch);
+
+			// Add a contentful-canonical conflict branch.
+			await commitFile(repoDir, "src/shared.ts", "shared base\n");
+			const conflictBranch = "overstory/builder/bead-predict-all-conflict";
+			await runGitInDir(repoDir, ["checkout", "-b", conflictBranch]);
+			await commitFile(repoDir, "src/shared.ts", "feature side\n");
+			await runGitInDir(repoDir, ["checkout", defaultBranch]);
+			await commitFile(repoDir, "src/shared.ts", "main side\n");
+
+			const queuePath = join(repoDir, ".overstory", "merge-queue.db");
+			const queue = createMergeQueue(queuePath);
+			queue.enqueue({
+				branchName: cleanBranch,
+				taskId: "bead-predict-all-clean",
+				agentName: "builder",
+				filesModified: [`src/${cleanBranch}.ts`],
+			});
+			queue.enqueue({
+				branchName: conflictBranch,
+				taskId: "bead-predict-all-conflict",
+				agentName: "builder",
+				filesModified: ["src/shared.ts"],
+			});
+			queue.close();
+
+			let output = "";
+			const originalWrite = process.stdout.write.bind(process.stdout);
+			process.stdout.write = (chunk: unknown): boolean => {
+				output += String(chunk);
+				return true;
+			};
+
+			try {
+				await mergeCommand({ all: true, dryRun: true, json: true });
+			} finally {
+				process.stdout.write = originalWrite;
+			}
+
+			const parsed = JSON.parse(output);
+			expect(parsed.entries).toHaveLength(2);
+			const cleanEntry = parsed.entries.find(
+				(e: { branchName: string }) => e.branchName === cleanBranch,
+			);
+			const conflictEntry = parsed.entries.find(
+				(e: { branchName: string }) => e.branchName === conflictBranch,
+			);
+			expect(cleanEntry.prediction.predictedTier).toBe("clean-merge");
+			expect(cleanEntry.prediction.wouldRequireAgent).toBe(false);
+			expect(conflictEntry.prediction.predictedTier).toBe("ai-resolve");
+			expect(conflictEntry.prediction.wouldRequireAgent).toBe(true);
+		});
+	});
+
 	describe("conflict handling", () => {
 		test("content conflict auto-resolves: same file modified on both branches, verify incoming content wins", async () => {
 			await setupProject(repoDir, defaultBranch);

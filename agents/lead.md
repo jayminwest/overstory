@@ -327,6 +327,65 @@ Review is a quality investment. For complex, multi-file changes, spawn a reviewe
     {{TRACKER_CLI}} close <task-id> --reason "<summary of what was accomplished across all subtasks>"
     ```
 
+## merge-dispatch (predict before signaling merge_ready)
+
+Before signaling `merge_ready` for a builder branch that touched complex/multi-file logic, predict the conflict tier with a side-effect-free dry-run:
+
+```bash
+ov merge --dry-run --branch <builder-branch> --json
+```
+
+The JSON envelope now carries a `prediction` field:
+
+```jsonc
+{
+  "branchName": "...",
+  "status": "pending",
+  "prediction": {
+    "predictedTier": "clean-merge | auto-resolve | ai-resolve | reimagine",
+    "conflictFiles": [...],
+    "wouldRequireAgent": false | true,
+    "reason": "..."
+  }
+}
+```
+
+Use `prediction.wouldRequireAgent` as the dispatch gate:
+
+- **`wouldRequireAgent: false`** — keep the standard flow. Send `merge_ready` to the coordinator; the coordinator runs `ov merge` and the programmatic Tier 1/2 path handles it cheaply.
+- **`wouldRequireAgent: true`** — do **NOT** send `merge_ready`. The cheap `claude --print` Tier 3/4 fallback in `ov merge` is too constrained for non-trivial conflicts. Spawn a dedicated merger agent under your hierarchy and let it own the merge:
+    ```bash
+    {{TRACKER_CLI}} create --title="Merge: <builder-task-summary>" --type=task --priority=P1
+    ov sling <merge-bead-id> --capability merger --name merge-<builder-name> \
+      --parent $OVERSTORY_AGENT_NAME --depth <current+1>
+    ov spec write <merge-bead-id> --agent $OVERSTORY_AGENT_NAME --body "$(cat <<'EOF'
+    ## Merge target
+    <canonical-branch>
+
+    ## Branches to merge (in dependency order)
+    - <builder-branch-1>
+    - <builder-branch-2>
+
+    ## Predicted conflict tier
+    <ai-resolve | reimagine>
+
+    ## Predicted conflict files
+    - <file1>
+    - <file2>
+
+    ## Reason from predictor
+    <prediction.reason verbatim>
+    EOF
+    )"
+    ov mail send --to merge-<builder-name> --subject "Merge: <builder-task>" \
+      --body "Spec: \$OVERSTORY_PROJECT_ROOT/.overstory/specs/<merge-bead-id>.md. Begin immediately." --type dispatch
+    ```
+    The merger agent (see `agents/merger.md`) handles the merge end-to-end and sends terminal `merged` / `merge_failed` mail back to you. After `merged`, your usual close + terminal `worker_done` flow applies — no `merge_ready` for that branch.
+
+**Multiple sibling branches predicted to require an agent:** prefer **one merger** that processes the branches in dependency order (per the merge-order section in `agents/merger.md`) over spawning N parallel mergers. Pass the ordered branch list in the spec body.
+
+**Edge case: prediction failure.** If the predictor errors out (e.g., the branch was force-pushed mid-flight), the JSON envelope still returns a `prediction` field with `predictedTier: "ai-resolve"` and `reason: "prediction-failed: ..."`. Treat that as `wouldRequireAgent: true` (the predictor is being conservative on purpose) and spawn a merger.
+
 ## decomposition-guidelines
 
 Good decomposition follows these principles:

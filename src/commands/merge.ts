@@ -17,10 +17,11 @@ import { MergeError, ValidationError } from "../errors.ts";
 import { jsonOutput } from "../json.ts";
 import { accent, printHint } from "../logging/color.ts";
 import { acquireMergeLock } from "../merge/lock.ts";
+import { predictConflicts } from "../merge/predict.ts";
 import { createMergeQueue } from "../merge/queue.ts";
 import { createMergeResolver } from "../merge/resolver.ts";
 import { createMulchClient } from "../mulch/client.ts";
-import type { MergeEntry, MergeResult } from "../types.ts";
+import type { ConflictPrediction, MergeEntry, MergeResult } from "../types.ts";
 
 export interface MergeOptions {
 	branch?: string;
@@ -109,7 +110,7 @@ function formatResult(result: MergeResult): string {
 }
 
 /** Format a dry-run report for a merge entry. */
-function formatDryRun(entry: MergeEntry): string {
+function formatDryRun(entry: MergeEntry, prediction?: ConflictPrediction): string {
 	const lines: string[] = [
 		`[dry-run] Branch: ${accent(entry.branchName)}`,
 		`   Agent: ${accent(entry.agentName)} | Task: ${accent(entry.taskId)}`,
@@ -123,7 +124,39 @@ function formatDryRun(entry: MergeEntry): string {
 		}
 	}
 
+	if (prediction) {
+		const agentSuffix = prediction.wouldRequireAgent ? " (would require merger agent)" : "";
+		lines.push(`   Prediction: ${prediction.predictedTier}${agentSuffix} — ${prediction.reason}`);
+		if (prediction.conflictFiles.length > 0) {
+			lines.push(`   Conflict files: ${prediction.conflictFiles.join(", ")}`);
+		}
+	}
+
 	return lines.join("\n");
+}
+
+/**
+ * Predict the merge tier for a single entry, swallowing errors into a
+ * deterministic `ai-resolve` envelope so that `--all --dry-run` can keep
+ * going if one branch's prediction blows up.
+ */
+async function safePredictForEntry(
+	entry: MergeEntry,
+	canonicalBranch: string,
+	repoRoot: string,
+	mulchClient: ReturnType<typeof createMulchClient>,
+): Promise<ConflictPrediction> {
+	try {
+		return await predictConflicts(entry, canonicalBranch, repoRoot, mulchClient);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return {
+			predictedTier: "ai-resolve",
+			conflictFiles: [],
+			wouldRequireAgent: true,
+			reason: `prediction-failed: ${msg}`,
+		};
+	}
 }
 
 /**
@@ -238,10 +271,13 @@ async function handleBranch(
 	}
 
 	if (dryRun) {
+		const mulchClient = createMulchClient(config.project.root);
+		const prediction = await safePredictForEntry(entry, canonicalBranch, repoRoot, mulchClient);
+
 		if (json) {
-			jsonOutput("merge", { ...entry });
+			jsonOutput("merge", { ...entry, prediction });
 		} else {
-			process.stdout.write(`${formatDryRun(entry)}\n`);
+			process.stdout.write(`${formatDryRun(entry, prediction)}\n`);
 		}
 		return;
 	}
@@ -293,14 +329,21 @@ async function handleAll(
 	}
 
 	if (dryRun) {
+		const mulchClient = createMulchClient(config.project.root);
+		const enrichedEntries: Array<MergeEntry & { prediction: ConflictPrediction }> = [];
+		for (const entry of pendingEntries) {
+			const prediction = await safePredictForEntry(entry, canonicalBranch, repoRoot, mulchClient);
+			enrichedEntries.push({ ...entry, prediction });
+		}
+
 		if (json) {
-			jsonOutput("merge", { entries: pendingEntries });
+			jsonOutput("merge", { entries: enrichedEntries });
 		} else {
 			process.stdout.write(
-				`${pendingEntries.length} pending branch${pendingEntries.length === 1 ? "" : "es"}:\n\n`,
+				`${enrichedEntries.length} pending branch${enrichedEntries.length === 1 ? "" : "es"}:\n\n`,
 			);
-			for (const entry of pendingEntries) {
-				process.stdout.write(`${formatDryRun(entry)}\n\n`);
+			for (const entry of enrichedEntries) {
+				process.stdout.write(`${formatDryRun(entry, entry.prediction)}\n\n`);
 			}
 		}
 		return;
