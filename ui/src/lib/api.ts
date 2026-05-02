@@ -2,7 +2,7 @@ const API_BASE = "/api";
 
 interface ApiEnvelope<T> {
 	success: boolean;
-	command: string;
+	command?: string;
 	data?: T;
 	error?: string;
 	nextCursor?: string | null;
@@ -51,17 +51,33 @@ export interface TimelineEvent {
 	payload: unknown;
 }
 
+export type MailSemanticType = "status" | "question" | "result" | "error";
+
+export type MailProtocolType =
+	| "worker_done"
+	| "merge_ready"
+	| "merged"
+	| "merge_failed"
+	| "escalation"
+	| "health_check"
+	| "dispatch"
+	| "assign"
+	| "decision_gate";
+
+export type MailMessageType = MailSemanticType | MailProtocolType;
+
 export interface MailMessage {
 	id: string;
 	from: string;
 	to: string;
 	subject: string;
 	body: string;
-	type: string;
-	priority: string;
-	createdAt: string;
-	readAt: string | null;
+	priority: "low" | "normal" | "high" | "urgent";
+	type: MailMessageType;
 	threadId: string | null;
+	payload: string | null;
+	read: boolean;
+	createdAt: string;
 }
 
 export async function fetchRuns(limit = 50): Promise<Run[]> {
@@ -105,17 +121,92 @@ export async function fetchEvents(opts?: {
 	return fetchJson<TimelineEvent[]>(`${API_BASE}/events${query}`);
 }
 
-export async function fetchMail(opts?: {
-	to?: string;
-	from?: string;
+export async function fetchMail(filters?: {
 	unread?: boolean;
-	limit?: number;
-}): Promise<{ data: MailMessage[]; nextCursor: string | null }> {
+	from?: string;
+	to?: string;
+}): Promise<MailMessage[]> {
 	const params = new URLSearchParams();
-	if (opts?.to) params.set("to", opts.to);
-	if (opts?.from) params.set("from", opts.from);
-	if (opts?.unread) params.set("unread", "true");
-	if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
-	const query = params.size > 0 ? `?${params.toString()}` : "";
-	return fetchJson<MailMessage[]>(`${API_BASE}/mail${query}`);
+	if (filters?.unread) params.set("unread", "true");
+	if (filters?.from) params.set("from", filters.from);
+	if (filters?.to) params.set("to", filters.to);
+	const qs = params.toString();
+	const { data } = await fetchJson<MailMessage[]>(`${API_BASE}/mail${qs ? `?${qs}` : ""}`);
+	return data;
+}
+
+export async function fetchMessage(
+	id: string,
+): Promise<{ message: MailMessage; thread: MailMessage[] }> {
+	const { data } = await fetchJson<{ message: MailMessage; thread: MailMessage[] }>(
+		`${API_BASE}/mail/${encodeURIComponent(id)}`,
+	);
+	return data;
+}
+
+export async function markRead(id: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/mail/${encodeURIComponent(id)}/read`, { method: "POST" });
+	const json = (await res.json()) as ApiEnvelope<unknown>;
+	if (!res.ok || json.success !== true) {
+		throw new Error(json.error ?? "mark read failed");
+	}
+}
+
+export async function fetchMailAgents(): Promise<string[]> {
+	const { data } = await fetchJson<Array<{ agentName: string }>>(`${API_BASE}/agents`);
+	const names = data.map((a) => a.agentName);
+	return [...new Set(names)].sort();
+}
+
+export interface SendMailInput {
+	to: string;
+	from?: string;
+	subject: string;
+	body: string;
+	type?: string;
+	priority?: string;
+	payload?: string;
+}
+
+export async function sendMail(
+	input: SendMailInput,
+): Promise<{ messageId?: string; messageIds?: string[] }> {
+	const res = await fetch(`${API_BASE}/mail`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(input),
+	});
+	const json = (await res.json()) as ApiEnvelope<{ messageId?: string; messageIds?: string[] }>;
+	if (!res.ok || json.success !== true || json.data === undefined) {
+		throw new Error(json.error ?? "send mail failed");
+	}
+	return json.data;
+}
+
+export interface ReplyMailInput {
+	from?: string;
+	body: string;
+	type?: string;
+	priority?: string;
+}
+
+export async function replyMail(id: string, input: ReplyMailInput): Promise<{ messageId: string }> {
+	const res = await fetch(`${API_BASE}/mail/${encodeURIComponent(id)}/reply`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(input),
+	});
+	const json = (await res.json()) as ApiEnvelope<{ messageId: string }>;
+	if (!res.ok || json.success !== true || json.data === undefined) {
+		throw new Error(json.error ?? "reply mail failed");
+	}
+	return json.data;
+}
+
+export async function deleteMail(id: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/mail/${encodeURIComponent(id)}`, { method: "DELETE" });
+	const json = (await res.json()) as ApiEnvelope<unknown>;
+	if (!res.ok || json.success !== true) {
+		throw new Error(json.error ?? "delete mail failed");
+	}
 }
