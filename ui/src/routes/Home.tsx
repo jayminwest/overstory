@@ -1,6 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import { Sprout } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
+import { EmptyState } from "@/components/ui/empty-state";
+import { LoadingCard } from "@/components/ui/loading-card";
 import { fetchAgents, fetchRuns } from "@/lib/api";
 
 import { AgentTable } from "./fleet/AgentTable";
@@ -54,16 +57,22 @@ export function Home() {
 				</div>
 			)}
 
-			{isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+			{isLoading && <LoadingCard label="Loading runs" />}
 
 			{!isLoading && runs.length === 0 && (
-				<p className="text-sm text-muted-foreground leading-relaxed">
-					No runs yet — start a coordinator with{" "}
-					<code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
-						ov coordinator start
-					</code>
-					.
-				</p>
+				<EmptyState
+					icon={Sprout}
+					title="No runs yet"
+					description={
+						<>
+							Start a coordinator with{" "}
+							<code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+								ov coordinator start
+							</code>
+							.
+						</>
+					}
+				/>
 			)}
 
 			{!isLoading && runs.length > 0 && (

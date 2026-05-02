@@ -1,7 +1,8 @@
-import { Trash2 } from "lucide-react";
+import { Mail, Trash2 } from "lucide-react";
 import { useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { CodeBlock } from "@/components/ui/code-block";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useScrollFade } from "@/lib/use-scroll-fade";
 import type { MailMessage, MailMessageType } from "./types.ts";
 
@@ -34,15 +35,20 @@ export function ThreadList({ items, selectedId, onSelect, onDelete }: ThreadList
 
 	if (items.length === 0) {
 		return (
-			<div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-sm text-muted-foreground text-center">
-				<p>No messages.</p>
-				<p className="leading-relaxed max-w-md">
-					Send one with{" "}
-					<CodeBlock>
-						{`ov mail send --to coordinator --subject "..." --body "..." --type status`}
-					</CodeBlock>
-					.
-				</p>
+			<div className="flex-1 flex items-center justify-center p-8">
+				<EmptyState
+					icon={Mail}
+					title="No messages"
+					description={
+						<>
+							Send one with{" "}
+							<CodeBlock>
+								{`ov mail send --to coordinator --subject "..." --body "..." --type status`}
+							</CodeBlock>
+							.
+						</>
+					}
+				/>
 			</div>
 		);
 	}

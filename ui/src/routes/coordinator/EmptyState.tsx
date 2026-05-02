@@ -1,5 +1,8 @@
+import { MessageSquareText } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState as EmptyStatePrimitive } from "@/components/ui/empty-state";
 
 const STARTER_PROMPTS = [
 	{ icon: "📋", text: "What's currently in flight? Give me a one-screen summary." },
@@ -18,20 +21,19 @@ export function EmptyState({ onSelect, onStartNewRun, isStopped }: EmptyStatePro
 
 	return (
 		<div className="flex flex-col items-center justify-center h-full gap-8 p-8">
-			<div className="text-center max-w-md">
-				<h2 className="text-2xl font-semibold tracking-tight">Coordinator console</h2>
-				<p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-					Send a message to start. Replies arrive inline.
-				</p>
-			</div>
-			{showStartCta && (
-				<div className="flex flex-col items-center gap-3">
-					<p className="text-sm text-muted-foreground">Coordinator is stopped.</p>
-					<Button type="button" size="lg" onClick={onStartNewRun}>
-						Start new run
-					</Button>
-				</div>
-			)}
+			<EmptyStatePrimitive
+				className="max-w-md border-0 ring-0 bg-transparent"
+				icon={MessageSquareText}
+				title="Coordinator console"
+				description="Send a message to start. Replies arrive inline."
+				action={
+					showStartCta ? (
+						<Button type="button" size="lg" onClick={onStartNewRun}>
+							Start new run
+						</Button>
+					) : undefined
+				}
+			/>
 			<div className="grid gap-3 w-full max-w-3xl sm:grid-cols-3">
 				{STARTER_PROMPTS.map((p) => (
 					<button key={p.text} type="button" onClick={() => onSelect(p.text)} className="text-left">

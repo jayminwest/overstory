@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
+import { Activity } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CodeBlock } from "@/components/ui/code-block";
+import { EmptyState } from "@/components/ui/empty-state";
+import { LoadingCard } from "@/components/ui/loading-card";
 import { useAutoScroll } from "@/lib/use-auto-scroll";
 import { useScrollFade } from "@/lib/use-scroll-fade";
 import { type Frame, type StoredEvent, useWebSocket, type WsStatus } from "@/lib/ws";
@@ -156,21 +158,18 @@ export function AgentDetail() {
 			{/* Timeline */}
 			<div ref={viewportRef} className="flex-1 min-h-0 overflow-auto">
 				<div className="px-6 py-5 flex flex-col gap-2.5 max-w-5xl mx-auto">
-					{query.isLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
+					{query.isLoading && <LoadingCard label="Loading events" />}
 					{!query.isLoading && allEvents.length === 0 && (
-						<Card>
-							<CardHeader>
-								<CardTitle className="text-sm font-normal text-muted-foreground">
-									No events for {agentLabel}
-								</CardTitle>
-							</CardHeader>
-							<CardContent>
-								<p className="text-sm text-muted-foreground leading-relaxed">
+						<EmptyState
+							icon={Activity}
+							title={`No events for ${agentLabel}`}
+							description={
+								<>
 									Nudge the agent to wake it up:{" "}
 									<CodeBlock>{`ov nudge ${agentLabel} "Status check"`}</CodeBlock>
-								</p>
-							</CardContent>
-						</Card>
+								</>
+							}
+						/>
 					)}
 					{allEvents.map((event) => (
 						<EventRow key={event.id} event={event} />

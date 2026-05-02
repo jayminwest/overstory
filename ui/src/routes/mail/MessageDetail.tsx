@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
+import { Inbox } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { EmptyState } from "@/components/ui/empty-state";
+import { LoadingCard } from "@/components/ui/loading-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { fetchMessage } from "@/lib/api";
 import type { MailMessage, MailMessageType } from "./types.ts";
@@ -56,19 +58,19 @@ export function MessageDetail({ messageId, onReply }: MessageDetailProps) {
 	if (messageId === null) {
 		return (
 			<div className="h-full flex items-center justify-center p-8">
-				<Card className="max-w-xs w-full">
-					<CardContent className="pt-6 text-sm text-muted-foreground text-center">
-						Select a message
-					</CardContent>
-				</Card>
+				<EmptyState
+					icon={Inbox}
+					title="Select a message"
+					description="Choose a thread on the left to read it."
+				/>
 			</div>
 		);
 	}
 
 	if (isLoading || data === undefined) {
 		return (
-			<div className="h-full flex items-center justify-center p-8 text-sm text-muted-foreground">
-				Loading…
+			<div className="h-full flex items-center justify-center p-8">
+				<LoadingCard label="Loading message" />
 			</div>
 		);
 	}
