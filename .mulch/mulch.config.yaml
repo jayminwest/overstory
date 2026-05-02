@@ -19,6 +19,7 @@ domains:
   - mail
   - observability
   - orchestration
+  - testing
 governance:
   max_entries: 100
   warn_entries: 150
