@@ -29,15 +29,24 @@ import type {
  *     wrote zombie is rejected — last writer no longer wins.
  *   - Idempotent self-transitions (e.g. `working → working`) are allowed.
  *   - `booting` is set only by the initial `upsert` and never re-entered.
+ *   - `in_turn` and `between_turns` cycle while a spawn-per-turn worker is
+ *     alive (overstory-3087): turn-runner advances `between_turns → in_turn`
+ *     when the next batch produces its first parser event and settles back
+ *     `in_turn → between_turns` when the turn ends without a terminal mail.
+ *     Both can advance forward to `stalled`/`zombie`/`completed` like
+ *     `working` does, and either can come from a legacy `working` state so
+ *     existing rows survive the schema bump.
  *
  * See overstory-a993 for the race symptoms this guard prevents.
  */
 const TRANSITION_ALLOWED_FROM: Record<AgentState, readonly AgentState[]> = {
 	booting: [],
 	working: ["booting", "working", "stalled"],
-	stalled: ["booting", "working", "stalled"],
-	completed: ["booting", "working", "stalled", "zombie", "completed"],
-	zombie: ["booting", "working", "stalled", "zombie"],
+	in_turn: ["booting", "working", "in_turn", "between_turns", "stalled"],
+	between_turns: ["booting", "working", "in_turn", "between_turns", "stalled"],
+	stalled: ["booting", "working", "in_turn", "between_turns", "stalled"],
+	completed: ["booting", "working", "in_turn", "between_turns", "stalled", "zombie", "completed"],
+	zombie: ["booting", "working", "in_turn", "between_turns", "stalled", "zombie"],
 };
 
 /**
@@ -57,7 +66,14 @@ export interface SessionStore {
 	upsert(session: AgentSession): void;
 	/** Get a session by agent name, or null if not found. */
 	getByName(agentName: string): AgentSession | null;
-	/** Get all active sessions (state IN ('booting', 'working', 'stalled')). */
+	/**
+	 * Get all active sessions (state IN ('booting', 'working', 'in_turn',
+	 * 'between_turns', 'stalled')).
+	 *
+	 * `in_turn` and `between_turns` are spawn-per-turn equivalents of `working`
+	 * and must be returned by `getActive` so the watchdog and dashboards see
+	 * spawn-per-turn workers as alive (overstory-3087).
+	 */
 	getActive(): AgentSession[];
 	/** Get all sessions regardless of state. */
 	getAll(): AgentSession[];
@@ -143,7 +159,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   task_id TEXT NOT NULL,
   tmux_session TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'booting'
-    CHECK(state IN ('booting','working','completed','stalled','zombie')),
+    CHECK(state IN ('booting','working','in_turn','between_turns','completed','stalled','zombie')),
   pid INTEGER,
   parent_agent TEXT,
   depth INTEGER NOT NULL DEFAULT 0,
@@ -252,6 +268,81 @@ function migrateAddClaudeSessionId(db: Database): void {
 }
 
 /**
+ * Migrate an existing sessions table whose CHECK(state IN (...)) constraint
+ * predates the in_turn / between_turns split (overstory-3087).
+ *
+ * SQLite cannot alter a CHECK constraint in place — the column definition is
+ * baked into the original CREATE TABLE SQL stored in sqlite_master. We detect
+ * the old constraint by looking for the absence of `in_turn` in the recorded
+ * DDL, then rebuild the table by copying rows into a new schema and renaming.
+ *
+ * The copy preserves every column verbatim (no in-flight state remap is
+ * needed: existing `working` rows remain `working` and continue to satisfy
+ * the new CHECK). Indexes are dropped by the table swap and re-created by
+ * the caller via CREATE_INDEXES, which is idempotent.
+ *
+ * Safe to call multiple times — short-circuits when the recorded DDL already
+ * mentions `in_turn`. Wrapped in a single transaction so a failure mid-copy
+ * leaves the original table intact.
+ */
+function migrateExpandStateCheck(db: Database): void {
+	const row = db
+		.prepare<{ sql: string | null }, []>(
+			"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
+		)
+		.get();
+	if (!row || row.sql === null) return;
+	if (row.sql.includes("'in_turn'")) return;
+
+	db.exec("BEGIN");
+	try {
+		db.exec(`
+			CREATE TABLE sessions__new_3087 (
+				id TEXT PRIMARY KEY,
+				agent_name TEXT NOT NULL UNIQUE,
+				capability TEXT NOT NULL,
+				worktree_path TEXT NOT NULL,
+				branch_name TEXT NOT NULL,
+				task_id TEXT NOT NULL,
+				tmux_session TEXT NOT NULL,
+				state TEXT NOT NULL DEFAULT 'booting'
+					CHECK(state IN ('booting','working','in_turn','between_turns','completed','stalled','zombie')),
+				pid INTEGER,
+				parent_agent TEXT,
+				depth INTEGER NOT NULL DEFAULT 0,
+				run_id TEXT,
+				started_at TEXT NOT NULL,
+				last_activity TEXT NOT NULL,
+				escalation_level INTEGER NOT NULL DEFAULT 0,
+				stalled_since TEXT,
+				transcript_path TEXT,
+				prompt_version TEXT,
+				claude_session_id TEXT
+			)
+		`);
+		db.exec(`
+			INSERT INTO sessions__new_3087
+				(id, agent_name, capability, worktree_path, branch_name, task_id,
+				 tmux_session, state, pid, parent_agent, depth, run_id,
+				 started_at, last_activity, escalation_level, stalled_since,
+				 transcript_path, prompt_version, claude_session_id)
+			SELECT
+				id, agent_name, capability, worktree_path, branch_name, task_id,
+				tmux_session, state, pid, parent_agent, depth, run_id,
+				started_at, last_activity, escalation_level, stalled_since,
+				transcript_path, prompt_version, claude_session_id
+			FROM sessions
+		`);
+		db.exec("DROP TABLE sessions");
+		db.exec("ALTER TABLE sessions__new_3087 RENAME TO sessions");
+		db.exec("COMMIT");
+	} catch (err) {
+		db.exec("ROLLBACK");
+		throw err;
+	}
+}
+
+/**
  * Migrate an existing sessions table from bead_id to task_id column.
  * Safe to call multiple times — only renames if bead_id exists and task_id does not.
  */
@@ -286,6 +377,7 @@ export function createSessionStore(dbPath: string): SessionStore {
 	migrateAddTranscriptPath(db);
 	migrateAddPromptVersion(db);
 	migrateAddClaudeSessionId(db);
+	migrateExpandStateCheck(db);
 	migrateAddCoordinatorName(db);
 
 	// Now safe to create indexes (all columns exist).
@@ -353,7 +445,8 @@ export function createSessionStore(dbPath: string): SessionStore {
 	`);
 
 	const getActiveStmt = db.prepare<SessionRow, Record<string, never>>(`
-		SELECT * FROM sessions WHERE state IN ('booting', 'working', 'stalled')
+		SELECT * FROM sessions
+		WHERE state IN ('booting', 'working', 'in_turn', 'between_turns', 'stalled')
 		ORDER BY started_at ASC
 	`);
 

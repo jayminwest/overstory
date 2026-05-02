@@ -187,7 +187,33 @@ export type Capability = (typeof SUPPORTED_CAPABILITIES)[number];
 
 // === Agent Session ===
 
-export type AgentState = "booting" | "working" | "completed" | "stalled" | "zombie";
+/**
+ * Agent lifecycle states.
+ *
+ * `in_turn` and `between_turns` are spawn-per-turn-specific substates that
+ * split the legacy `working` state so the UI can distinguish a worker actively
+ * executing a turn from one idling between mail batches (overstory-3087):
+ *
+ *   - `in_turn`: the turn-runner has observed at least one parser event from
+ *     a live claude subprocess. The agent is mid-execution.
+ *   - `between_turns`: the turn-runner finished a turn without a terminal
+ *     mail; the agent is alive (process gone, session pinned) and waiting
+ *     for the next mail batch to spawn a fresh turn.
+ *
+ * `working` remains the active state for tmux/long-lived headless agents
+ * (coordinator, orchestrator, monitor, sapling) which have no per-turn
+ * boundary. Spawn-per-turn workers (builder/scout/reviewer/lead/merger
+ * under the headless default) transition through in_turn ↔ between_turns
+ * instead.
+ */
+export type AgentState =
+	| "booting"
+	| "working"
+	| "in_turn"
+	| "between_turns"
+	| "completed"
+	| "stalled"
+	| "zombie";
 
 /**
  * Result of a guarded state transition attempt (`SessionStore.tryTransitionState`).

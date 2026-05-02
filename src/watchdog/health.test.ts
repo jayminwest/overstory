@@ -587,6 +587,53 @@ describe("spawn-per-turn workers (overstory-7a34)", () => {
 		expect(check.state).toBe("completed");
 		expect(check.action).toBe("none");
 	});
+
+	test("preserves in_turn for healthy spawn-per-turn worker (overstory-3087)", () => {
+		// A spawn-per-turn worker the turn-runner has marked in_turn must
+		// have its state preserved by the health evaluation when activity is
+		// recent — otherwise the watchdog would stomp the substate back to
+		// `working` and the UI would lose the distinction between mid-turn
+		// and idling.
+		const session = makeSession({
+			tmuxSession: "",
+			pid: null,
+			capability: "builder",
+			state: "in_turn",
+			lastActivity: new Date().toISOString(),
+		});
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("in_turn");
+		expect(check.action).toBe("none");
+	});
+
+	test("preserves between_turns for healthy spawn-per-turn worker (overstory-3087)", () => {
+		const session = makeSession({
+			tmuxSession: "",
+			pid: null,
+			capability: "builder",
+			state: "between_turns",
+			lastActivity: new Date().toISOString(),
+		});
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("between_turns");
+		expect(check.action).toBe("none");
+	});
+
+	test("escalates an in_turn worker with stale activity to stalled (overstory-3087)", () => {
+		const session = makeSession({
+			tmuxSession: "",
+			pid: null,
+			capability: "builder",
+			state: "in_turn",
+			lastActivity: new Date(Date.now() - 60_000).toISOString(),
+		});
+		const check = evaluateHealth(session, false, THRESHOLDS);
+
+		expect(check.state).toBe("stalled");
+		expect(check.action).toBe("escalate");
+	});
 });
 
 // === transitionState ===
@@ -701,5 +748,70 @@ describe("transitionState", () => {
 		// If something were at "working" and check says zombie with investigate,
 		// the state should NOT advance
 		expect(transitionState("working", check)).toBe("working");
+	});
+
+	// --- in_turn / between_turns coexist with working at the active rank (overstory-3087) ---
+
+	test("preserves in_turn when watchdog reports a healthy 'working' check", () => {
+		// The watchdog's healthy-classification check returns state=working;
+		// since in_turn shares rank 1 with working, transitionState must not
+		// advance and the spawn-per-turn substate the turn-runner wrote stays.
+		const check = {
+			state: "working" as const,
+			agentName: "a",
+			timestamp: "",
+			tmuxAlive: true,
+			pidAlive: true as boolean | null,
+			lastActivity: "",
+			processAlive: true,
+			action: "none" as const,
+			reconciliationNote: null,
+		};
+		expect(transitionState("in_turn", check)).toBe("in_turn");
+	});
+
+	test("preserves between_turns when watchdog reports a healthy 'working' check", () => {
+		const check = {
+			state: "working" as const,
+			agentName: "a",
+			timestamp: "",
+			tmuxAlive: true,
+			pidAlive: true as boolean | null,
+			lastActivity: "",
+			processAlive: true,
+			action: "none" as const,
+			reconciliationNote: null,
+		};
+		expect(transitionState("between_turns", check)).toBe("between_turns");
+	});
+
+	test("advances in_turn → stalled when the watchdog escalates", () => {
+		const check = {
+			state: "stalled" as const,
+			agentName: "a",
+			timestamp: "",
+			tmuxAlive: true,
+			pidAlive: true as boolean | null,
+			lastActivity: "",
+			processAlive: true,
+			action: "escalate" as const,
+			reconciliationNote: null,
+		};
+		expect(transitionState("in_turn", check)).toBe("stalled");
+	});
+
+	test("advances between_turns → zombie when the watchdog terminates", () => {
+		const check = {
+			state: "zombie" as const,
+			agentName: "a",
+			timestamp: "",
+			tmuxAlive: false,
+			pidAlive: false as boolean | null,
+			lastActivity: "",
+			processAlive: false,
+			action: "terminate" as const,
+			reconciliationNote: null,
+		};
+		expect(transitionState("between_turns", check)).toBe("zombie");
 	});
 });

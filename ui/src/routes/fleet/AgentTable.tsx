@@ -15,10 +15,23 @@ import { formatRelativeTime } from "./format";
 
 const STATE_VARIANT: Record<AgentState, "default" | "secondary" | "outline" | "destructive"> = {
 	working: "default",
+	in_turn: "default",
+	between_turns: "secondary",
 	booting: "secondary",
 	completed: "outline",
 	stalled: "destructive",
 	zombie: "destructive",
+};
+
+/**
+ * Human-readable labels for the badge so the spawn-per-turn substates render
+ * as "in turn" / "between turns" instead of the raw snake_case string
+ * (overstory-3087). Falls back to the raw state for any value we don't have
+ * an override for, so future additions show up without a UI change.
+ */
+const STATE_LABEL: Partial<Record<AgentState, string>> = {
+	in_turn: "in turn",
+	between_turns: "between turns",
 };
 
 interface AgentTableProps {
@@ -63,7 +76,9 @@ export function AgentTable({ agents }: AgentTableProps) {
 							<TableCell className="font-mono text-xs px-4 py-3">{agent.agentName}</TableCell>
 							<TableCell className="px-4 py-3 text-sm">{agent.capability}</TableCell>
 							<TableCell className="px-4 py-3">
-								<Badge variant={STATE_VARIANT[agent.state]}>{agent.state}</Badge>
+								<Badge variant={STATE_VARIANT[agent.state]}>
+									{STATE_LABEL[agent.state] ?? agent.state}
+								</Badge>
 							</TableCell>
 							<TableCell className="text-muted-foreground text-xs px-4 py-3">
 								{agent.parentAgent ?? "—"}

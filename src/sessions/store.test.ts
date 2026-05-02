@@ -572,6 +572,228 @@ describe("tryTransitionState", () => {
 	});
 });
 
+// === in_turn / between_turns spawn-per-turn substates (overstory-3087) ===
+//
+// The spawn-per-turn engine splits the legacy `working` state into two:
+// `in_turn` (claude is mid-execution, parser events streaming) and
+// `between_turns` (claude exited cleanly, agent waiting for the next mail
+// batch). The matrix must allow the cycle in both directions and forward
+// progression to terminal/error states from either substate. The CHECK
+// constraint and `getActive` query must accept the new values so the
+// watchdog and dashboards see these workers as alive.
+
+describe("in_turn / between_turns substates", () => {
+	test("upsert accepts in_turn via CHECK constraint", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		expect(store.getByName("test-agent")?.state).toBe("in_turn");
+	});
+
+	test("upsert accepts between_turns via CHECK constraint", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		expect(store.getByName("test-agent")?.state).toBe("between_turns");
+	});
+
+	test("getActive includes in_turn and between_turns alongside working/booting/stalled", () => {
+		store.upsert(makeSession({ agentName: "a-it", id: "s-it", state: "in_turn" }));
+		store.upsert(makeSession({ agentName: "a-bt", id: "s-bt", state: "between_turns" }));
+		store.upsert(makeSession({ agentName: "a-w", id: "s-w", state: "working" }));
+		store.upsert(makeSession({ agentName: "a-c", id: "s-c", state: "completed" }));
+		store.upsert(makeSession({ agentName: "a-z", id: "s-z", state: "zombie" }));
+
+		const activeNames = store
+			.getActive()
+			.map((s) => s.agentName)
+			.sort();
+		expect(activeNames).toEqual(["a-bt", "a-it", "a-w"]);
+	});
+
+	test("booting → in_turn lands (turn-runner first-event transition)", () => {
+		store.upsert(makeSession({ state: "booting" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("in_turn");
+	});
+
+	test("in_turn → between_turns lands (turn-runner end-of-turn settle)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "between_turns");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("between_turns");
+	});
+
+	test("between_turns → in_turn lands (next mail batch starts a turn)", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("in_turn");
+	});
+
+	test("legacy working → in_turn lands (existing rows survive the schema bump)", () => {
+		store.upsert(makeSession({ state: "working" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("in_turn");
+	});
+
+	test("in_turn → completed lands (clean exit + terminal mail)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "completed");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("between_turns → completed lands (operator stops an idle worker)", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		const outcome = store.tryTransitionState("test-agent", "completed");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("in_turn → zombie lands (parser stall / abort)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "zombie");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("between_turns → zombie lands (watchdog terminate after long idle)", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		const outcome = store.tryTransitionState("test-agent", "zombie");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("in_turn → stalled lands (watchdog escalate)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "stalled");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("stalled");
+	});
+
+	test("idempotent in_turn → in_turn is allowed (re-entering on same batch)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(true);
+	});
+
+	test("idempotent between_turns → between_turns is allowed", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		const outcome = store.tryTransitionState("test-agent", "between_turns");
+		expect(outcome.ok).toBe(true);
+	});
+
+	test("completed → in_turn is rejected (sticky completed)", () => {
+		store.upsert(makeSession({ state: "completed" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(false);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("zombie → in_turn is rejected (turn-runner cannot revive zombie)", () => {
+		store.upsert(makeSession({ state: "zombie" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(false);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("zombie → between_turns is rejected", () => {
+		store.upsert(makeSession({ state: "zombie" }));
+		const outcome = store.tryTransitionState("test-agent", "between_turns");
+		expect(outcome.ok).toBe(false);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("nothing transitions into booting from in_turn or between_turns", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "booting");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("in_turn");
+		}
+	});
+});
+
+// === migration: pre-3087 CHECK constraint expansion ===
+//
+// SQLite cannot ALTER an inline CHECK constraint, so the old constraint
+// (booting/working/completed/stalled/zombie) must be replaced by rebuilding
+// the table when in_turn/between_turns appear in the union. The migration
+// must preserve every existing row verbatim and let inserts of the new
+// values land afterward.
+
+describe("migration: expand state CHECK to include in_turn/between_turns", () => {
+	test("rebuilds the table when the recorded CHECK predates 3087", async () => {
+		store.close();
+
+		const { Database: Db } = await import("bun:sqlite");
+		const legacyDb = new Db(dbPath);
+		legacyDb.exec("DROP TABLE IF EXISTS sessions");
+		// Recreate using the pre-3087 CHECK so the migration has something
+		// to detect and rebuild.
+		legacyDb.exec(`
+			CREATE TABLE sessions (
+				id TEXT PRIMARY KEY,
+				agent_name TEXT NOT NULL UNIQUE,
+				capability TEXT NOT NULL,
+				worktree_path TEXT NOT NULL,
+				branch_name TEXT NOT NULL,
+				task_id TEXT NOT NULL,
+				tmux_session TEXT NOT NULL,
+				state TEXT NOT NULL DEFAULT 'booting'
+					CHECK(state IN ('booting','working','completed','stalled','zombie')),
+				pid INTEGER,
+				parent_agent TEXT,
+				depth INTEGER NOT NULL DEFAULT 0,
+				run_id TEXT,
+				started_at TEXT NOT NULL,
+				last_activity TEXT NOT NULL,
+				escalation_level INTEGER NOT NULL DEFAULT 0,
+				stalled_since TEXT,
+				transcript_path TEXT,
+				prompt_version TEXT,
+				claude_session_id TEXT
+			)
+		`);
+		legacyDb.exec(`
+			INSERT INTO sessions
+				(id, agent_name, capability, worktree_path, branch_name, task_id,
+				 tmux_session, state, started_at, last_activity)
+			VALUES
+				('legacy-1','legacy-agent','builder','/tmp/wt','branch','task',
+				 '','working','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')
+		`);
+		legacyDb.close();
+
+		// Opening a new SessionStore must run the migration and accept new states.
+		const migrated = createSessionStore(dbPath);
+		try {
+			expect(migrated.getByName("legacy-agent")?.state).toBe("working");
+			migrated.upsert(makeSession({ agentName: "fresh-it", id: "s-it", state: "in_turn" }));
+			migrated.upsert(makeSession({ agentName: "fresh-bt", id: "s-bt", state: "between_turns" }));
+			expect(migrated.getByName("fresh-it")?.state).toBe("in_turn");
+			expect(migrated.getByName("fresh-bt")?.state).toBe("between_turns");
+		} finally {
+			migrated.close();
+		}
+
+		store = createSessionStore(join(tempDir, "unused.db"));
+	});
+
+	test("is a no-op when the CHECK already includes in_turn (idempotent)", () => {
+		// `store` was created by beforeEach against a fresh DB whose CREATE
+		// TABLE already mentions in_turn. Reopen on the same path and verify
+		// it does not throw or rebuild gratuitously.
+		store.upsert(makeSession({ state: "in_turn" }));
+
+		const reopened = createSessionStore(dbPath);
+		try {
+			expect(reopened.getByName("test-agent")?.state).toBe("in_turn");
+		} finally {
+			reopened.close();
+		}
+	});
+});
+
 // === tmux_session clearing on terminal transitions (overstory-14c0) ===
 //
 // The tmux session is torn down by ov stop / watchdog / coordinator cleanup

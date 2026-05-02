@@ -25,7 +25,13 @@ export function Home() {
 	});
 
 	const agents = agentsQuery.data ?? [];
-	const activeCount = agents.filter((a) => a.state === "working" || a.state === "booting").length;
+	const activeCount = agents.filter(
+		(a) =>
+			a.state === "working" ||
+			a.state === "in_turn" ||
+			a.state === "between_turns" ||
+			a.state === "booting",
+	).length;
 	const completedCount = agents.filter((a) => a.state === "completed").length;
 	const errorCount = agents.filter((a) => a.state === "stalled" || a.state === "zombie").length;
 

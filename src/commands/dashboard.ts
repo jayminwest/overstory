@@ -615,7 +615,7 @@ export function renderAgentPanel(
 
 	// Sort agents: active first, then completed, then zombie
 	const agents = [...data.status.agents].sort((a, b) => {
-		const activeStates = ["working", "booting", "stalled"];
+		const activeStates = ["working", "in_turn", "between_turns", "booting", "stalled"];
 		const aActive = activeStates.includes(a.state);
 		const bActive = activeStates.includes(b.state);
 		if (aActive && !bActive) return -1;

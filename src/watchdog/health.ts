@@ -33,10 +33,22 @@
 import { isPersistentCapability } from "../agents/capabilities.ts";
 import type { AgentSession, AgentState, HealthCheck } from "../types.ts";
 
-/** Numeric ordering for forward-only state transitions. */
+/**
+ * Numeric ordering for forward-only state transitions.
+ *
+ * `in_turn` and `between_turns` share the `working` rank (1) because, from
+ * the watchdog's perspective, all three are "agent is alive and active" —
+ * they only differ in whether the spawn-per-turn worker is currently
+ * mid-execution or idling between mail batches (overstory-3087). Same rank
+ * means a healthy-classification check (`check.state === "working"`) will
+ * not stomp on the more specific in_turn/between_turns states the
+ * turn-runner has already written.
+ */
 const STATE_ORDER: Record<AgentState, number> = {
 	booting: 0,
 	working: 1,
+	in_turn: 1,
+	between_turns: 1,
 	completed: 2,
 	stalled: 3,
 	zombie: 4,
@@ -156,11 +168,17 @@ function evaluateTimeBased(
 		};
 	}
 
-	// Default: healthy and working
+	// Default: healthy active state. Preserve in_turn/between_turns when the
+	// turn-runner has already moved a spawn-per-turn worker out of the legacy
+	// `working` rank — the watchdog only knows the agent is alive, not whether
+	// it is mid-turn or idling, so it must not stomp on the more specific
+	// state set by the turn-runner (overstory-3087).
+	const healthyState =
+		session.state === "in_turn" || session.state === "between_turns" ? session.state : "working";
 	return {
 		...base,
 		processAlive: true,
-		state: "working",
+		state: healthyState,
 		action: "none",
 		reconciliationNote: null,
 	};
