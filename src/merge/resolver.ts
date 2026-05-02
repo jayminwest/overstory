@@ -207,7 +207,7 @@ export function hasContentfulCanonical(content: string): boolean {
  * Check if a file has the `merge=union` gitattribute set.
  * Returns true if `git check-attr merge -- <file>` ends with ": merge: union".
  */
-async function checkMergeUnion(repoRoot: string, filePath: string): Promise<boolean> {
+export async function checkMergeUnion(repoRoot: string, filePath: string): Promise<boolean> {
 	const { stdout, exitCode } = await runGit(repoRoot, ["check-attr", "merge", "--", filePath]);
 	if (exitCode !== 0) return false;
 	return stdout.trim().endsWith(": merge: union");

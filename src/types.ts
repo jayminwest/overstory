@@ -491,6 +491,23 @@ export interface ConflictHistory {
 	predictedConflictFiles: string[];
 }
 
+/**
+ * Side-effect-free prediction of how `ov merge` would resolve a branch.
+ * Produced by `predictConflicts` (src/merge/predict.ts) without touching HEAD,
+ * the working tree, or the merge lock — surfaced via `ov merge --dry-run` so a
+ * lead/operator/greenhouse can branch on `wouldRequireAgent`.
+ */
+export interface ConflictPrediction {
+	/** The tier `ov merge` would land in if invoked now. */
+	predictedTier: ResolutionTier;
+	/** Files that would conflict — empty for clean-merge. */
+	conflictFiles: string[];
+	/** True iff predictedTier is "ai-resolve" or "reimagine" (Tier 3+). */
+	wouldRequireAgent: boolean;
+	/** Short, operator-readable explanation for the predicted tier. */
+	reason: string;
+}
+
 // === Watchdog ===
 
 export interface HealthCheck {
