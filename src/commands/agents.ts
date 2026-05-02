@@ -166,11 +166,20 @@ export async function discoverAgents(
 
 /**
  * Format the state icon for display.
+ *
+ * `in_turn` and `between_turns` (overstory-3087) render with the same cyan
+ * accent as `working` so a spawn-per-turn worker is visually grouped with
+ * other healthy/active agents in `ov agents` output. They use distinct
+ * glyphs ('>' vs '~') to mirror the dashboard / theme.ts mapping.
  */
 function getStateIcon(state: string): string {
 	switch (state) {
 		case "working":
 			return color.cyan(">");
+		case "in_turn":
+			return color.cyan(">");
+		case "between_turns":
+			return color.cyan("~");
 		case "booting":
 			return color.green("-");
 		case "stalled":

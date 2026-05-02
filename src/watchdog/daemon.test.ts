@@ -2882,10 +2882,15 @@ describe("headless agent stale detection via events.db (Bug 2)", () => {
 			});
 
 			// lastActivity refreshed from events.db → spawn-per-turn evaluation
-			// path keeps the agent in working, NOT zombie.
+			// path keeps the agent active (action=none), NOT zombie. The
+			// healthy classification reports `between_turns` (overstory-3087)
+			// for spawn-per-turn workers; the legacy `working` row stays at
+			// `working` on disk because the matrix does not list `working` as
+			// a predecessor of `between_turns` and the CAS rejects the write
+			// (the substate cycle is reserved for the turn-runner).
 			expect(checks).toHaveLength(1);
 			expect(checks[0]?.action).toBe("none");
-			expect(checks[0]?.state).toBe("working");
+			expect(checks[0]?.state).toBe("between_turns");
 
 			const reloaded = readSessionsFromStore(tempRoot);
 			expect(reloaded[0]?.state).toBe("working");

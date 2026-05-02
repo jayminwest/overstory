@@ -133,11 +133,17 @@ describe("upsert", () => {
 		expect(result?.stalledSince).toBeNull();
 	});
 
-	test("rejects invalid state values via CHECK constraint", () => {
+	test("accepts arbitrary state strings (CHECK relaxed in overstory-3087)", () => {
+		// The inline CHECK on `state` was dropped (overstory-3087): the
+		// TypeScript `AgentState` union enforces values at the writer
+		// boundary, so the SQL constraint became a maintenance tax that had
+		// to be rebuilt on every union extension. Verify the schema no
+		// longer throws when an out-of-union value reaches it. Real callers
+		// type their writes through the union and cannot land here.
 		const session = makeSession();
-		// Force an invalid state to test the CHECK constraint
 		const badSession = { ...session, state: "invalid" as AgentState };
-		expect(() => store.upsert(badSession)).toThrow();
+		expect(() => store.upsert(badSession)).not.toThrow();
+		expect(store.getByName("test-agent")?.state).toBe("invalid" as AgentState);
 	});
 
 	test("handles null transcriptPath", () => {
@@ -376,9 +382,13 @@ describe("updateState", () => {
 		store.updateState("nonexistent", "completed");
 	});
 
-	test("rejects invalid state via CHECK constraint", () => {
+	test("accepts arbitrary state strings (CHECK relaxed in overstory-3087)", () => {
+		// Same rationale as the upsert test: the TypeScript `AgentState`
+		// union is the authoritative gate; the SQL CHECK was dropped to
+		// avoid the rebuild tax on every union extension.
 		store.upsert(makeSession());
-		expect(() => store.updateState("test-agent", "invalid" as AgentState)).toThrow();
+		expect(() => store.updateState("test-agent", "invalid" as AgentState)).not.toThrow();
+		expect(store.getByName("test-agent")?.state).toBe("invalid" as AgentState);
 	});
 });
 
@@ -568,6 +578,258 @@ describe("tryTransitionState", () => {
 		expect(watchdog.ok).toBe(false);
 		if (!watchdog.ok && watchdog.reason === "illegal_transition") {
 			expect(watchdog.prev).toBe("completed");
+		}
+	});
+});
+
+// === in_turn / between_turns spawn-per-turn substates (overstory-3087) ===
+//
+// The spawn-per-turn engine splits the legacy `working` state into two:
+// `in_turn` (claude is mid-execution, parser events streaming) and
+// `between_turns` (claude exited cleanly, agent waiting for the next mail
+// batch). The matrix must allow the cycle in both directions and forward
+// progression to terminal/error states from either substate. The CHECK
+// constraint and `getActive` query must accept the new values so the
+// watchdog and dashboards see these workers as alive.
+
+describe("in_turn / between_turns substates", () => {
+	test("upsert accepts in_turn via CHECK constraint", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		expect(store.getByName("test-agent")?.state).toBe("in_turn");
+	});
+
+	test("upsert accepts between_turns via CHECK constraint", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		expect(store.getByName("test-agent")?.state).toBe("between_turns");
+	});
+
+	test("getActive includes in_turn and between_turns alongside working/booting/stalled", () => {
+		store.upsert(makeSession({ agentName: "a-it", id: "s-it", state: "in_turn" }));
+		store.upsert(makeSession({ agentName: "a-bt", id: "s-bt", state: "between_turns" }));
+		store.upsert(makeSession({ agentName: "a-w", id: "s-w", state: "working" }));
+		store.upsert(makeSession({ agentName: "a-c", id: "s-c", state: "completed" }));
+		store.upsert(makeSession({ agentName: "a-z", id: "s-z", state: "zombie" }));
+
+		const activeNames = store
+			.getActive()
+			.map((s) => s.agentName)
+			.sort();
+		expect(activeNames).toEqual(["a-bt", "a-it", "a-w"]);
+	});
+
+	test("booting → in_turn lands (turn-runner first-event transition)", () => {
+		store.upsert(makeSession({ state: "booting" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("in_turn");
+	});
+
+	test("in_turn → between_turns lands (turn-runner end-of-turn settle)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "between_turns");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("between_turns");
+	});
+
+	test("between_turns → in_turn lands (next mail batch starts a turn)", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("in_turn");
+	});
+
+	test("legacy working → in_turn is rejected (spawn-per-turn keeps separate path)", () => {
+		// A row in the legacy `working` state predates the spawn-per-turn
+		// substate split. The matrix intentionally does not list `working` as
+		// a predecessor of `in_turn` — turn-runner.ts handles legacy `working`
+		// rows by writing in_turn directly via updateState() / unconditional
+		// override on the first parser event of a fresh batch. A
+		// CAS-guarded transition is rejected to keep the two paths disjoint.
+		store.upsert(makeSession({ state: "working" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("working");
+		}
+		expect(store.getByName("test-agent")?.state).toBe("working");
+	});
+
+	test("legacy working → between_turns is rejected", () => {
+		store.upsert(makeSession({ state: "working" }));
+		const outcome = store.tryTransitionState("test-agent", "between_turns");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("working");
+		}
+	});
+
+	test("booting → between_turns is rejected (must pass through in_turn)", () => {
+		// Spec: between_turns predecessors are in_turn / between_turns /
+		// stalled. The agent only reaches between_turns after a turn produced
+		// events — which means the turn-runner must have transitioned to
+		// in_turn first.
+		store.upsert(makeSession({ state: "booting" }));
+		const outcome = store.tryTransitionState("test-agent", "between_turns");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("booting");
+		}
+	});
+
+	test("in_turn → completed lands (clean exit + terminal mail)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "completed");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("between_turns → completed lands (operator stops an idle worker)", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		const outcome = store.tryTransitionState("test-agent", "completed");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("in_turn → zombie lands (parser stall / abort)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "zombie");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("between_turns → zombie lands (watchdog terminate after long idle)", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		const outcome = store.tryTransitionState("test-agent", "zombie");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("in_turn → stalled lands (watchdog escalate)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "stalled");
+		expect(outcome.ok).toBe(true);
+		expect(store.getByName("test-agent")?.state).toBe("stalled");
+	});
+
+	test("idempotent in_turn → in_turn is allowed (re-entering on same batch)", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(true);
+	});
+
+	test("idempotent between_turns → between_turns is allowed", () => {
+		store.upsert(makeSession({ state: "between_turns" }));
+		const outcome = store.tryTransitionState("test-agent", "between_turns");
+		expect(outcome.ok).toBe(true);
+	});
+
+	test("completed → in_turn is rejected (sticky completed)", () => {
+		store.upsert(makeSession({ state: "completed" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(false);
+		expect(store.getByName("test-agent")?.state).toBe("completed");
+	});
+
+	test("zombie → in_turn is rejected (turn-runner cannot revive zombie)", () => {
+		store.upsert(makeSession({ state: "zombie" }));
+		const outcome = store.tryTransitionState("test-agent", "in_turn");
+		expect(outcome.ok).toBe(false);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("zombie → between_turns is rejected", () => {
+		store.upsert(makeSession({ state: "zombie" }));
+		const outcome = store.tryTransitionState("test-agent", "between_turns");
+		expect(outcome.ok).toBe(false);
+		expect(store.getByName("test-agent")?.state).toBe("zombie");
+	});
+
+	test("nothing transitions into booting from in_turn or between_turns", () => {
+		store.upsert(makeSession({ state: "in_turn" }));
+		const outcome = store.tryTransitionState("test-agent", "booting");
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok && outcome.reason === "illegal_transition") {
+			expect(outcome.prev).toBe("in_turn");
+		}
+	});
+});
+
+// === migration: pre-3087 CHECK constraint relaxation ===
+//
+// SQLite cannot DROP a CHECK constraint in place, so the old inline CHECK on
+// the `state` column must be removed by rebuilding the table. The migration
+// must preserve every existing row verbatim and let inserts of the new
+// values (and any future state extensions) land without a schema bump.
+
+describe("migration: drop legacy state CHECK constraint", () => {
+	test("rebuilds the table when the recorded CHECK predates 3087", async () => {
+		store.close();
+
+		const { Database: Db } = await import("bun:sqlite");
+		const legacyDb = new Db(dbPath);
+		legacyDb.exec("DROP TABLE IF EXISTS sessions");
+		// Recreate using the pre-3087 CHECK so the migration has something
+		// to detect and rebuild.
+		legacyDb.exec(`
+			CREATE TABLE sessions (
+				id TEXT PRIMARY KEY,
+				agent_name TEXT NOT NULL UNIQUE,
+				capability TEXT NOT NULL,
+				worktree_path TEXT NOT NULL,
+				branch_name TEXT NOT NULL,
+				task_id TEXT NOT NULL,
+				tmux_session TEXT NOT NULL,
+				state TEXT NOT NULL DEFAULT 'booting'
+					CHECK(state IN ('booting','working','completed','stalled','zombie')),
+				pid INTEGER,
+				parent_agent TEXT,
+				depth INTEGER NOT NULL DEFAULT 0,
+				run_id TEXT,
+				started_at TEXT NOT NULL,
+				last_activity TEXT NOT NULL,
+				escalation_level INTEGER NOT NULL DEFAULT 0,
+				stalled_since TEXT,
+				transcript_path TEXT,
+				prompt_version TEXT,
+				claude_session_id TEXT
+			)
+		`);
+		legacyDb.exec(`
+			INSERT INTO sessions
+				(id, agent_name, capability, worktree_path, branch_name, task_id,
+				 tmux_session, state, started_at, last_activity)
+			VALUES
+				('legacy-1','legacy-agent','builder','/tmp/wt','branch','task',
+				 '','working','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')
+		`);
+		legacyDb.close();
+
+		// Opening a new SessionStore must run the migration and accept new states.
+		const migrated = createSessionStore(dbPath);
+		try {
+			expect(migrated.getByName("legacy-agent")?.state).toBe("working");
+			migrated.upsert(makeSession({ agentName: "fresh-it", id: "s-it", state: "in_turn" }));
+			migrated.upsert(makeSession({ agentName: "fresh-bt", id: "s-bt", state: "between_turns" }));
+			expect(migrated.getByName("fresh-it")?.state).toBe("in_turn");
+			expect(migrated.getByName("fresh-bt")?.state).toBe("between_turns");
+		} finally {
+			migrated.close();
+		}
+
+		store = createSessionStore(join(tempDir, "unused.db"));
+	});
+
+	test("is a no-op when the CHECK has already been dropped (idempotent)", () => {
+		// `store` was created by beforeEach against a fresh DB whose CREATE
+		// TABLE no longer carries a CHECK on `state`. Reopen on the same path
+		// and verify it does not throw or rebuild gratuitously.
+		store.upsert(makeSession({ state: "in_turn" }));
+
+		const reopened = createSessionStore(dbPath);
+		try {
+			expect(reopened.getByName("test-agent")?.state).toBe("in_turn");
+		} finally {
+			reopened.close();
 		}
 	});
 });

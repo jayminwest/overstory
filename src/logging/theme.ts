@@ -14,6 +14,8 @@ import { brand, color, noColor, visibleLength } from "./color.ts";
 /** Maps agent states to their visual color functions. */
 const STATE_COLORS: Record<AgentState, ColorFn> = {
 	working: color.green,
+	in_turn: color.green,
+	between_turns: color.cyan,
 	booting: color.yellow,
 	stalled: color.red,
 	zombie: color.dim,
@@ -23,6 +25,8 @@ const STATE_COLORS: Record<AgentState, ColorFn> = {
 /** Maps agent states to their icon characters. */
 const STATE_ICONS: Record<AgentState, string> = {
 	working: ">",
+	in_turn: ">",
+	between_turns: "~",
 	booting: "~",
 	stalled: "!",
 	zombie: "x",

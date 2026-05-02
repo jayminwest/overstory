@@ -870,7 +870,12 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 		let newSessionId: string | null = null;
 		let cleanResult = false;
 		let observedAnyEvent = false;
-		let bootedToWorking = false;
+		// True iff this turn fired the "first parser event" transition into
+		// `in_turn`. Replaces the legacy `bootedToWorking` flag; the trigger
+		// now fires from booting OR between_turns OR working (legacy migration)
+		// so a resumed spawn-per-turn agent flips back to `in_turn` at the
+		// start of every batch (overstory-3087).
+		let transitionedToInTurn = false;
 
 		// Stall watchdog (overstory-ddb3): if no parser event arrives for
 		// `eventStallTimeoutMs`, abort the turn via SIGTERM/SIGKILL. Otherwise a
@@ -988,17 +993,29 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 					opts._onLastActivityRefresh?.();
 				}
 
-				if (!bootedToWorking && initialState === "booting") {
-					bootedToWorking = true;
+				// First parser event of a turn → settle into `in_turn`. Allowed
+				// predecessors are `booting` (initial dispatch), `between_turns`
+				// (next mail batch on a healthy worker), or already-`in_turn`
+				// (idempotent — covers the case where a prior turn somehow left
+				// the row at in_turn). Legacy `working` rows are intentionally
+				// not in the matrix predecessor set (overstory-3087): spawn-
+				// per-turn workers should not flow through `working`, so the
+				// matrix keeps the substate path disjoint and a stale `working`
+				// row is left alone rather than silently coerced.
+				if (
+					!transitionedToInTurn &&
+					(initialState === "booting" || initialState === "between_turns")
+				) {
+					transitionedToInTurn = true;
 					updateSessionState(
 						sessionsDbPath,
 						agentName,
-						"working",
-						(err) => runnerLog("warn", "failed to transition booting → working", err),
+						"in_turn",
+						(err) => runnerLog("warn", `failed to transition ${initialState} → in_turn`, err),
 						(prev, attempted) =>
 							runnerLog(
 								"warn",
-								`booting → working rejected: state is now ${prev} (attempted ${attempted})`,
+								`${initialState} → in_turn rejected: state is now ${prev} (attempted ${attempted})`,
 							),
 					);
 				}
@@ -1141,8 +1158,14 @@ export async function runTurn(opts: RunTurnOpts): Promise<TurnResult> {
 			finalState = "completed";
 		} else if (terminalMailMissing) {
 			finalState = "completed";
-		} else if (observedAnyEvent || bootedToWorking) {
-			finalState = "working";
+		} else if (observedAnyEvent || transitionedToInTurn) {
+			// Turn produced events but did not complete — settle to
+			// `between_turns`, NOT `working`, so the UI can distinguish a
+			// spawn-per-turn worker waiting for its next mail batch from one
+			// mid-execution. The watchdog will flip the row back to `in_turn`
+			// on the next batch when the parser fires its first event
+			// (overstory-3087).
+			finalState = "between_turns";
 		} else {
 			finalState = initialState;
 		}

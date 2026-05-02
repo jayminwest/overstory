@@ -10,6 +10,14 @@
  *
  * This module exports `startTurnRunnerMailLoop` (the dispatcher loop) and
  * `_runTurnRunnerTick` (a single-tick variant for deterministic tests).
+ *
+ * State authority (overstory-3087): this module does NOT write session state.
+ * The turn-runner (`src/agents/turn-runner.ts`) is the sole authority for
+ * `in_turn` ↔ `between_turns` transitions — it writes `in_turn` on the first
+ * parser event of a turn and settles to `between_turns` at end-of-turn when
+ * the agent did not deliver a terminal mail. Adding a duplicate writer here
+ * would race with the turn-runner under the per-agent turn lock and make
+ * the substate non-deterministic.
  */
 
 import { createMailStore } from "../mail/store.ts";

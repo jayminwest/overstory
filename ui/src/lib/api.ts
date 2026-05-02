@@ -28,7 +28,14 @@ export interface Run {
 	status: RunStatus;
 }
 
-export type AgentState = "booting" | "working" | "completed" | "stalled" | "zombie";
+export type AgentState =
+	| "booting"
+	| "working"
+	| "in_turn"
+	| "between_turns"
+	| "completed"
+	| "stalled"
+	| "zombie";
 export interface AgentRow {
 	id: string;
 	agentName: string;

@@ -534,6 +534,108 @@ describe("runTurn", () => {
 		expect(after?.state).toBe("completed");
 	});
 
+	test("turn that runs but does not complete settles to between_turns, not working (overstory-3087)", async () => {
+		// Spawn-per-turn substate split: a turn that produced events but did
+		// not deliver the terminal mail nor abort must end in `between_turns`
+		// so the UI can tell a worker waiting for its next mail batch from
+		// one mid-execution. Pre-3087 this settled to `working`.
+		seedSession(ctx.sessionsDbPath, { agentName: "settler", state: "booting" });
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const spawnFn: TurnSpawnFn = () => {
+			// Force is_error=true so the runner does NOT classify this as a
+			// clean exit (which would settle to `completed` via the
+			// terminal-mail-missing path). is_error=true keeps cleanResult
+			// false, sending us into the observedAnyEvent → between_turns
+			// branch we want to test.
+			emitFakeTurn(fake, { sessionId: "settler-sid", isError: true });
+			fake._exit(0);
+			return fake;
+		};
+
+		const result = await runTurn(makeRunOpts(ctx, "settler", { runtime, _spawnFn: spawnFn }));
+
+		expect(result.cleanResult).toBe(false);
+		expect(result.terminalMailObserved).toBe(false);
+		expect(result.terminalMailMissing).toBe(false);
+		expect(result.finalState).toBe("between_turns");
+
+		const after = readSession(ctx.sessionsDbPath, "settler");
+		expect(after?.state).toBe("between_turns");
+	});
+
+	test("first parser event transitions booting → in_turn (overstory-3087)", async () => {
+		// The mid-turn "first event" hook must flip the row out of `booting`
+		// (or `between_turns`/`working`) into `in_turn` so observers see the
+		// agent as actively executing, distinct from the idle waiting state.
+		seedSession(ctx.sessionsDbPath, { agentName: "boots", state: "booting" });
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		// Mutable ref so the IIFE assignment is visible to the type checker.
+		const captured: { state: string | null } = { state: null };
+		const spawnFn: TurnSpawnFn = () => {
+			(async () => {
+				// Push the init event, then sample the row before result.
+				fake._pushLine(
+					JSON.stringify({
+						type: "system",
+						subtype: "init",
+						session_id: "boots-sid",
+						model: "claude-test",
+					}),
+				);
+				// Yield the event loop so the parser drains the init event
+				// and updates the session row before we read it.
+				await Bun.sleep(20);
+				captured.state = readSession(ctx.sessionsDbPath, "boots")?.state ?? null;
+				// Send is_error=true so we settle to between_turns rather than
+				// the contract-violation completed path — this test is about
+				// the mid-turn transition, not the terminal classification.
+				emitFakeTurn(fake, { sessionId: "boots-sid", isError: true });
+				fake._exit(0);
+			})();
+			return fake;
+		};
+
+		await runTurn(makeRunOpts(ctx, "boots", { runtime, _spawnFn: spawnFn }));
+
+		expect(captured.state).toBe("in_turn");
+	});
+
+	test("between_turns → in_turn → between_turns cycle on a follow-up batch (overstory-3087)", async () => {
+		// A spawn-per-turn worker that finished its first turn (state=
+		// between_turns) must flip back to in_turn when the next mail batch
+		// fires its first parser event, and settle back to between_turns
+		// when the turn ends without a terminal mail.
+		seedSession(ctx.sessionsDbPath, { agentName: "cycle", state: "between_turns" });
+		const { runtime } = makeSpyRuntime();
+		const fake = makeFakeProc();
+		const captured: { midTurnState: string | null } = { midTurnState: null };
+		const spawnFn: TurnSpawnFn = () => {
+			(async () => {
+				fake._pushLine(
+					JSON.stringify({
+						type: "system",
+						subtype: "init",
+						session_id: "cycle-sid",
+						model: "claude-test",
+					}),
+				);
+				await Bun.sleep(20);
+				captured.midTurnState = readSession(ctx.sessionsDbPath, "cycle")?.state ?? null;
+				emitFakeTurn(fake, { sessionId: "cycle-sid", isError: true });
+				fake._exit(0);
+			})();
+			return fake;
+		};
+
+		const result = await runTurn(makeRunOpts(ctx, "cycle", { runtime, _spawnFn: spawnFn }));
+
+		expect(captured.midTurnState).toBe("in_turn");
+		expect(result.initialState).toBe("between_turns");
+		expect(result.finalState).toBe("between_turns");
+	});
+
 	test("clean exit but no worker_done → contract violation, completed + error log (overstory-6071)", async () => {
 		// Pre-fix: claude exiting cleanly without sending the capability's
 		// terminal mail left the session at `working` forever — the process is

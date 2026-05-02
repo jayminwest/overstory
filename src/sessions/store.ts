@@ -29,15 +29,25 @@ import type {
  *     wrote zombie is rejected — last writer no longer wins.
  *   - Idempotent self-transitions (e.g. `working → working`) are allowed.
  *   - `booting` is set only by the initial `upsert` and never re-entered.
+ *   - `in_turn` and `between_turns` cycle while a spawn-per-turn worker is
+ *     alive (overstory-3087): turn-runner advances `between_turns → in_turn`
+ *     when the next batch produces its first parser event and settles back
+ *     `in_turn → between_turns` when the turn ends without a terminal mail.
+ *     Both can advance forward to `stalled`/`zombie`/`completed`. The two
+ *     paths are kept separate from the tmux/long-lived `working` rank — a
+ *     spawn-per-turn worker should not flow through `working` during normal
+ *     operation — so neither lists `working` as a predecessor.
  *
  * See overstory-a993 for the race symptoms this guard prevents.
  */
 const TRANSITION_ALLOWED_FROM: Record<AgentState, readonly AgentState[]> = {
 	booting: [],
 	working: ["booting", "working", "stalled"],
-	stalled: ["booting", "working", "stalled"],
-	completed: ["booting", "working", "stalled", "zombie", "completed"],
-	zombie: ["booting", "working", "stalled", "zombie"],
+	in_turn: ["booting", "in_turn", "between_turns", "stalled"],
+	between_turns: ["in_turn", "between_turns", "stalled"],
+	stalled: ["booting", "working", "in_turn", "between_turns", "stalled"],
+	completed: ["booting", "working", "in_turn", "between_turns", "stalled", "zombie", "completed"],
+	zombie: ["booting", "working", "in_turn", "between_turns", "stalled", "zombie"],
 };
 
 /**
@@ -57,7 +67,14 @@ export interface SessionStore {
 	upsert(session: AgentSession): void;
 	/** Get a session by agent name, or null if not found. */
 	getByName(agentName: string): AgentSession | null;
-	/** Get all active sessions (state IN ('booting', 'working', 'stalled')). */
+	/**
+	 * Get all active sessions (state IN ('booting', 'working', 'in_turn',
+	 * 'between_turns', 'stalled')).
+	 *
+	 * `in_turn` and `between_turns` are spawn-per-turn equivalents of `working`
+	 * and must be returned by `getActive` so the watchdog and dashboards see
+	 * spawn-per-turn workers as alive (overstory-3087).
+	 */
 	getActive(): AgentSession[];
 	/** Get all sessions regardless of state. */
 	getAll(): AgentSession[];
@@ -142,8 +159,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   branch_name TEXT NOT NULL,
   task_id TEXT NOT NULL,
   tmux_session TEXT NOT NULL,
-  state TEXT NOT NULL DEFAULT 'booting'
-    CHECK(state IN ('booting','working','completed','stalled','zombie')),
+  state TEXT NOT NULL DEFAULT 'booting',
   pid INTEGER,
   parent_agent TEXT,
   depth INTEGER NOT NULL DEFAULT 0,
@@ -252,6 +268,83 @@ function migrateAddClaudeSessionId(db: Database): void {
 }
 
 /**
+ * Drop the inline CHECK(state IN (...)) constraint from the sessions table
+ * (overstory-3087).
+ *
+ * The CHECK was defensive — the TypeScript `AgentState` union enforces values
+ * at the writer boundary. With the spawn-per-turn substate split (`in_turn` /
+ * `between_turns`) and likely future state extensions, keeping the constraint
+ * in sync with the union via inline-CHECK rebuilds becomes a recurring tax.
+ * Drop it and rely on the type system.
+ *
+ * SQLite has no `ALTER TABLE DROP CONSTRAINT`, so we detect the old constraint
+ * via `sqlite_master.sql` (the recorded CREATE TABLE DDL), then rebuild the
+ * table inside a transaction: copy rows verbatim into a new constraint-free
+ * schema, drop the original, and rename. Indexes are dropped by the swap and
+ * re-created by the caller via CREATE_INDEXES, which is idempotent.
+ *
+ * Safe to call multiple times — short-circuits when the recorded DDL no
+ * longer contains a CHECK on `state`. Must run BEFORE indexes are created
+ * (the swap drops them) and BEFORE the column-add migrations that read
+ * `PRAGMA table_info` on the legacy table (the new table inherits any added
+ * columns via the rebuild, so the column-add migrations become idempotent).
+ */
+function migrateRelaxStateCheck(db: Database): void {
+	const row = db
+		.prepare<{ sql: string | null }, []>(
+			"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
+		)
+		.get();
+	if (!row || row.sql === null) return;
+	// Detect the inline CHECK on the `state` column. Match conservatively on
+	// the literal "CHECK(state IN" — any whitespace variant SQLite stores
+	// will still contain this substring.
+	if (!row.sql.includes("CHECK(state IN")) return;
+
+	// Discover the columns that exist on the LIVE table so the rebuild copies
+	// every column the column-add migrations have layered on. Hard-coding the
+	// column list would silently drop newer columns when this migration runs
+	// against a DB that earlier migrations have already extended.
+	const colInfo = db.prepare("PRAGMA table_info(sessions)").all() as Array<{
+		name: string;
+		type: string;
+		notnull: number;
+		dflt_value: string | null;
+		pk: number;
+	}>;
+
+	// Render each column for the new CREATE TABLE. PRIMARY KEY and UNIQUE are
+	// preserved on `id` and `agent_name` respectively to match the original
+	// schema; everything else is straight type + nullability + default.
+	const colDefs = colInfo
+		.map((c) => {
+			const parts: string[] = [c.name, c.type || "TEXT"];
+			if (c.pk === 1) parts.push("PRIMARY KEY");
+			if (c.notnull === 1) parts.push("NOT NULL");
+			if (c.dflt_value !== null) parts.push(`DEFAULT ${c.dflt_value}`);
+			if (c.name === "agent_name") parts.push("UNIQUE");
+			return `\t\t\t\t${parts.join(" ")}`;
+		})
+		.join(",\n");
+	const colNames = colInfo.map((c) => c.name).join(", ");
+
+	db.exec("BEGIN");
+	try {
+		db.exec(`CREATE TABLE sessions__new_3087 (\n${colDefs}\n\t\t\t)`);
+		db.exec(`
+			INSERT INTO sessions__new_3087 (${colNames})
+			SELECT ${colNames} FROM sessions
+		`);
+		db.exec("DROP TABLE sessions");
+		db.exec("ALTER TABLE sessions__new_3087 RENAME TO sessions");
+		db.exec("COMMIT");
+	} catch (err) {
+		db.exec("ROLLBACK");
+		throw err;
+	}
+}
+
+/**
  * Migrate an existing sessions table from bead_id to task_id column.
  * Safe to call multiple times — only renames if bead_id exists and task_id does not.
  */
@@ -282,6 +375,10 @@ export function createSessionStore(dbPath: string): SessionStore {
 	db.exec(CREATE_RUNS_TABLE);
 
 	// Migrate existing tables BEFORE creating indexes that reference new columns.
+	// `migrateRelaxStateCheck` runs FIRST so the column-add migrations that
+	// follow operate on the rebuilt table — they read PRAGMA table_info and
+	// ADD COLUMN, both of which work on the new constraint-free schema.
+	migrateRelaxStateCheck(db);
 	migrateBeadIdToTaskId(db);
 	migrateAddTranscriptPath(db);
 	migrateAddPromptVersion(db);
@@ -353,7 +450,8 @@ export function createSessionStore(dbPath: string): SessionStore {
 	`);
 
 	const getActiveStmt = db.prepare<SessionRow, Record<string, never>>(`
-		SELECT * FROM sessions WHERE state IN ('booting', 'working', 'stalled')
+		SELECT * FROM sessions
+		WHERE state IN ('booting', 'working', 'in_turn', 'between_turns', 'stalled')
 		ORDER BY started_at ASC
 	`);
 

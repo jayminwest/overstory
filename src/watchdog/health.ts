@@ -33,10 +33,22 @@
 import { isPersistentCapability } from "../agents/capabilities.ts";
 import type { AgentSession, AgentState, HealthCheck } from "../types.ts";
 
-/** Numeric ordering for forward-only state transitions. */
+/**
+ * Numeric ordering for forward-only state transitions.
+ *
+ * `in_turn` and `between_turns` share the `working` rank (1) because, from
+ * the watchdog's perspective, all three are "agent is alive and active" —
+ * they only differ in whether the spawn-per-turn worker is currently
+ * mid-execution or idling between mail batches (overstory-3087). Same rank
+ * means a healthy-classification check (`check.state === "working"`) will
+ * not stomp on the more specific in_turn/between_turns states the
+ * turn-runner has already written.
+ */
 const STATE_ORDER: Record<AgentState, number> = {
 	booting: 0,
 	working: 1,
+	in_turn: 1,
+	between_turns: 1,
 	completed: 2,
 	stalled: 3,
 	zombie: 4,
@@ -145,22 +157,42 @@ function evaluateTimeBased(
 		};
 	}
 
-	// booting → transition to working once there's recent activity
+	// Spawn-per-turn workers (overstory-3087): healthy classification reports
+	// `between_turns` instead of `working`, including the booting → healthy
+	// transition. The turn-runner authoritatively writes `in_turn` /
+	// `between_turns` while a turn is alive; in_turn is preserved here when
+	// already set so a watchdog tick mid-turn does not overwrite it.
+	const isSpawnPerTurn = isSpawnPerTurnSession(session);
+
+	// booting → transition to the healthy state once there's recent activity.
 	if (session.state === "booting") {
 		return {
 			...base,
 			processAlive: true,
-			state: "working",
+			state: isSpawnPerTurn ? "between_turns" : "working",
 			action: "none",
 			reconciliationNote: null,
 		};
 	}
 
-	// Default: healthy and working
+	// Default: healthy active state. For spawn-per-turn workers report the
+	// existing in_turn/between_turns substate; for tmux/long-lived agents
+	// report `working`. The turn-runner is authoritative for in_turn ↔
+	// between_turns transitions, so the watchdog must not stomp the more
+	// specific state — same rank in STATE_ORDER ensures `transitionState`
+	// also leaves the row alone.
+	let healthyState: AgentState;
+	if (session.state === "in_turn" || session.state === "between_turns") {
+		healthyState = session.state;
+	} else if (isSpawnPerTurn) {
+		healthyState = "between_turns";
+	} else {
+		healthyState = "working";
+	}
 	return {
 		...base,
 		processAlive: true,
-		state: "working",
+		state: healthyState,
 		action: "none",
 		reconciliationNote: null,
 	};
