@@ -19,6 +19,7 @@ import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { filterToolArgs } from "../events/tool-filter.ts";
 import { analyzeSessionInsights } from "../insights/analyzer.ts";
+import { hasWorkToVerify, runQualityGates } from "../insights/quality-gates.ts";
 import { createLogger } from "../logging/logger.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
@@ -379,6 +380,7 @@ export async function autoRecordExpertise(params: {
 	parentAgent: string | null;
 	projectRoot: string;
 	sessionStartedAt: string;
+	outcomeStatus?: "success" | "partial" | "failure";
 }): Promise<string[]> {
 	const learnResult = await params.mulchClient.learn({ since: "HEAD~1" });
 	if (learnResult.suggestedDomains.length === 0) {
@@ -395,6 +397,8 @@ export async function autoRecordExpertise(params: {
 				description: `${params.capability} agent ${params.agentName} completed work in this domain. Files: ${filesList}`,
 				tags: ["auto-session-end", params.capability],
 				evidenceBead: params.taskId ?? undefined,
+				outcomeStatus: params.outcomeStatus,
+				outcomeAgent: params.agentName,
 			});
 			recordedDomains.push(domain);
 		} catch {
@@ -434,6 +438,8 @@ export async function autoRecordExpertise(params: {
 					description: insight.description,
 					tags: insight.tags,
 					evidenceBead: params.taskId ?? undefined,
+					outcomeStatus: params.outcomeStatus,
+					outcomeAgent: params.agentName,
 				});
 				if (!recordedDomains.includes(insight.domain)) {
 					recordedDomains.push(insight.domain);
@@ -500,6 +506,7 @@ export async function appendOutcomeToAppliedRecords(params: {
 	capability: string;
 	taskId: string | null;
 	projectRoot: string;
+	outcomeStatus?: "success" | "partial" | "failure";
 }): Promise<number> {
 	const appliedRecordsPath = join(
 		params.projectRoot,
@@ -522,10 +529,12 @@ export async function appendOutcomeToAppliedRecords(params: {
 	if (!records || records.length === 0) return 0;
 
 	const taskSuffix = params.taskId ? ` for task ${params.taskId}` : "";
+	const status: "success" | "partial" | "failure" = params.outcomeStatus ?? "success";
+	const gateNote = params.outcomeStatus ? ` Quality gates: ${params.outcomeStatus}.` : "";
 	const outcome = {
-		status: "success" as const,
+		status,
 		agent: params.agentName,
-		notes: `Applied by ${params.capability} agent ${params.agentName}${taskSuffix}. Session completed.`,
+		notes: `Applied by ${params.capability} agent ${params.agentName}${taskSuffix}. Session completed.${gateNote}`,
 	};
 
 	let appended = 0;
@@ -793,6 +802,30 @@ async function runLog(opts: {
 						// Non-fatal: metrics recording should not break session-end handling
 					}
 
+					// Resolve outcome status from quality-gate results, threaded into
+					// every session-end mulch record write so confirmation scoring
+					// reflects whether tests/lint/typecheck actually passed.
+					let outcomeStatus: "success" | "partial" | "failure" | undefined;
+					if (!isStopHookPersistentCapability(agentSession.capability)) {
+						try {
+							let baseRef = "main";
+							const baseBranchPath = join(config.project.root, ".overstory", "session-branch.txt");
+							const baseFile = Bun.file(baseBranchPath);
+							if (await baseFile.exists()) {
+								const txt = (await baseFile.text()).trim();
+								if (txt.length > 0) baseRef = txt;
+							}
+							const hasWork = await hasWorkToVerify(agentSession.worktreePath, baseRef);
+							if (hasWork) {
+								const gates = config.project.qualityGates ?? [];
+								const outcome = await runQualityGates(gates, agentSession.worktreePath);
+								if (outcome) outcomeStatus = outcome.status;
+							}
+						} catch {
+							// Non-fatal: outcome status is optional
+						}
+					}
+
 					// Auto-record expertise via mulch learn + record (post-session).
 					// Skip persistent agents whose Stop hook fires every turn.
 					if (!isStopHookPersistentCapability(agentSession.capability)) {
@@ -808,6 +841,7 @@ async function runLog(opts: {
 								parentAgent: agentSession.parentAgent,
 								projectRoot: config.project.root,
 								sessionStartedAt: agentSession.startedAt,
+								outcomeStatus,
 							});
 						} catch {
 							// Non-fatal: mulch learn/record should not break session-end handling
@@ -825,6 +859,7 @@ async function runLog(opts: {
 								capability: agentSession.capability,
 								taskId,
 								projectRoot: config.project.root,
+								outcomeStatus,
 							});
 						} catch {
 							// Non-fatal

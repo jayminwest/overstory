@@ -1299,6 +1299,81 @@ describe("logCommand", () => {
 		expect(mail?.body).toContain("10 tool calls");
 		expect(mail?.body).toContain("pattern"); // At least 1 pattern insight
 	});
+
+	test("threads outcomeStatus into per-domain reference and per-insight records", async () => {
+		const learnResult: MulchLearnResult = {
+			success: true,
+			command: "mulch learn",
+			changedFiles: ["src/foo.ts"],
+			suggestedDomains: ["typescript"],
+			unmatchedFiles: [],
+		};
+		const { client, recordCalls } = createFakeMulchClient(learnResult);
+		const mailDbPath = join(tempDir, ".overstory", "auto-record-outcome.db");
+
+		// Seed events so analyzer emits at least one insight (10+ tool calls).
+		const eventsDbPath = join(tempDir, ".overstory", "events.db");
+		const eventStore = createEventStore(eventsDbPath);
+		const sessionStartedAt = new Date(Date.now() - 60_000).toISOString();
+		for (let i = 0; i < 10; i++) {
+			eventStore.insert({
+				runId: null,
+				agentName: "outcome-agent",
+				sessionId: "sess-outcome",
+				eventType: "tool_start",
+				toolName: "Read",
+				toolArgs: JSON.stringify({ file_path: `/src/file${i}.ts` }),
+				toolDurationMs: null,
+				level: "info",
+				data: JSON.stringify({ summary: `read: /src/file${i}.ts` }),
+			});
+		}
+		eventStore.close();
+
+		await autoRecordExpertise({
+			mulchClient: client,
+			agentName: "outcome-agent",
+			capability: "builder",
+			taskId: "bead-outcome",
+			mailDbPath,
+			parentAgent: "parent-agent",
+			projectRoot: tempDir,
+			sessionStartedAt,
+			outcomeStatus: "partial",
+		});
+
+		expect(recordCalls.length).toBeGreaterThanOrEqual(2);
+		for (const call of recordCalls) {
+			expect(call.options.outcomeStatus).toBe("partial");
+			expect(call.options.outcomeAgent).toBe("outcome-agent");
+		}
+	});
+
+	test("omits outcomeStatus when caller does not supply one", async () => {
+		const learnResult: MulchLearnResult = {
+			success: true,
+			command: "mulch learn",
+			changedFiles: ["src/foo.ts"],
+			suggestedDomains: ["typescript"],
+			unmatchedFiles: [],
+		};
+		const { client, recordCalls } = createFakeMulchClient(learnResult);
+		const mailDbPath = join(tempDir, ".overstory", "auto-record-no-outcome.db");
+
+		await autoRecordExpertise({
+			mulchClient: client,
+			agentName: "no-outcome-agent",
+			capability: "builder",
+			taskId: null,
+			mailDbPath,
+			parentAgent: null,
+			projectRoot: tempDir,
+			sessionStartedAt: new Date().toISOString(),
+		});
+
+		expect(recordCalls).toHaveLength(1);
+		expect(recordCalls[0]?.options.outcomeStatus).toBeUndefined();
+	});
 });
 
 /**
@@ -1778,5 +1853,61 @@ describe("appendOutcomeToAppliedRecords", () => {
 			projectRoot: tempDir,
 		});
 		expect(count).toBe(0);
+	});
+
+	test("uses supplied outcomeStatus when provided", async () => {
+		const agentDir = join(tempDir, ".overstory", "agents", "test-agent");
+		await mkdir(agentDir, { recursive: true });
+		await Bun.write(
+			join(agentDir, "applied-records.json"),
+			JSON.stringify({
+				taskId: "bead-outcome",
+				agentName: "test-agent",
+				capability: "builder",
+				records: [{ id: "mx-aaa111", domain: "agents" }],
+			}),
+		);
+
+		const { client, appendOutcomeCalls } = makeOutcomeClient();
+		await appendOutcomeToAppliedRecords({
+			mulchClient: client,
+			agentName: "test-agent",
+			capability: "builder",
+			taskId: "bead-outcome",
+			projectRoot: tempDir,
+			outcomeStatus: "failure",
+		});
+
+		expect(appendOutcomeCalls).toHaveLength(1);
+		expect(appendOutcomeCalls[0]?.outcome).toMatchObject({ status: "failure" });
+		expect(appendOutcomeCalls[0]?.outcome.notes).toContain("Quality gates: failure");
+	});
+
+	test("falls back to 'success' when outcomeStatus is undefined (backward compat)", async () => {
+		const agentDir = join(tempDir, ".overstory", "agents", "test-agent");
+		await mkdir(agentDir, { recursive: true });
+		await Bun.write(
+			join(agentDir, "applied-records.json"),
+			JSON.stringify({
+				taskId: "bead-default",
+				agentName: "test-agent",
+				capability: "builder",
+				records: [{ id: "mx-bbb222", domain: "agents" }],
+			}),
+		);
+
+		const { client, appendOutcomeCalls } = makeOutcomeClient();
+		await appendOutcomeToAppliedRecords({
+			mulchClient: client,
+			agentName: "test-agent",
+			capability: "builder",
+			taskId: "bead-default",
+			projectRoot: tempDir,
+		});
+
+		expect(appendOutcomeCalls).toHaveLength(1);
+		expect(appendOutcomeCalls[0]?.outcome.status).toBe("success");
+		// No "Quality gates:" annotation when caller didn't provide outcomeStatus
+		expect(appendOutcomeCalls[0]?.outcome.notes).not.toContain("Quality gates:");
 	});
 });

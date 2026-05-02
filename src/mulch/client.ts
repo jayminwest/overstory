@@ -60,7 +60,7 @@ export interface MulchClient {
 			classification?: string;
 			stdin?: boolean;
 			evidenceBead?: string;
-			outcomeStatus?: "success" | "failure";
+			outcomeStatus?: "success" | "failure" | "partial";
 			outcomeDuration?: number;
 			outcomeTestResults?: string;
 			outcomeAgent?: string;
@@ -306,7 +306,7 @@ function buildExpertiseRecord(options: {
 	tags?: string[];
 	classification?: string;
 	evidenceBead?: string;
-	outcomeStatus?: "success" | "failure";
+	outcomeStatus?: "success" | "failure" | "partial";
 	outcomeDuration?: number;
 	outcomeTestResults?: string;
 	outcomeAgent?: string;
@@ -322,7 +322,7 @@ function buildExpertiseRecord(options: {
 		outcomes: options.outcomeStatus
 			? [
 					{
-						status: options.outcomeStatus as "success" | "failure" | "partial",
+						status: options.outcomeStatus,
 						duration: options.outcomeDuration,
 						test_results: options.outcomeTestResults,
 						agent: options.outcomeAgent,
