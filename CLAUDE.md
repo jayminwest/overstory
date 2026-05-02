@@ -146,6 +146,8 @@ overstory/                        # This repo (the overstory tool itself)
       guard-rules.ts              # Shared guard constants (tool lists, bash patterns)
       lifecycle.ts                # Session handoff (checkpoint/resume/complete)
       checkpoint.ts               # Session checkpoint save/load/clear
+      mail-poll-detect.ts         # Bash mail-poll pattern detector (runtime backstop)
+      scope-detect.ts             # Soft FILE_SCOPE violation detection (builder/merger)
     worktree/
       manager.ts                  # Create/list/cleanup git worktrees via Bun.spawn
       tmux.ts                     # Tmux session management via Bun.spawn
@@ -159,6 +161,7 @@ overstory/                        # This repo (the overstory tool itself)
       tailer.ts                   # NDJSON event tailer for headless agent stdout logs
     insights/
       analyzer.ts                 # Session insight analyzer for auto-expertise
+      quality-gates.ts            # Run quality gates at session-end -> success/partial/failure
     tracker/
       types.ts                    # TrackerClient interface, TrackerIssue, TrackerBackend
       factory.ts                  # createTrackerClient(), resolveBackend(), trackerCliName()
@@ -190,6 +193,7 @@ overstory/                        # This repo (the overstory tool itself)
       queue.ts                    # FIFO merge queue
       resolver.ts                 # Tiered conflict resolution (4 tiers)
       lock.ts                     # Sentinel-file lock (prevents concurrent ov merge against same target)
+      predict.ts                  # Side-effect-free conflict prediction for ov merge --dry-run
     watchdog/
       daemon.ts                   # Tier 0: mechanical process monitoring
       triage.ts                   # Tier 1: AI-assisted failure classification
@@ -337,6 +341,7 @@ ov sling <task-id>              Spawn a worker agent
   --name <name>                          Unique agent name (auto-generated if omitted)
   --spec <path>                          Path to task spec file
   --files <f1,f2,...>                    Exclusive file scope (comma-separated)
+  --siblings <names>                     Parallel sibling agent names (renders rebase-before-merge_ready guidance)
   --parent <agent-name>                  Parent (for hierarchy tracking)
   --depth <n>                            Current hierarchy depth (default: 0)
   --skip-scout                           Skip scout phase (passed to lead overlay)
@@ -474,7 +479,7 @@ ov merge                         Merge agent branches into canonical
   --branch <name>                        Specific branch
   --all                                  All completed branches
   --into <branch>                        Target branch (default: session-branch.txt > canonicalBranch)
-  --dry-run                              Check for conflicts only
+  --dry-run                              Check for conflicts only (predicts resolution tier + conflict files)
   --json                                 JSON output
 ```
 

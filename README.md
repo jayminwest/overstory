@@ -313,15 +313,17 @@ overstory/
       hooks-deployer.ts           Deploy hooks + tool enforcement
       copilot-hooks-deployer.ts   Deploy hooks config to Copilot worktrees
       guard-rules.ts              Shared guard constants (tool lists, bash patterns)
+      mail-poll-detect.ts         Bash mail-poll pattern detector (runtime backstop)
+      scope-detect.ts             Soft FILE_SCOPE violation detection (builder/merger)
     worktree/                     Git worktree + tmux management
     mail/                         SQLite mail system (typed protocol, broadcast)
-    merge/                        FIFO queue + conflict resolution + sentinel-file lock
+    merge/                        FIFO queue + conflict resolution + sentinel-file lock + dry-run prediction
     watchdog/                     Tiered health monitoring (daemon, triage, health)
     logging/                      Multi-format logger + sanitizer + reporter + color control + shared theme/format
     metrics/                      SQLite metrics + pricing + transcript parsing
     doctor/                       Health check modules (13 checks)
     utils/                        Shared utilities (bin, fs, pid, time, version)
-    insights/                     Session insight analyzer for auto-expertise
+    insights/                     Session insight analyzer + quality-gate runner (success/partial/failure)
     runtimes/                     AgentRuntime abstraction (registry + adapters: Claude, Pi, Copilot, Codex, Gemini, Sapling, OpenCode, Cursor, Aider, Goose, Amp)
     tracker/                      Pluggable task tracker (beads + seeds backends)
     mulch/                        mulch client (programmatic API + CLI wrapper)

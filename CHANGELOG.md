@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-02
+
+### Added
+
+#### Spawn-per-turn substates split (overstory-3087)
+- **`in_turn` and `between_turns` AgentState variants** — split the legacy `working` state for spawn-per-turn workers so the UI distinguishes a worker actively executing a turn from one idling between mail batches. The turn-runner advances `between_turns → in_turn` on first parser event of a fresh turn and settles back `in_turn → between_turns` when the turn ends without a terminal mail. `working` remains the active state for tmux/long-lived headless capabilities (coordinator, orchestrator, monitor, sapling). Spawn-per-turn workers (builder/scout/reviewer/lead/merger under the headless default) transition through `in_turn ↔ between_turns` instead.
+- **`migrateRelaxStateCheck`** — drops the SQLite inline `CHECK(state IN (...))` constraint on `sessions.state` so future state extensions don't require schema rebuilds. Detects the constraint via `sqlite_master.sql` and rebuilds the table inside a transaction (copy → drop → rename); idempotent. Type system enforces values at writer boundary.
+- **`getActive()` widened** to return `booting | working | in_turn | between_turns | stalled` so watchdog/dashboards see spawn-per-turn workers as alive.
+- **Transition matrix updated** — `in_turn` and `between_turns` cycle freely; both can advance forward to `stalled`/`zombie`/`completed`. Kept separate from the tmux/long-lived `working` rank — neither lists `working` as a predecessor.
+
+#### Scope-violation detection + parallel sibling guidance (overstory-9f4d, overstory-f76a)
+- **`src/agents/scope-detect.ts`** — soft, advisory detection of files modified outside the agent's declared FILE_SCOPE without an `expansion_reason:` justification. Builder/merger only (`IMPLEMENTATION_CAPABILITIES`); read-only roles (scout/reviewer/lead) are no-ops. Glob-aware (`Bun.Glob`) and supports literal scope entries. Pre-existing `scope_expansion`-prefixed status mail from the agent suppresses the warning. Observability only — never a hard block; all errors swallowed.
+- **`ov sling --siblings <names>`** — comma-separated parallel sibling agent names. Renders a "Parallel Siblings" section into the overlay with rebase-before-`merge_ready` guidance so siblings working in adjacent files coordinate without conflict-amplification at merge time. `OverlayConfig.siblings` plumbed through sling → overlay generator → builder. `parseSiblings()` exported for unit tests.
+- **`resolveParentAgent()`** — preserves the prior session's `parent_agent` on `ov sling --recover` when `--parent` is not explicitly passed. Pre-fix, the recover path overwrote `parentAgent` with null whenever a coordinator/lead invoked `ov sling --recover --name <existing>` without threading `--parent`, and the runner's in-band `worker_died` notify on a resumed-turn parser stall silently skipped — leaving the lead waiting forever.
+
+#### Conflict prediction in `ov merge --dry-run` (overstory-inxu)
+- **`src/merge/predict.ts`** — side-effect-free `predictConflicts()` using `git merge-tree --write-tree --merge-base=<base> <ours> <theirs>` to compute the conflict set without mutating HEAD, the working tree, or the merge lock. Each conflict file is classified into a predicted resolution tier by reusing the same primitives the live resolver uses (`hasContentfulCanonical`, `checkMergeUnion`), so prediction stays in lock step with how `ov merge` would actually behave. Requires git ≥ 2.38.
+- **`ov merge --dry-run`** and **`ov merge --all --dry-run`** print the predicted tier, conflict files, and a short operator-readable reason. JSON output exposes the full `ConflictPrediction` envelope including `wouldRequireAgent` (true for ai-resolve / reimagine tiers) so a lead/operator/greenhouse can branch on agent-required vs auto-mergeable. Per-entry prediction failures are swallowed into a deterministic `ai-resolve` envelope so `--all --dry-run` keeps going.
+- **`ConflictPrediction`** type added to `src/types.ts`.
+- **Lead dispatch overlay** receives merge-prediction guidance so leads can sequence `merger` agents based on predicted tier.
+
+#### Quality-gate outcome status threaded into mulch records
+- **`src/insights/quality-gates.ts`** — `runQualityGates(gates, cwd)` runs each configured quality gate (test/lint/typecheck) at session-end and aggregates into `success` (all passed), `failure` (none passed), or `partial` (mixed). `hasWorkToVerify(worktreePath, baseRef)` cheap precheck lets read-only agents (scout/reviewer) skip gate execution entirely when no commits or uncommitted changes exist.
+- **`autoRecordExpertise` and `appendOutcomeToAppliedRecords`** thread `outcomeStatus` into every session-end mulch record write so confirmation scoring reflects whether tests/lint/typecheck actually passed. The outcome appears in record `outcomes[].status` and as a `Quality gates: <status>` note on applied-record outcomes.
+
+#### Bash mail-poll runtime backstop (overstory-c92c)
+- **`src/agents/mail-poll-detect.ts`** — defense-in-depth detector for forbidden Bash mail-polling patterns. The lead.md prompt forbids the pattern (overstory-fa84) as the primary mitigation; this is the runtime backstop if a future overlay or contributed agent definition silently reintroduces it. Detects `until`/`while` loops where the condition references `ov mail check`/`ov mail list` (directly, negated with `!`, or wrapped in `[ "$(...)" ... ]`) and the body contains `sleep`. Bounded `for` loops are never classified — `for i in 1 2 3; do ov mail send ...; done` is a legitimate batched send. Warn-only via custom event surfaced in `ov logs`/`ov feed`/UI.
+
+#### Worktree creation pre-check (overstory-6878)
+- **`WorktreeManager` pre-check rejects creation when branch is already checked out** elsewhere in the repo. Pre-fix, `git worktree add` reported success but produced an unusable worktree at the contested branch.
+- **Validates worktree creation before reporting success** — the manager confirms the worktree directory exists and is registered with git before returning.
+
+#### Per-event runner stall recovery (overstory-8e61)
+- **`lastActivity` refreshed inside the parser loop** on every event (throttled at `lastActivityRefreshIntervalMs`, default 2000ms) so a long turn doesn't appear stalled to the watchdog mid-flight. The watchdog at `src/watchdog/health.ts` documents its design as "the turn-runner updates lastActivity on every parser event during a turn, and the watchdog refreshes it from events.db between turns" — pre-fix, the runner only updated lastActivity at turn boundaries, so multi-minute turns were zombified despite live tool events.
+- **`_onLastActivityRefresh` test injection hook** lets tests count refresh attempts directly rather than inferring from observable timestamps.
+
+### Fixed
+
+#### Coordinator + sling
+- **`fix(coordinator)`: detect leftover watchdog before spawning (overstory-3f0c)** — coordinator startup now detects an orphaned watchdog from a prior run and aligns orphan-watchdog detection with the lead's spec, preventing duplicate watchdog daemons and the resulting double-zombie-classification storms.
+- **`fix(sling)`: use slinger env var for auto-dispatch `from` field (overstory-235f)** — `--parent` describes the new agent's hierarchical parent, not the slinger; auto-dispatch mail now reads `OVERSTORY_AGENT_NAME` for the `from` field and falls back to `parentAgent` only when unset.
+- **`fix(watchdog): never call tmux.killSession("") for headless agents`** — empty `tmux_session` (the spawn-per-turn convention; cleared on terminal transitions per overstory-14c0) no longer triggers a doomed `tmux kill-session ""` invocation that flooded stderr.
+- **`fix(agents): forbid lead Bash mail polling, document spawn-per-turn turn boundary (overstory-fa84)`** — lead.md updated; the lead capability does not have a "wait for mail" loop because spawn-per-turn means the lead exits between turns and is re-spawned by the mail-injection loop on new mail.
+
+#### CI + tests
+- **`ci`: build UI before tests** so root `bun test` can resolve react and `ui/dist`.
+- **`fix(tests)`: lead close-gate and serve static fallback tests CI-safe** — removed environment assumptions that diverged between local dev and the GitHub Actions runner.
+
+### Changed
+
+#### UI consolidation (overstory-e174)
+- **`ui/src/routes/mail/{api,ws}.ts` consolidated into `ui/src/lib/{api,ws}.ts`** — mail-route shims deleted; consumers point directly at `lib/*`. Reduces the in-tree surface area of duplicate fetch/WS plumbing.
+
+### Testing
+
+- 4374 tests across 137 files (10285 `expect()` calls) — up from 4213 / 133 / 9935 in 0.10.3
+- New `src/agents/mail-poll-detect.test.ts` (153 lines) covering loop-construct detection, negation/subshell variants, `for`-loop exclusion
+- New `src/agents/scope-detect.test.ts` (190 lines) covering glob matching, expansion-reason suppression, capability gating
+- New `src/insights/quality-gates.test.ts` (141 lines) covering `success`/`partial`/`failure` aggregation and `hasWorkToVerify` precheck
+- New `src/merge/predict.test.ts` (387 lines) covering tier classification, error envelopes, integration with the live resolver primitives
+- New `src/commands/coordinator.test.ts`, `src/commands/log.test.ts`, `src/commands/merge.test.ts`, `src/commands/sling.test.ts`, `src/commands/stop.test.ts` for the recovery, prediction-output, and parent-resolution paths above
+- Expanded coverage in `src/agents/turn-runner.test.ts` (mail-poll detection, scope-violation events, mid-turn `lastActivity` refresh), `src/sessions/store.test.ts` (substate transitions, `migrateRelaxStateCheck` idempotency), `src/worktree/manager.test.ts` (creation pre-check), and `src/watchdog/{daemon,health}.test.ts` (substate-aware health evaluation)
+
 ## [0.10.3] - 2026-04-30
 
 ### Added
@@ -1981,7 +2044,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Biome configuration for formatting and linting
 - TypeScript strict mode with `noUncheckedIndexedAccess`
 
-[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/jayminwest/overstory/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/jayminwest/overstory/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/jayminwest/overstory/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/jayminwest/overstory/compare/v0.10.0...v0.10.1
