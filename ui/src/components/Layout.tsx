@@ -6,7 +6,6 @@ import { ConnectionStatus } from "@/components/connection-status";
 import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { fetchRuns } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import { useGlobalWsStatus } from "@/lib/ws-status";
 import { RunPicker } from "@/routes/fleet/RunPicker";
 
@@ -71,14 +70,7 @@ function NavItem({ to, label, end }: { to: string; label: string; end?: boolean 
 		<NavLink
 			to={to}
 			end={end}
-			className={({ isActive }) =>
-				cn(
-					"px-3 py-1.5 rounded-md text-sm transition-colors outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]",
-					isActive
-						? "bg-accent text-accent-foreground font-medium"
-						: "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground",
-				)
-			}
+			className="px-3 py-1.5 rounded-md text-sm transition-colors outline-none text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground aria-[current=page]:font-medium focus-visible:ring-ring/50 focus-visible:ring-[3px]"
 		>
 			{label}
 		</NavLink>
