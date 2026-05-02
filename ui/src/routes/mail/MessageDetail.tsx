@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { fetchMessage } from "./api.ts";
+import { fetchMessage } from "@/lib/api";
 import type { MailMessage, MailMessageType } from "./types.ts";
 
 function typeVariant(type: MailMessageType): "default" | "secondary" | "destructive" | "outline" {

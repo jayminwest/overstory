@@ -2,13 +2,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { deleteMail, fetchMail } from "./mail/api.ts";
+import { deleteMail, fetchMail } from "@/lib/api";
+import { useMailSocket } from "@/lib/ws";
 import { Composer, type ComposerReplyContext } from "./mail/Composer.tsx";
 import { FilterChips, type MailFilters } from "./mail/FilterChips.tsx";
 import { MessageDetail } from "./mail/MessageDetail.tsx";
 import { ThreadList } from "./mail/ThreadList.tsx";
 import type { MailMessage } from "./mail/types.ts";
-import { useMailSocket } from "./mail/ws.ts";
 
 function prependDedup(msg: MailMessage, prev: MailMessage[]): MailMessage[] {
 	const idx = prev.findIndex((m) => m.id === msg.id);
@@ -49,7 +49,7 @@ export function Mail() {
 		queryClient.setQueryData<MailMessage[]>(["mail", filters], (prev) =>
 			prev !== undefined ? prev.map((m) => (m.id === id ? { ...m, read: true } : m)) : undefined,
 		);
-		void import("./mail/api.ts").then(({ markRead }) => markRead(id));
+		void import("@/lib/api").then(({ markRead }) => markRead(id));
 	}
 
 	function handleReply(msg: MailMessage) {

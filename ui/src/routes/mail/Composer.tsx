@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { fetchAgents, replyMail, sendMail } from "./api.ts";
+import { fetchMailAgents, replyMail, sendMail } from "@/lib/api";
 
 const GROUP_ADDRESSES = [
 	"@all",
@@ -52,7 +52,7 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 
 	const { data: agents = [] } = useQuery({
 		queryKey: ["agents-list"],
-		queryFn: fetchAgents,
+		queryFn: fetchMailAgents,
 		enabled: open,
 	});
 

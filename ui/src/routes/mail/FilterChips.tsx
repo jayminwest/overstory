@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { fetchAgents } from "./api.ts";
+import { fetchMailAgents } from "@/lib/api";
 
 export interface MailFilters {
 	unread: boolean;
@@ -14,7 +14,7 @@ interface FilterChipsProps {
 }
 
 export function FilterChips({ filters, onChange }: FilterChipsProps) {
-	const { data: agents = [] } = useQuery({ queryKey: ["agents-list"], queryFn: fetchAgents });
+	const { data: agents = [] } = useQuery({ queryKey: ["agents-list"], queryFn: fetchMailAgents });
 
 	return (
 		<div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/30 shrink-0">
