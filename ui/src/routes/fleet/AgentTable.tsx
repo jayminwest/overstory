@@ -54,7 +54,7 @@ export function AgentTable({ agents }: AgentTableProps) {
 	}
 
 	return (
-		<div className="rounded-xl border border-border overflow-hidden bg-card">
+		<div className="rounded-xl border border-border ring-1 ring-foreground/10 overflow-hidden bg-card">
 			<Table>
 				<TableHeader>
 					<TableRow className="bg-muted/40 hover:bg-muted/40">
