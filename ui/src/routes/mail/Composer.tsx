@@ -2,7 +2,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input, inputVariants } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { fetchMailAgents, replyMail, sendMail } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 const GROUP_ADDRESSES = [
 	"@all",
@@ -178,9 +181,10 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 	const autocompleteOptions = [...new Set([...agents, ...GROUP_ADDRESSES])];
 	const isReply = replyTo !== undefined;
 	const toInputId = `${datalistId}-to`;
-
-	const inputClass =
-		"rounded-md border border-border text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-shadow placeholder:text-muted-foreground/70";
+	const subjectInputId = `${datalistId}-subject`;
+	const fromInputId = `${datalistId}-from`;
+	const typeSelectId = `${datalistId}-type`;
+	const prioritySelectId = `${datalistId}-priority`;
 
 	return (
 		<div
@@ -210,14 +214,13 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 						<label htmlFor={toInputId} className="text-muted-foreground text-xs font-medium">
 							To
 						</label>
-						<input
+						<Input
 							id={toInputId}
 							ref={(el) => {
 								if (!isReply) firstFieldRef.current = el;
 							}}
 							type="text"
 							list={isReply ? undefined : datalistId}
-							className={`${inputClass} ${isReply ? "bg-muted" : "bg-background"}`}
 							value={to}
 							onChange={(e) => setTo(e.target.value)}
 							placeholder="agent or @group"
@@ -231,17 +234,19 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 						</datalist>
 					</div>
 
-					<label className="flex flex-col gap-1.5 text-sm">
-						<span className="text-muted-foreground text-xs font-medium">Subject</span>
-						<input
+					<div className="flex flex-col gap-1.5 text-sm">
+						<label htmlFor={subjectInputId} className="text-muted-foreground text-xs font-medium">
+							Subject
+						</label>
+						<Input
+							id={subjectInputId}
 							type="text"
-							className={`${inputClass} ${isReply ? "bg-muted" : "bg-background"}`}
 							value={subject}
 							onChange={(e) => setSubject(e.target.value)}
 							readOnly={isReply}
 							required
 						/>
-					</label>
+					</div>
 
 					<label className="flex flex-col gap-1.5 text-sm">
 						<span className="text-muted-foreground text-xs font-medium">Body</span>
@@ -249,7 +254,7 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 							ref={(el) => {
 								if (isReply) firstFieldRef.current = el;
 							}}
-							className={`${inputClass} bg-background font-mono leading-relaxed`}
+							className={cn(inputVariants(), "font-mono leading-relaxed")}
 							rows={6}
 							value={body}
 							onChange={(e) => setBody(e.target.value)}
@@ -260,19 +265,23 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 					</label>
 
 					<div className="grid grid-cols-3 gap-3 text-sm">
-						<label className="flex flex-col gap-1.5">
-							<span className="text-muted-foreground text-xs font-medium">From</span>
-							<input
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor={fromInputId} className="text-muted-foreground text-xs font-medium">
+								From
+							</label>
+							<Input
+								id={fromInputId}
 								type="text"
-								className={`${inputClass} bg-background`}
 								value={from}
 								onChange={(e) => setFrom(e.target.value)}
 							/>
-						</label>
-						<label className="flex flex-col gap-1.5">
-							<span className="text-muted-foreground text-xs font-medium">Type</span>
-							<select
-								className={`${inputClass} bg-background`}
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor={typeSelectId} className="text-muted-foreground text-xs font-medium">
+								Type
+							</label>
+							<Select
+								id={typeSelectId}
 								value={type}
 								onChange={(e) => setType(e.target.value as SemanticType)}
 							>
@@ -281,12 +290,17 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 										{t}
 									</option>
 								))}
-							</select>
-						</label>
-						<label className="flex flex-col gap-1.5">
-							<span className="text-muted-foreground text-xs font-medium">Priority</span>
-							<select
-								className={`${inputClass} bg-background`}
+							</Select>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label
+								htmlFor={prioritySelectId}
+								className="text-muted-foreground text-xs font-medium"
+							>
+								Priority
+							</label>
+							<Select
+								id={prioritySelectId}
 								value={priority}
 								onChange={(e) => setPriority(e.target.value as Priority)}
 							>
@@ -295,8 +309,8 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 										{p}
 									</option>
 								))}
-							</select>
-						</label>
+							</Select>
+						</div>
 					</div>
 
 					{!isReply && (
@@ -312,7 +326,7 @@ export function Composer({ open, onClose, onSuccess, onError, replyTo }: Compose
 								<label className="flex flex-col gap-1.5">
 									<span className="text-muted-foreground text-xs font-medium">Payload (JSON)</span>
 									<textarea
-										className={`${inputClass} bg-background font-mono leading-relaxed`}
+										className={cn(inputVariants(), "font-mono leading-relaxed")}
 										rows={4}
 										value={payload}
 										onChange={(e) => setPayload(e.target.value)}

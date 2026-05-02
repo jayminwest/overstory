@@ -1,3 +1,4 @@
+import { Select } from "@/components/ui/select";
 import type { Run } from "@/lib/api";
 
 import { formatAbsoluteTime } from "./format";
@@ -18,9 +19,9 @@ export function RunPicker({ runs, selectedRunId, onSelect }: RunPickerProps) {
 			<label htmlFor="run-picker" className="text-sm text-muted-foreground whitespace-nowrap">
 				Run:
 			</label>
-			<select
+			<Select
 				id="run-picker"
-				className="border border-border rounded-md px-2.5 py-1.5 text-sm bg-background text-foreground hover:bg-accent/40 transition-colors focus:outline-none focus:ring-2 focus:ring-ring"
+				className="px-2.5 py-1.5"
 				value={value}
 				onChange={(e) => onSelect(e.target.value)}
 			>
@@ -29,7 +30,7 @@ export function RunPicker({ runs, selectedRunId, onSelect }: RunPickerProps) {
 						{run.id} — {run.status} — {formatAbsoluteTime(run.startedAt)}
 					</option>
 				))}
-			</select>
+			</Select>
 		</div>
 	);
 }

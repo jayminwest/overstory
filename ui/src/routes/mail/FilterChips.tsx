@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { fetchMailAgents } from "@/lib/api";
 
 export interface MailFilters {
@@ -25,8 +26,8 @@ export function FilterChips({ filters, onChange }: FilterChipsProps) {
 			>
 				Unread
 			</Button>
-			<select
-				className="rounded-md border border-border bg-background text-sm px-2.5 py-1.5 hover:bg-accent/40 transition-colors focus:outline-none focus:ring-2 focus:ring-ring"
+			<Select
+				className="px-2.5 py-1.5"
 				value={filters.from}
 				onChange={(e) => onChange({ ...filters, from: e.target.value })}
 			>
@@ -36,9 +37,9 @@ export function FilterChips({ filters, onChange }: FilterChipsProps) {
 						{name}
 					</option>
 				))}
-			</select>
-			<select
-				className="rounded-md border border-border bg-background text-sm px-2.5 py-1.5 hover:bg-accent/40 transition-colors focus:outline-none focus:ring-2 focus:ring-ring"
+			</Select>
+			<Select
+				className="px-2.5 py-1.5"
 				value={filters.to}
 				onChange={(e) => onChange({ ...filters, to: e.target.value })}
 			>
@@ -48,7 +49,7 @@ export function FilterChips({ filters, onChange }: FilterChipsProps) {
 						{name}
 					</option>
 				))}
-			</select>
+			</Select>
 		</div>
 	);
 }
