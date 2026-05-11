@@ -6,6 +6,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { TaskTrackerBackend } from "../types.ts";
 import { createBeadsTracker } from "./beads.ts";
+import { createBeadsRustTracker } from "./beads-rust.ts";
 import { createSeedsTracker } from "./seeds.ts";
 import type { TrackerBackend, TrackerClient } from "./types.ts";
 
@@ -19,6 +20,8 @@ export function createTrackerClient(backend: TrackerBackend, cwd: string): Track
 	switch (backend) {
 		case "beads":
 			return createBeadsTracker(cwd);
+		case "beads_rust":
+			return createBeadsRustTracker(cwd);
 		case "seeds":
 			return createSeedsTracker(cwd);
 		default: {
@@ -37,6 +40,7 @@ export async function resolveBackend(
 	cwd: string,
 ): Promise<TrackerBackend> {
 	if (configBackend === "beads") return "beads";
+	if (configBackend === "beads_rust") return "beads_rust";
 	if (configBackend === "seeds") return "seeds";
 	// "auto" detection: check for .beads/ first (never auto-scaffolded by ov init,
 	// so its presence signals explicit user setup), then .seeds/.
@@ -48,17 +52,41 @@ export async function resolveBackend(
 			return false;
 		}
 	};
-	if (await dirExists(join(cwd, ".beads"))) return "beads";
+	if (await dirExists(join(cwd, ".beads"))) {
+		// Distinguish br (beads_rust) from bd (beads) by checking if `br` is available
+		if (await isBrAvailable()) return "beads_rust";
+		return "beads";
+	}
 	if (await dirExists(join(cwd, ".seeds"))) return "seeds";
 	// Default fallback — seeds is the preferred tracker
 	return "seeds";
 }
 
 /**
+ * Check if the `br` (beads_rust) CLI is available on PATH.
+ */
+async function isBrAvailable(): Promise<boolean> {
+	try {
+		const proc = Bun.spawn(["br", "version"], { stdout: "pipe", stderr: "pipe" });
+		const exitCode = await proc.exited;
+		return exitCode === 0;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Return the CLI tool name for a resolved backend.
  */
 export function trackerCliName(backend: TrackerBackend): string {
-	return backend === "seeds" ? "sd" : "bd";
+	switch (backend) {
+		case "beads":
+			return "bd";
+		case "beads_rust":
+			return "br";
+		case "seeds":
+			return "sd";
+	}
 }
 
 // Re-export types for convenience

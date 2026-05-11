@@ -49,4 +49,4 @@ export interface TrackerClient {
 }
 
 /** Which tracker backend to use. */
-export type TrackerBackend = "beads" | "seeds";
+export type TrackerBackend = "beads" | "beads_rust" | "seeds";

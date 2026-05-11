@@ -35,7 +35,7 @@ export interface PiRuntimeConfig {
 // === Task Tracker ===
 
 /** Backend for the task tracker. Defined here for use in OverstoryConfig. */
-export type TaskTrackerBackend = "auto" | "seeds" | "beads";
+export type TaskTrackerBackend = "auto" | "seeds" | "beads" | "beads_rust";
 
 // === Project Configuration ===
 
@@ -84,7 +84,7 @@ export interface OverstoryConfig {
 		baseDir: string; // Where worktrees live
 	};
 	taskTracker: {
-		backend: TaskTrackerBackend; // "auto" | "seeds" | "beads"
+		backend: TaskTrackerBackend; // "auto" | "seeds" | "beads" | "beads_rust"
 		enabled: boolean;
 	};
 	mulch: {
