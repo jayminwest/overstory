@@ -47,7 +47,7 @@
 		"prepack": "bun run build:ui"
 	},
 	"dependencies": {
-		"@os-eco/mulch-cli": "^0.6.2",
+		"@os-eco/mulch-cli": "^0.10.1",
 		"chalk": "^5.6.2",
 		"commander": "^14.0.3"
 	},
